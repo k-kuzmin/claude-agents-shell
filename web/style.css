@@ -1,0 +1,45 @@
+/* Цвета из макета. Шрифт системный моноширинный: веб-шрифты тянули бы сеть. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0e0e0d;
+  color: #c9c4bb;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+}
+
+#terminals {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.terminal-host {
+  position: absolute;
+  inset: 0;
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+.terminal-host.hidden {
+  display: none;
+}
+
+.fatal {
+  padding: 24px;
+  color: #d97757;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: #2a2a28;
+  border-radius: 5px;
+}

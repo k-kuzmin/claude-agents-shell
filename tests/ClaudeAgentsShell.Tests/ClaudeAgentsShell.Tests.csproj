@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <RootNamespace>ClaudeAgentsShell.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ClaudeAgentsShell.Domain\ClaudeAgentsShell.Domain.csproj" />
+    <ProjectReference Include="..\..\src\ClaudeAgentsShell.Application\ClaudeAgentsShell.Application.csproj" />
+    <ProjectReference Include="..\..\src\ClaudeAgentsShell.Terminal\ClaudeAgentsShell.Terminal.csproj" />
+    <ProjectReference Include="..\..\src\ClaudeAgentsShell.Sessions\ClaudeAgentsShell.Sessions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+</Project>

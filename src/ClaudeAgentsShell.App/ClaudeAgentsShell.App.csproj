@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <RootNamespace>ClaudeAgentsShell.App</RootNamespace>
+    <AssemblyName>ClaudeAgentsShell</AssemblyName>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeAgentsShell.Domain\ClaudeAgentsShell.Domain.csproj" />
+    <ProjectReference Include="..\ClaudeAgentsShell.Application\ClaudeAgentsShell.Application.csproj" />
+    <ProjectReference Include="..\ClaudeAgentsShell.Terminal\ClaudeAgentsShell.Terminal.csproj" />
+    <ProjectReference Include="..\ClaudeAgentsShell.Sessions\ClaudeAgentsShell.Sessions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Web.WebView2" />
+  </ItemGroup>
+
+  <!-- Страница терминалов и локальные ассеты xterm.js отдаются WebView2 через
+       SetVirtualHostNameToFolderMapping из каталога сборки. CDN не используется. -->
+  <!-- Пачка вывода 64 КБ (раздел 3.3 ТЗ) превращается в сообщение out длиной ~175 КБ:
+       base64 даёт 4/3, строка в .NET — 2 байта на символ. При штатном пороге LOH в 85 000
+       байт каждое такое сообщение попадало бы в кучу больших объектов, а каждая сборка Gen0
+       становилась бы полной. Поднимаем порог до 192 КБ, чтобы сообщения оставались в Gen0.
+       Значение десятичное (в отличие от переменной окружения DOTNET_GCLOHThreshold). -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.LOHThreshold" Value="196608" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <WebAsset Include="..\..\web\**\*" Exclude="..\..\web\node_modules\**\*;..\..\web\tools\**\*;..\..\web\package.json;..\..\web\package-lock.json" />
+    <None Include="@(WebAsset)" Link="web\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Agents Shell — терминалы</title>
+  <!-- Только локальные файлы: ни одного обращения в сеть, включая шрифты. -->
+  <link rel="stylesheet" href="vendor/xterm.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Контейнер на N терминалов: переключение вкладки — смена display у дочернего узла. -->
+  <div id="terminals"></div>
+
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-webgl.js"></script>
+  <script src="vendor/addon-unicode11.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
