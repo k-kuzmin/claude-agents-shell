@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -13,26 +14,38 @@ namespace ClaudeAgentsShell.Terminal.Protocol;
 public sealed class BridgeMessageWriter : IBridgeMessageWriter
 {
     private const string OutHead = "{\"type\":\"out\",\"id\":\"";
-    private const string OutMiddle = "\",\"b64\":\"";
+    private const string OutSeq = "\",\"seq\":";
+    private const string OutMiddle = ",\"b64\":\"";
     private const string Tail = "\"}";
 
     /// <inheritdoc />
-    public unsafe string Out(TerminalId terminalId, ReadOnlySpan<byte> payload)
+    public unsafe string Out(TerminalId terminalId, long sequence, ReadOnlySpan<byte> payload)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(sequence);
+
         string id = JsonStringEscape.Escape(terminalId.Value);
         int base64Length = Base64Length(payload.Length);
-        int total = OutHead.Length + id.Length + OutMiddle.Length + base64Length + Tail.Length;
+        int total = OutHead.Length + id.Length + OutSeq.Length + CountDigits(sequence)
+            + OutMiddle.Length + base64Length + Tail.Length;
 
         // Указатель на полезную нагрузку живёт ровно столько, сколько работает fixed:
         // string.Create вызывает свой обработчик синхронно, до выхода из блока.
         fixed (byte* pinned = payload)
         {
-            var state = new OutState(id, (IntPtr)pinned, payload.Length);
+            var state = new OutState(id, sequence, (IntPtr)pinned, payload.Length);
             return string.Create(total, state, static (span, s) =>
             {
                 int offset = 0;
                 Append(span, ref offset, OutHead);
                 Append(span, ref offset, s.Id);
+                Append(span, ref offset, OutSeq);
+
+                if (!s.Sequence.TryFormat(span[offset..], out int sequenceLength, default, CultureInfo.InvariantCulture))
+                {
+                    throw new InvalidOperationException("Не хватило места под номер пачки в буфере сообщения.");
+                }
+
+                offset += sequenceLength;
                 Append(span, ref offset, OutMiddle);
 
                 if (s.Length > 0)
@@ -82,10 +95,21 @@ public sealed class BridgeMessageWriter : IBridgeMessageWriter
             "{\"type\":\"exited\",\"id\":\"",
             JsonStringEscape.Escape(terminalId.Value),
             "\",\"code\":",
-            exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            exitCode.ToString(CultureInfo.InvariantCulture),
             "}");
 
     internal static int Base64Length(int byteCount) => ((byteCount + 2) / 3) * 4;
+
+    private static int CountDigits(long value)
+    {
+        int digits = 1;
+        while ((value /= 10) != 0)
+        {
+            digits++;
+        }
+
+        return digits;
+    }
 
     private static void Append(Span<char> destination, ref int offset, string value)
     {
@@ -93,9 +117,11 @@ public sealed class BridgeMessageWriter : IBridgeMessageWriter
         offset += value.Length;
     }
 
-    private readonly struct OutState(string id, IntPtr payload, int length)
+    private readonly struct OutState(string id, long sequence, IntPtr payload, int length)
     {
         internal string Id { get; } = id;
+
+        internal long Sequence { get; } = sequence;
 
         internal IntPtr Payload { get; } = payload;
 

@@ -33,6 +33,11 @@ public abstract record InboundBridgeMessage(TerminalId TerminalId)
     /// </para>
     /// </summary>
     /// <param name="TerminalId">Вкладка, подтвердившая запись.</param>
+    /// <param name="Sequence">
+    /// Номер пачки из соответствующего <c>out</c>. Подтверждение накрывает и все пачки
+    /// с меньшими номерами: страница пишет их по порядку, поэтому потеря одной квитанции
+    /// не сдвигает соответствие.
+    /// </param>
     /// <param name="Bytes">Сколько байтов записано — для диагностики и сверки.</param>
-    public sealed record Ack(TerminalId TerminalId, int Bytes) : InboundBridgeMessage(TerminalId);
+    public sealed record Ack(TerminalId TerminalId, long Sequence, int Bytes) : InboundBridgeMessage(TerminalId);
 }

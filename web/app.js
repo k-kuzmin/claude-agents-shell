@@ -9,9 +9,17 @@
 (function () {
   'use strict';
 
-  // Должно совпадать с TerminalOptions.ResizeDebounce.
-  var RESIZE_DEBOUNCE_MS = 80;
-  var SCROLLBACK = 5000;
+  // Настройки приходят из C# (TerminalOptions) скриптом, выполняемым до создания документа.
+  // Дублировать их здесь константами нельзя: получилось бы два источника правды.
+  var config = window.__terminalConfig;
+  if (!config || !config.scrollback || !config.resizeDebounceMs) {
+    // Скрипт настроек ставится до создания документа, рядом с приёмником сообщений.
+    // Если его нет — это ошибка сборки моста, и молча работать на нулевом дебаунсе хуже.
+    throw new Error('window.__terminalConfig не задан: страница запущена мимо моста.');
+  }
+
+  var RESIZE_DEBOUNCE_MS = config.resizeDebounceMs;
+  var SCROLLBACK = config.scrollback;
 
   var THEME = {
     background: '#0E0E0D',
@@ -238,16 +246,20 @@
     }
   }
 
-  function writeOutput(id, b64) {
+  function writeOutput(id, seq, b64) {
     var entry = terminals.get(id);
+
     if (!entry) {
+      // Квитанция уходит в любом случае: C# уже поставил ожидание на эту пачку, и молчание
+      // здесь навсегда остановило бы чтение из PTY по достижении MaxPendingWrites.
+      post({ type: 'ack', id: id, seq: seq, bytes: 0 });
       return;
     }
 
     var bytes = decodeBase64(b64);
     entry.term.write(bytes, function () {
       // Колбэк term.write — единственный честный признак, что пачка записана.
-      post({ type: 'ack', id: id, bytes: bytes.length });
+      post({ type: 'ack', id: id, seq: seq, bytes: bytes.length });
     });
   }
 
@@ -272,7 +284,7 @@
 
     switch (message.type) {
       case 'out':
-        writeOutput(message.id, message.b64);
+        writeOutput(message.id, message.seq, message.b64);
         break;
       case 'create':
         createTerminal(message.id, message.title);

@@ -25,8 +25,17 @@
 
   <!-- Страница терминалов и локальные ассеты xterm.js отдаются WebView2 через
        SetVirtualHostNameToFolderMapping из каталога сборки. CDN не используется. -->
+  <!-- Пачка вывода 64 КБ (раздел 3.3 ТЗ) превращается в сообщение out длиной ~175 КБ:
+       base64 даёт 4/3, строка в .NET — 2 байта на символ. При штатном пороге LOH в 85 000
+       байт каждое такое сообщение попадало бы в кучу больших объектов, а каждая сборка Gen0
+       становилась бы полной. Поднимаем порог до 192 КБ, чтобы сообщения оставались в Gen0.
+       Значение десятичное (в отличие от переменной окружения DOTNET_GCLOHThreshold). -->
   <ItemGroup>
-    <WebAsset Include="..\..\web\**\*" Exclude="..\..\web\node_modules\**\*;..\..\web\package.json;..\..\web\package-lock.json" />
+    <RuntimeHostConfigurationOption Include="System.GC.LOHThreshold" Value="196608" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <WebAsset Include="..\..\web\**\*" Exclude="..\..\web\node_modules\**\*;..\..\web\tools\**\*;..\..\web\package.json;..\..\web\package-lock.json" />
     <None Include="@(WebAsset)" Link="web\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

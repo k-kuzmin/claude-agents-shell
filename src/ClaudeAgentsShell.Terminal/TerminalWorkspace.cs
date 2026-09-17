@@ -97,14 +97,36 @@ public sealed class TerminalWorkspace : IAsyncDisposable
 
         await _cts.CancelAsync().ConfigureAwait(false);
 
-        foreach (var pump in _pumps.Values)
+        foreach (string terminalId in _pumps.Keys)
+        {
+            await CloseAsync(new TerminalId(terminalId), notifyPage: false).ConfigureAwait(false);
+        }
+
+        _pending.Clear();
+        _cts.Dispose();
+    }
+
+    /// <summary>
+    /// Закрывает вкладку: гасит псевдоконсоль, убирает помпу из маршрутизации и просит
+    /// страницу уничтожить терминал. Единственный путь удаления вкладки — здесь же
+    /// снимаются ожидания записи, иначе они копились бы на каждой закрытой вкладке.
+    /// </summary>
+    public async Task CloseAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
+        await CloseAsync(terminalId, notifyPage: true, cancellationToken).ConfigureAwait(false);
+
+    private async Task CloseAsync(TerminalId terminalId, bool notifyPage, CancellationToken cancellationToken = default)
+    {
+        _pending.TryRemove(terminalId.Value, out _);
+
+        if (_pumps.TryRemove(terminalId.Value, out var pump))
         {
             await pump.DisposeAsync().ConfigureAwait(false);
         }
 
-        _pumps.Clear();
-        _pending.Clear();
-        _cts.Dispose();
+        if (notifyPage)
+        {
+            await _bridge.CloseTerminalAsync(terminalId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static string DefaultWorkingDirectory() =>
@@ -152,9 +174,12 @@ public sealed class TerminalWorkspace : IAsyncDisposable
         {
             await pump.SendInputAsync(args.Data, _cts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (Exception exception) when (exception is OperationCanceledException
+                                              or ObjectDisposedException
+                                              or IOException)
         {
-            // Приложение закрывается.
+            // Вкладку закрыли, пока пользователь печатал. Потерять символ допустимо,
+            // уронить процесс из async void — нет.
         }
     }
 

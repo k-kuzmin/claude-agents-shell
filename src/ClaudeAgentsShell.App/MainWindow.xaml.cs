@@ -53,9 +53,12 @@ public partial class MainWindow : Window
         {
             await _workspace.StartAsync(CancellationToken.None);
         }
-        catch (TerminalBridgeUnavailableException exception)
+        catch (Exception exception) when (exception is TerminalBridgeUnavailableException
+                                             or InvalidOperationException
+                                             or PtyStartException)
         {
-            // Без страницы терминалов работать не с чем; показываем причину, а не чёрный экран.
+            // Страницы терминалов нет либо в системе не нашлось ни одной оболочки — обе ветки
+            // предусмотрены контрактом и не должны валить процесс из async void.
             MessageBox.Show(this, exception.Message, Title, MessageBoxButton.OK, MessageBoxImage.Error);
             Close();
         }

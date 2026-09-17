@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
+using ClaudeAgentsShell.Terminal;
 using ClaudeAgentsShell.Terminal.Protocol;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -37,22 +39,24 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
 
     private readonly IBridgeMessageWriter _writer;
     private readonly IBridgeMessageParser _parser;
+    private readonly TerminalOptions _options;
     private readonly Dispatcher _dispatcher;
     private readonly WebView2 _webView = new();
-    private readonly ConcurrentDictionary<string, ConcurrentQueue<TaskCompletionSource>> _acknowledgements =
-        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, PendingWriteRegistry> _acknowledgements = new(StringComparer.Ordinal);
 
     private CoreWebView2? _core;
     private int _disposed;
 
     /// <inheritdoc cref="WebView2TerminalBridge" />
-    public WebView2TerminalBridge(IBridgeMessageWriter writer, IBridgeMessageParser parser)
+    public WebView2TerminalBridge(IBridgeMessageWriter writer, IBridgeMessageParser parser, TerminalOptions options)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(parser);
+        ArgumentNullException.ThrowIfNull(options);
 
         _writer = writer;
         _parser = parser;
+        _options = options;
         _dispatcher = Dispatcher.CurrentDispatcher;
     }
 
@@ -96,10 +100,13 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
             webRoot,
             CoreWebView2HostResourceAccessKind.DenyCors);
 
+        ApplySettings(_core.Settings);
+
         _core.WebMessageReceived += OnWebMessageReceived;
         _core.ProcessFailed += OnProcessFailed;
 
         await _core.AddScriptToExecuteOnDocumentCreatedAsync(InboxScript).ConfigureAwait(true);
+        await _core.AddScriptToExecuteOnDocumentCreatedAsync(BuildConfigScript(_options)).ConfigureAwait(true);
 
         var navigated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args)
@@ -141,28 +148,29 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     /// <inheritdoc />
     public async ValueTask WriteOutputAsync(TerminalId terminalId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
+        var pending = _acknowledgements.GetOrAdd(terminalId.Value, static _ => new PendingWriteRegistry());
+        long sequence = pending.Reserve(out var acknowledged);
+
         // Полезная нагрузка вычитывается здесь, до первого await: вызывающий вправе вернуть
         // буфер в пул, как только метод отдал управление. Base64 считается на вызывающем потоке,
         // на UI уходит уже готовая строка.
-        string message = _writer.Out(terminalId, payload.Span);
-
-        var acknowledged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var queue = _acknowledgements.GetOrAdd(terminalId.Value, static _ => new ConcurrentQueue<TaskCompletionSource>());
-        queue.Enqueue(acknowledged);
+        string message = _writer.Out(terminalId, sequence, payload.Span);
 
         try
         {
             await PostAsync(message, cancellationToken).ConfigureAwait(false);
+
+            // Завершается по подтверждению страницы: колбэк term.write → сообщение ack.
+            // На этом построен backpressure раздела 3.3 ТЗ.
+            await acknowledged.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
         {
-            ReleaseAcknowledgements(terminalId.Value);
+            // Брошенное ожидание убирается из учёта: иначе следующая квитанция завершила бы
+            // чужую запись и счётчик незавершённых поехал бы навсегда.
+            pending.Abandon(sequence);
             throw;
         }
-
-        // Завершается по подтверждению страницы: колбэк term.write → сообщение ack.
-        // На этом построен backpressure раздела 3.3 ТЗ.
-        await acknowledged.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -203,6 +211,36 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
         }
 
         _webView.Dispose();
+    }
+
+    /// <summary>
+    /// Окно терминала не должно вести себя как браузер. Особенно важны горячие клавиши:
+    /// F5 и Ctrl+R перезагрузили бы страницу, карта терминалов обнулилась бы, а C# об этом
+    /// не узнал бы — вкладка осталась бы мёртвой навсегда.
+    /// </summary>
+    private static void ApplySettings(CoreWebView2Settings settings)
+    {
+        settings.AreBrowserAcceleratorKeysEnabled = false;
+        settings.AreDefaultContextMenusEnabled = false;
+        settings.AreDevToolsEnabled = false;
+        settings.IsStatusBarEnabled = false;
+        settings.IsZoomControlEnabled = false;
+        settings.IsSwipeNavigationEnabled = false;
+    }
+
+    /// <summary>
+    /// Отдаёт странице настройки из <see cref="TerminalOptions"/> до создания документа.
+    /// Источник правды один — C#; дублировать значения константами в app.js нельзя.
+    /// Это не сообщение моста: протокол раздела 3.2 ТЗ не расширяется.
+    /// </summary>
+    private static string BuildConfigScript(TerminalOptions options)
+    {
+        int scrollback = options.Scrollback;
+        int resizeDebounce = (int)options.ResizeDebounce.TotalMilliseconds;
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"window.__terminalConfig = {{ scrollback: {scrollback}, resizeDebounceMs: {resizeDebounce} }};");
     }
 
     private static string ResolveUserDataFolder()
@@ -249,7 +287,9 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
             return ValueTask.CompletedTask;
         }
 
-        return new ValueTask(_dispatcher.InvokeAsync(() => Post(message), DispatcherPriority.Send, cancellationToken).Task);
+        // Background ниже Render: шумный вывод терминалов не должен вытеснять отрисовку.
+        return new ValueTask(
+            _dispatcher.InvokeAsync(() => Post(message), DispatcherPriority.Background, cancellationToken).Task);
     }
 
     private void Post(string message) => _core?.PostWebMessageAsString(message);
@@ -287,7 +327,7 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
                 break;
 
             case InboundBridgeMessage.Ack ack:
-                CompleteAcknowledgement(ack.TerminalId.Value);
+                CompleteAcknowledgement(ack.TerminalId.Value, ack.Sequence);
                 break;
         }
     }
@@ -301,24 +341,23 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
         }
     }
 
-    private void CompleteAcknowledgement(string terminalId)
+    private void CompleteAcknowledgement(string terminalId, long sequence)
     {
-        if (_acknowledgements.TryGetValue(terminalId, out var queue) && queue.TryDequeue(out var acknowledged))
+        if (_acknowledgements.TryGetValue(terminalId, out var pending))
         {
-            acknowledged.TrySetResult();
+            pending.CompleteUpTo(sequence);
         }
     }
 
+    /// <summary>
+    /// Отпускает все ожидания вкладки и убирает её из учёта. Вызывается, когда подтверждений
+    /// больше не будет: вкладка закрыта, мост освобождён, рендерер упал.
+    /// </summary>
     private void ReleaseAcknowledgements(string terminalId)
     {
-        if (!_acknowledgements.TryGetValue(terminalId, out var queue))
+        if (_acknowledgements.TryRemove(terminalId, out var pending))
         {
-            return;
-        }
-
-        while (queue.TryDequeue(out var acknowledged))
-        {
-            acknowledged.TrySetResult();
+            pending.ReleaseAll();
         }
     }
 }

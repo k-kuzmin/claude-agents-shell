@@ -16,18 +16,19 @@ public sealed class BridgeMessageWriterTests
     {
         byte[] payload = [0x01, 0x02, 0x03];
 
-        using var document = JsonDocument.Parse(_writer.Out(Id, payload));
+        using var document = JsonDocument.Parse(_writer.Out(Id, 42, payload));
         var root = document.RootElement;
 
         Assert.Equal("out", root.GetProperty("type").GetString());
         Assert.Equal("t1", root.GetProperty("id").GetString());
+        Assert.Equal(42, root.GetProperty("seq").GetInt64());
         Assert.Equal(payload, Convert.FromBase64String(root.GetProperty("b64").GetString()!));
     }
 
     [Fact]
     public void Out_с_пустой_пачкой_остаётся_валидным_json()
     {
-        using var document = JsonDocument.Parse(_writer.Out(Id, ReadOnlySpan<byte>.Empty));
+        using var document = JsonDocument.Parse(_writer.Out(Id, 0, ReadOnlySpan<byte>.Empty));
 
         Assert.Equal(string.Empty, document.RootElement.GetProperty("b64").GetString());
     }
@@ -44,8 +45,24 @@ public sealed class BridgeMessageWriterTests
         byte[] payload = new byte[length];
         Random.Shared.NextBytes(payload);
 
-        using var document = JsonDocument.Parse(_writer.Out(Id, payload));
+        using var document = JsonDocument.Parse(_writer.Out(Id, 7, payload));
 
+        Assert.Equal(payload, Convert.FromBase64String(document.RootElement.GetProperty("b64").GetString()!));
+    }
+
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(9L)]
+    [InlineData(10L)]
+    [InlineData(999_999L)]
+    [InlineData(long.MaxValue)]
+    public void Номер_пачки_любой_длины_не_ломает_сообщение(long sequence)
+    {
+        byte[] payload = [1, 2, 3, 4, 5];
+
+        using var document = JsonDocument.Parse(_writer.Out(Id, sequence, payload));
+
+        Assert.Equal(sequence, document.RootElement.GetProperty("seq").GetInt64());
         Assert.Equal(payload, Convert.FromBase64String(document.RootElement.GetProperty("b64").GetString()!));
     }
 
@@ -95,8 +112,8 @@ public sealed class Utf8ChunkBoundaryTests
         {
             byte[] restored =
             [
-                .. ExtractPayload(writer.Out(Id, source.AsSpan(0, cut))),
-                .. ExtractPayload(writer.Out(Id, source.AsSpan(cut))),
+                .. ExtractPayload(writer.Out(Id, 0, source.AsSpan(0, cut))),
+                .. ExtractPayload(writer.Out(Id, 1, source.AsSpan(cut))),
             ];
 
             Assert.True(source.AsSpan().SequenceEqual(restored), $"Разрез на позиции {cut} потерял байты.");
@@ -116,9 +133,9 @@ public sealed class Utf8ChunkBoundaryTests
             {
                 byte[] restored =
                 [
-                    .. ExtractPayload(writer.Out(Id, source.AsSpan(0, first))),
-                    .. ExtractPayload(writer.Out(Id, source.AsSpan(first, second - first))),
-                    .. ExtractPayload(writer.Out(Id, source.AsSpan(second))),
+                    .. ExtractPayload(writer.Out(Id, 0, source.AsSpan(0, first))),
+                    .. ExtractPayload(writer.Out(Id, 1, source.AsSpan(first, second - first))),
+                    .. ExtractPayload(writer.Out(Id, 2, source.AsSpan(second))),
                 ];
 
                 Assert.Equal(Sample, Encoding.UTF8.GetString(restored));
@@ -183,9 +200,11 @@ public sealed class BridgeMessageParserTests
     [Fact]
     public void Разбирает_подтверждение_записи()
     {
-        Assert.True(_parser.TryParse("""{"type":"ack","id":"t1","bytes":4096}""", out var message));
+        Assert.True(_parser.TryParse("""{"type":"ack","id":"t1","seq":17,"bytes":4096}""", out var message));
 
-        Assert.Equal(4096, Assert.IsType<InboundBridgeMessage.Ack>(message).Bytes);
+        var ack = Assert.IsType<InboundBridgeMessage.Ack>(message);
+        Assert.Equal(17, ack.Sequence);
+        Assert.Equal(4096, ack.Bytes);
     }
 
     [Theory]
@@ -204,6 +223,9 @@ public sealed class BridgeMessageParserTests
     [InlineData("""{"type":"in","id":123,"b64":"AA=="}""")]
     [InlineData("""{"type":"resize","id":"t1","cols":120}""")]
     [InlineData("""{"type":"resize","id":"t1","cols":"120","rows":"34"}""")]
+    [InlineData("""{"type":"ack","id":"t1","bytes":10}""")]
+    [InlineData("""{"type":"ack","id":"t1","seq":-1}""")]
+    [InlineData("""{"type":"ack","id":"t1","seq":"17"}""")]
     public void Мусор_не_роняет_разбор(string json)
     {
         Assert.False(_parser.TryParse(json, out var message));

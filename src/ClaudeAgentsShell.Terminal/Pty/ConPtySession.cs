@@ -98,6 +98,16 @@ internal sealed class ConPtySession : IPtySession
             return;
         }
 
+        lock (_sync)
+        {
+            if (_disposed)
+            {
+                // Вкладку закрыли, пока пользователь печатал. Ввод девать некуда,
+                // но падать обработчик события не имеет права.
+                return;
+            }
+        }
+
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -178,23 +188,39 @@ internal sealed class ConPtySession : IPtySession
             // Процесс не отдал управление за отведённое время — дальше освобождаем ресурсы всё равно.
         }
 
-        _exitRegistration?.Unregister(null);
-        _exitRegistration = null;
+        if (_exitRegistration is { } registration)
+        {
+            // Unregister(null) не ждёт уже начавшийся колбэк. Ждём его явно, иначе
+            // OnProcessExited успеет дёрнуть GetExitCodeProcess по освобождённому хэндлу.
+            using var callbacksFinished = new ManualResetEvent(false);
+            registration.Unregister(callbacksFinished);
+            callbacksFinished.WaitOne(TimeSpan.FromSeconds(1));
+            _exitRegistration = null;
+        }
 
         _input.Dispose();
         _output.Dispose();
         _attributes.Dispose();
         _processWaitHandle.Dispose();
         _process.Dispose();
-        _writeLock.Dispose();
+
+        // _writeLock намеренно не освобождается: SemaphoreSlim без AvailableWaitHandle
+        // в этом не нуждается, а его освобождение создавало бы гонку с вводом со страницы.
     }
 
     private void OnProcessExited()
     {
         int code = -1;
-        if (NativeMethods.GetExitCodeProcess(_process, out uint raw) && raw != NativeMethods.StillActive)
+        try
         {
-            code = unchecked((int)raw);
+            if (NativeMethods.GetExitCodeProcess(_process, out uint raw) && raw != NativeMethods.StillActive)
+            {
+                code = unchecked((int)raw);
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // Сессию освободили одновременно с завершением процесса — код выхода уже не нужен.
         }
 
         lock (_sync)

@@ -10,10 +10,17 @@ namespace ClaudeAgentsShell.Terminal.Protocol;
 public interface IBridgeMessageWriter
 {
     /// <summary>
-    /// <c>{"type":"out","id":"t1","b64":"…"}</c> — пачка сырых байтов PTY.
+    /// <c>{"type":"out","id":"t1","seq":12,"b64":"…"}</c> — пачка сырых байтов PTY.
     /// Байты не декодируются в строку ни здесь, ни выше по стеку.
     /// </summary>
-    string Out(TerminalId terminalId, ReadOnlySpan<byte> payload);
+    /// <param name="terminalId">Вкладка-получатель.</param>
+    /// <param name="sequence">
+    /// Неубывающий номер пачки в пределах вкладки. Страница возвращает его в <c>ack</c>,
+    /// и по нему запись сопоставляется с ожиданием: считать квитанции по порядку нельзя —
+    /// одна потерянная сдвинула бы соответствие навсегда.
+    /// </param>
+    /// <param name="payload">Сырые байты пачки.</param>
+    string Out(TerminalId terminalId, long sequence, ReadOnlySpan<byte> payload);
 
     /// <summary><c>{"type":"create","id":"t1","title":"…"}</c></summary>
     string Create(TerminalId terminalId, string title);

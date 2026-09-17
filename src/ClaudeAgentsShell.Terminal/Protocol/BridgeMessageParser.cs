@@ -48,7 +48,15 @@ public sealed class BridgeMessageParser : IBridgeMessageParser
                     return true;
 
                 case "ack":
-                    message = new InboundBridgeMessage.Ack(terminalId, TryGetInt32(root, "bytes", out int bytes) ? bytes : 0);
+                    if (!TryGetInt64(root, "seq", out long sequence) || sequence < 0)
+                    {
+                        return false;
+                    }
+
+                    message = new InboundBridgeMessage.Ack(
+                        terminalId,
+                        sequence,
+                        TryGetInt32(root, "bytes", out int bytes) ? bytes : 0);
                     return true;
 
                 default:
@@ -117,6 +125,14 @@ public sealed class BridgeMessageParser : IBridgeMessageParser
 
         value = element.GetString() ?? string.Empty;
         return true;
+    }
+
+    private static bool TryGetInt64(JsonElement root, string name, out long value)
+    {
+        value = 0;
+        return root.TryGetProperty(name, out var element) &&
+               element.ValueKind == JsonValueKind.Number &&
+               element.TryGetInt64(out value);
     }
 
     private static bool TryGetInt32(JsonElement root, string name, out int value)

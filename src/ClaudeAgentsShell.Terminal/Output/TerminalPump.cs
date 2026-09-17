@@ -37,6 +37,7 @@ public sealed class TerminalPump : IAsyncDisposable
 
     private Task? _loop;
     private bool _timerArmed;
+    private bool _buffersReleased;
     private bool _shuttingDown;
     private int _disposed;
 
@@ -61,7 +62,7 @@ public sealed class TerminalPump : IAsyncDisposable
         _pty = pty;
         _bridge = bridge;
         _options = options;
-        _accumulator = new OutputAccumulator(options.ReadBufferBytes);
+        _accumulator = new OutputAccumulator(options.FlushThresholdBytes + options.ReadBufferBytes);
         _readBuffer = ArrayPool<byte>.Shared.Rent(options.ReadBufferBytes);
 
         _flushTimer = timeProvider.CreateTimer(
@@ -116,15 +117,22 @@ public sealed class TerminalPump : IAsyncDisposable
 
         var ptyDispose = _pty.DisposeAsync().AsTask();
 
+        bool loopFinished = _loop is null;
         if (_loop is { } loop)
         {
             try
             {
                 await loop.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+                loopFinished = true;
             }
             catch (TimeoutException)
             {
-                // Читающий цикл не вышел за отведённое время — дальше освобождаем ресурсы всё равно.
+                // Читающий цикл не вышел за отведённое время — его буферы трогать нельзя.
+            }
+            catch (Exception)
+            {
+                // Цикл завершился с ошибкой: он уже не работает, буферы освобождать можно.
+                loopFinished = true;
             }
         }
 
@@ -139,21 +147,40 @@ public sealed class TerminalPump : IAsyncDisposable
 
         await _cts.CancelAsync().ConfigureAwait(false);
 
+        // Таймер снимаем до освобождения буферов: новых сбросов быть не должно.
         _flushTimer.Dispose();
 
-        lock (_sync)
+        // Ждём сброс, который мог начаться до снятия таймера.
+        await _flushLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            while (_pending.Count > 0)
+            lock (_sync)
             {
-                OutputAccumulator.Release(_pending.Dequeue().Buffer);
+                _buffersReleased = loopFinished;
+
+                while (_pending.Count > 0)
+                {
+                    Release(_pending.Dequeue());
+                }
+
+                if (!loopFinished)
+                {
+                    // Читающий цикл не вышел за отведённое время и может ещё писать в
+                    // _readBuffer и в аккумулятор. Возврат их в пул отдал бы чужой вкладке
+                    // используемую память — лучше потерять пару буферов.
+                    return;
+                }
+
+                _accumulator.Dispose();
             }
 
-            _accumulator.Dispose();
+            ArrayPool<byte>.Shared.Return(_readBuffer);
         }
-
-        ArrayPool<byte>.Shared.Return(_readBuffer);
-        _flushLock.Dispose();
-        _cts.Dispose();
+        finally
+        {
+            _flushLock.Release();
+            _cts.Dispose();
+        }
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
@@ -212,7 +239,7 @@ public sealed class TerminalPump : IAsyncDisposable
             {
                 while (_pending.Count > 0 && _pending.Peek().Task.IsCompleted)
                 {
-                    OutputAccumulator.Release(_pending.Dequeue().Buffer);
+                    Release(_pending.Dequeue());
                 }
 
                 if (_shuttingDown || _pending.Count < _options.MaxPendingWrites)
@@ -233,15 +260,14 @@ public sealed class TerminalPump : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
-                OutputAccumulator.Release(blocking.Buffer);
+                Release(blocking);
                 throw;
             }
-            catch (Exception)
-            {
-                // Страница не подтвердила запись (закрылась, упал рендерер) — чтение не останавливаем.
-            }
 
-            OutputAccumulator.Release(blocking.Buffer);
+            // Task.WhenAny не пробрасывает исключение вложенной задачи — сбойную запись
+            // (страница закрылась, упал рендерер) наблюдаем вручную, чтобы она не осталась
+            // unobserved, и продолжаем читать.
+            Release(blocking);
         }
     }
 
@@ -255,7 +281,7 @@ public sealed class TerminalPump : IAsyncDisposable
             {
                 DisarmFlushTimer();
 
-                if (_accumulator.Count == 0)
+                if (_buffersReleased || _accumulator.Count == 0)
                 {
                     return;
                 }
@@ -347,6 +373,20 @@ public sealed class TerminalPump : IAsyncDisposable
     }
 
     private void OnPtyExited(object? sender, PtyExitedEventArgs args) => _exitSignal.TrySetResult(args.ExitCode);
+
+    /// <summary>
+    /// Возвращает буфер пачки в пул и наблюдает исключение записи, если оно было:
+    /// незамеченная сбойная задача всплыла бы как unobserved-исключение.
+    /// </summary>
+    private static void Release(PendingWrite write)
+    {
+        if (write.Task.IsFaulted)
+        {
+            _ = write.Task.Exception;
+        }
+
+        OutputAccumulator.Release(write.Buffer);
+    }
 
     private readonly record struct PendingWrite(Task Task, ArraySegment<byte> Buffer);
 }
