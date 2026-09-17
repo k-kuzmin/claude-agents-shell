@@ -21,4 +21,18 @@ public abstract record InboundBridgeMessage(TerminalId TerminalId)
     /// <summary>Терминал создан и готов: <c>{"type":"ready","id":"t1"}</c>.</summary>
     /// <param name="TerminalId">Готовая вкладка.</param>
     public sealed record Ready(TerminalId TerminalId) : InboundBridgeMessage(TerminalId);
+
+    /// <summary>
+    /// Подтверждение записи пачки вывода: <c>{"type":"ack","id":"t1","bytes":1234}</c>.
+    /// <para>
+    /// Единственное служебное расширение протокола раздела 3.2 ТЗ. Его требует раздел 3.3:
+    /// «<c>term.write(bytes, callback)</c> — счётчик незавершённых записей; если он превышает
+    /// порог, чтение из PTY приостанавливается до вызова callback». Callback живёт на странице,
+    /// поэтому без обратного сообщения счётчик на стороне C# посчитать нечем.
+    /// Страница шлёт <c>ack</c> из колбэка <c>term.write</c>, по одному на каждое <c>out</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="TerminalId">Вкладка, подтвердившая запись.</param>
+    /// <param name="Bytes">Сколько байтов записано — для диагностики и сверки.</param>
+    public sealed record Ack(TerminalId TerminalId, int Bytes) : InboundBridgeMessage(TerminalId);
 }

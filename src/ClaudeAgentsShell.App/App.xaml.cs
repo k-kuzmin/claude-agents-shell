@@ -1,4 +1,5 @@
 using System.Windows;
+using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Sessions;
 using ClaudeAgentsShell.Terminal;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,8 +35,14 @@ public partial class App : System.Windows.Application
     /// <inheritdoc />
     protected override void OnExit(ExitEventArgs e)
     {
-        _services?.Dispose();
-        _services = null;
+        if (_services is { } services)
+        {
+            // К этому моменту окно уже освободило мост и псевдоконсоли; повторное освобождение
+            // идемпотентно и не уходит в ожидание.
+            services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _services = null;
+        }
+
         base.OnExit(e);
     }
 
@@ -43,6 +50,11 @@ public partial class App : System.Windows.Application
     {
         services.AddTerminalLayer();
         services.AddSessionsLayer();
+
+        // Мост — единственное место, где приложение знает про WebView2.
+        services.AddSingleton<WebView2TerminalBridge>();
+        services.AddSingleton<ITerminalBridge>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
+
         services.AddSingleton<MainWindow>();
     }
 }

@@ -3,4 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Claude Agents Shell"
         Width="1440" Height="900"
-        Background="#121211" />
+        Background="#121211">
+    <!-- Ровно один WebView2 на всё окно; он кладётся сюда из моста. -->
+    <Grid x:Name="Root" />
+</Window>

@@ -61,6 +61,18 @@ public interface ITerminalBridge : IAsyncDisposable
     /// <summary>
     /// Отправляет накопленную пачку сырых байтов вывода. Байты уходят в base64 без
     /// декодирования в строку; склейка в пачки — обязанность вызывающего.
+    /// <para>
+    /// <b>Задача завершается не по факту отправки, а по подтверждению страницы</b> —
+    /// колбэку <c>term.write</c>. На этом построен счётчик незавершённых записей из
+    /// раздела 3.3 ТЗ: вызывающий держит не больше
+    /// <c>TerminalOptions.MaxPendingWrites</c> незавершённых вызовов и на это время
+    /// приостанавливает чтение из PTY. Реализация, завершающая задачу сразу, молча
+    /// отключает backpressure.
+    /// </para>
+    /// <para>
+    /// <paramref name="payload"/> вычитывается до первого <c>await</c>: вызывающий вправе
+    /// вернуть буфер в пул, как только метод отдал управление.
+    /// </para>
     /// </summary>
     ValueTask WriteOutputAsync(TerminalId terminalId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken);
 
