@@ -28,7 +28,12 @@ public static class TerminalServiceCollectionExtensions
         services.AddSingleton<IShellResolver, ShellResolver>();
 
         services.AddSingleton<IPtySessionFactory, ConPtySessionFactory>();
+
+        // Набор вкладок — один на окно: он владеет помпами и маршрутизацией. Конкретный тип
+        // зарегистрирован отдельно и переадресован на тот же экземпляр, пока окно требует его
+        // в конструкторе; после перехода окна на ITerminalWorkspace регистрация уйдёт.
         services.AddSingleton<TerminalWorkspace>();
+        services.AddSingleton<ITerminalWorkspace>(static sp => sp.GetRequiredService<TerminalWorkspace>());
 
         return services;
     }

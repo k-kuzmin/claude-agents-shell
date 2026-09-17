@@ -19,6 +19,7 @@ namespace ClaudeAgentsShell.App;
 internal static class WorkAreaPlacement
 {
     private const int MonitorDefaultToNearest = 0x00000002;
+    private const int WmGetMinMaxInfo = 0x0024;
 
     /// <summary>
     /// Зажимает размер окна рабочей областью и ставит его по центру этой области.
@@ -41,6 +42,82 @@ internal static class WorkAreaPlacement
         window.Height = height;
         window.Left = workArea.Left + ((workArea.Width - width) / 2);
         window.Top = workArea.Top + ((workArea.Height - height) / 2);
+    }
+
+    /// <summary>
+    /// Учит окно разворачиваться в рабочую область своего монитора, а не на весь экран.
+    /// Нужно из-за собственного обрамления: окно без системной рамки система разворачивает
+    /// по границам монитора, и нижний край наслаивается на панель задач.
+    /// Вызывается один раз после создания окна, когда уже есть дескриптор.
+    /// </summary>
+    internal static void KeepMaximizedWithinWorkArea(Window window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        // Хук снимать не нужно: он статический, ничего не захватывает и живёт ровно
+        // столько же, сколько источник окна.
+        (PresentationSource.FromVisual(window) as HwndSource)?.AddHook(OnWindowMessage);
+    }
+
+    /// <summary>
+    /// Считает положение и размер развёрнутого окна. Обе величины — в физических пикселях
+    /// и относительно монитора: <c>WM_GETMINMAXINFO</c> ждёт именно их, поэтому здесь,
+    /// в отличие от <see cref="FitIntoWorkArea"/>, нет перевода в единицы WPF. Перевод
+    /// сломал бы разворачивание на мониторе с масштабом, отличным от 100 %.
+    /// </summary>
+    /// <param name="monitor">Границы монитора.</param>
+    /// <param name="work">Рабочая область того же монитора — экран за вычетом панели задач.</param>
+    internal static MaximizedBounds CalculateMaximizedBounds(in NativeRect monitor, in NativeRect work) =>
+        new(
+            work.Left - monitor.Left,
+            work.Top - monitor.Top,
+            work.Right - work.Left,
+            work.Bottom - work.Top);
+
+    private static IntPtr OnWindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (message != WmGetMinMaxInfo || lParam == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
+        IntPtr monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+        if (monitor == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
+        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        if (!GetMonitorInfo(monitor, ref info))
+        {
+            // Монитор не отвечает — пусть окно развернётся как умеет: это хуже панели задач,
+            // но лучше окна, которое не разворачивается вовсе.
+            return IntPtr.Zero;
+        }
+
+        var bounds = CalculateMaximizedBounds(info.Monitor, info.Work);
+
+        // Правится ровно два поля — те, что описывают развёрнутое состояние.
+        //
+        // Сообщение остаётся необработанным намеренно. Свой обработчик есть и у WPF: он
+        // кладёт в структуру минимальный и максимальный размер перетаскивания из MinWidth,
+        // MinHeight, MaxWidth и MaxHeight окна. Кто из двух обработчиков идёт первым,
+        // зависит от внутренностей WPF и проверяется только запуском. Пока сообщение
+        // не помечено обработанным, порядок не важен вовсе: каждый обработчик читает
+        // структуру, меняет свои поля и пишет её назад, чужие поля не затирая.
+        // Пометив сообщение обработанным, мы бы поставили на то, что обработчик WPF
+        // уже отработал, — и, проиграв, молча потеряли бы минимальный размер окна:
+        // оно ужималось бы до системных ~136×39, обрезая содержимое.
+        //
+        // MaxTrackSize не трогается сознательно: он ограничивает не разворачивание,
+        // а растягивание мышью. Зажав его рабочей областью, мы запретили бы растянуть
+        // окно на два монитора, ничего не дав защите панели задач.
+        var minMax = Marshal.PtrToStructure<MinMaxInfo>(lParam);
+        minMax.MaxPosition = new NativePoint(bounds.Left, bounds.Top);
+        minMax.MaxSize = new NativePoint(bounds.Width, bounds.Height);
+        Marshal.StructureToPtr(minMax, lParam, fDeleteOld: false);
+
+        return IntPtr.Zero;
     }
 
     private static Rect ResolveWorkArea(Window window)
@@ -71,14 +148,29 @@ internal static class WorkAreaPlacement
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
 
+    /// <summary>Прямоугольник Windows в физических пикселях.</summary>
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeRect
+    internal struct NativeRect(int left, int top, int right, int bottom)
     {
-        internal int Left;
-        internal int Top;
-        internal int Right;
-        internal int Bottom;
+        internal int Left = left;
+        internal int Top = top;
+        internal int Right = right;
+        internal int Bottom = bottom;
     }
+
+    /// <summary>Точка Windows в физических пикселях.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NativePoint(int x, int y)
+    {
+        internal int X = x;
+        internal int Y = y;
+    }
+
+    /// <summary>
+    /// Где и какого размера окажется развёрнутое окно. Положение — относительно левого
+    /// верхнего угла монитора, как того требует <c>WM_GETMINMAXINFO</c>.
+    /// </summary>
+    internal readonly record struct MaximizedBounds(int Left, int Top, int Width, int Height);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MonitorInfo
@@ -87,5 +179,15 @@ internal static class WorkAreaPlacement
         internal NativeRect Monitor;
         internal NativeRect Work;
         internal int Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MinMaxInfo
+    {
+        internal NativePoint Reserved;
+        internal NativePoint MaxSize;
+        internal NativePoint MaxPosition;
+        internal NativePoint MinTrackSize;
+        internal NativePoint MaxTrackSize;
     }
 }

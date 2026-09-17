@@ -1,0 +1,185 @@
+<UserControl x:Class="ClaudeAgentsShell.App.Views.ProjectsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:ClaudeAgentsShell.App.ViewModels"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:ShellViewModel}"
+             Background="{DynamicResource ChromeBackgroundBrush}">
+
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Theme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Кнопки строки появляются только под курсором; в покое на их месте
+                 маркер состояния и число открытых сессий. -->
+            <Style x:Key="RowHoverOnlyStyle" TargetType="FrameworkElement">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Border}}" Value="True">
+                        <Setter Property="Visibility" Value="Visible" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+
+            <Style x:Key="RowRestingStyle" TargetType="FrameworkElement">
+                <Setter Property="Visibility" Value="Visible" />
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Border}}" Value="True">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- шапка панели -->
+        <Grid Grid.Row="0" Margin="14,16,12,10">
+            <TextBlock Text="ПРОЕКТЫ" VerticalAlignment="Center" Style="{StaticResource SectionCaptionStyle}" />
+            <Button Width="28" Height="28"
+                    HorizontalAlignment="Right"
+                    Style="{StaticResource OutlinedButtonStyle}"
+                    Command="{Binding AddProjectCommand}"
+                    ToolTip="Добавить проект"
+                    AutomationProperties.Name="Добавить проект">
+                <Canvas Width="15" Height="15">
+                    <Path Style="{StaticResource IconPathStyle}"
+                          Stroke="{StaticResource SecondaryTextBrush}"
+                          Data="M1.9,4.4 L1.9,11.9 L13.1,11.9 L13.1,5.6 L6.9,5.6 L5.6,4.4 Z" />
+                    <Path Style="{StaticResource IconPathStyle}"
+                          Stroke="{StaticResource SecondaryTextBrush}"
+                          Data="M7.5,6.9 L7.5,10.6 M5.7,8.7 L9.3,8.7" />
+                </Canvas>
+            </Button>
+        </Grid>
+
+        <!-- список проектов -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Padding="8,0,8,10">
+            <ItemsControl ItemsSource="{Binding Projects.Rows}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:ProjectRowViewModel}">
+                        <Border x:Name="RowRoot"
+                                Margin="0,0,0,2"
+                                Padding="10,7,7,7"
+                                CornerRadius="8"
+                                Background="Transparent"
+                                BorderThickness="2,0,0,0"
+                                BorderBrush="Transparent"
+                                ToolTip="{Binding PathAndBranch}">
+                            <Border.InputBindings>
+                                <MouseBinding MouseAction="LeftClick"
+                                              Command="{Binding DataContext.SelectProjectCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                              CommandParameter="{Binding}" />
+                            </Border.InputBindings>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock x:Name="ProjectName"
+                                               Text="{Binding Name}"
+                                               FontSize="13"
+                                               FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                    <TextBlock Text="{Binding PathAndBranch}"
+                                               Margin="0,3,0,0"
+                                               FontSize="11"
+                                               FontFamily="{StaticResource MonoFontFamily}"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{StaticResource FaintTextBrush}" />
+                                </StackPanel>
+
+                                <!-- в покое: маркер состояния и число открытых сессий либо тире -->
+                                <StackPanel Grid.Column="1"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource RowRestingStyle}">
+                                    <Ellipse Width="6" Height="6"
+                                             Margin="0,0,6,0"
+                                             VerticalAlignment="Center"
+                                             Fill="{StaticResource UnknownStateBrush}"
+                                             Visibility="{Binding HasSessions, Converter={StaticResource BoolToVisibility}}" />
+                                    <TextBlock Text="{Binding SessionCountText}"
+                                               VerticalAlignment="Center"
+                                               FontSize="10.5"
+                                               FontFamily="{StaticResource MonoFontFamily}"
+                                               Foreground="{StaticResource FaintTextBrush}" />
+                                </StackPanel>
+
+                                <!-- под курсором: новая сессия и история сессий -->
+                                <StackPanel Grid.Column="1"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center"
+                                            Style="{StaticResource RowHoverOnlyStyle}">
+                                    <Button Width="28" Height="28"
+                                            Style="{StaticResource FlatButtonStyle}"
+                                            Foreground="{StaticResource PrimaryTextBrush}"
+                                            Command="{Binding DataContext.OpenSessionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}"
+                                            ToolTip="Новая сессия"
+                                            AutomationProperties.Name="Новая сессия в проекте">
+                                        <Path Style="{StaticResource IconPathStyle}"
+                                              StrokeThickness="2.2"
+                                              Stroke="{StaticResource PrimaryTextBrush}"
+                                              Data="M7.5,3 L7.5,12 M3,7.5 L12,7.5" />
+                                    </Button>
+                                    <!-- Окно истории приезжает в M3: кнопка на месте, но отключена. -->
+                                    <Button Width="28" Height="28"
+                                            Style="{StaticResource FlatButtonStyle}"
+                                            Command="{Binding DataContext.ShowHistoryCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}"
+                                            ToolTip="История сессий (этап M3)"
+                                            AutomationProperties.Name="История сессий проекта">
+                                        <Canvas Width="15" Height="15">
+                                            <Path Style="{StaticResource IconPathStyle}"
+                                                  Stroke="{StaticResource MutedTextBrush}"
+                                                  Data="M1.9,7.5 A5.6,5.6 0 1 0 3.5,3.5" />
+                                            <Path Style="{StaticResource IconPathStyle}"
+                                                  Stroke="{StaticResource MutedTextBrush}"
+                                                  Data="M1.9,2.5 L1.9,5.6 L5,5.6" />
+                                            <Path Style="{StaticResource IconPathStyle}"
+                                                  Stroke="{StaticResource MutedTextBrush}"
+                                                  Data="M7.5,5 L7.5,7.5 L9.4,8.7" />
+                                        </Canvas>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsMouseOver, ElementName=RowRoot}" Value="True">
+                                <Setter TargetName="RowRoot" Property="Background" Value="{StaticResource RowHoverBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                <Setter TargetName="RowRoot" Property="Background" Value="{StaticResource RowHoverBrush}" />
+                                <Setter TargetName="RowRoot" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="ProjectName" Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                            </DataTrigger>
+                            <!-- Каталог исчез: строка недоступна, запуск заблокирован (раздел 8 ТЗ). -->
+                            <DataTrigger Binding="{Binding IsAvailable}" Value="False">
+                                <Setter TargetName="RowRoot" Property="Opacity" Value="0.45" />
+                                <Setter TargetName="RowRoot" Property="ToolTip" Value="Каталог проекта недоступен" />
+                                <Setter TargetName="ProjectName" Property="TextDecorations" Value="Strikethrough" />
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

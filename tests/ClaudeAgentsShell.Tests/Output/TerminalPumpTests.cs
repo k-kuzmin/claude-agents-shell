@@ -255,6 +255,29 @@ public sealed class TerminalPumpTests
         Assert.Equal([3], bridge.ExitCodes);
     }
 
+    /// <summary>
+    /// Запуск после освобождения безвреден. Так выглядит гонка «страница отчиталась
+    /// о готовности, а вкладку в это время закрывали», проигранная закрытием: помпу уже
+    /// освободили, и цикл вставать не должен — токена, на котором он читает, больше нет.
+    /// </summary>
+    [Fact]
+    public async Task Запуск_освобождённой_помпы_ничего_не_читает()
+    {
+        var pty = new FakePtySession();
+        var bridge = new FakeTerminalBridge();
+
+        var pump = new TerminalPump(Id, pty, bridge, new TerminalOptions(), new ManualTimeProvider());
+
+        pty.Emit(1, 2, 3);
+        await pump.DisposeAsync();
+
+        pump.Start();
+        await Task.Delay(50);
+
+        Assert.Equal(0, pty.ChunksConsumed);
+        Assert.Empty(bridge.Batches);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
     {
         long deadline = Environment.TickCount64 + timeoutMs;

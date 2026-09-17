@@ -1,0 +1,216 @@
+using ClaudeAgentsShell.App.Services;
+using ClaudeAgentsShell.Application.Ports;
+using ClaudeAgentsShell.Domain;
+
+namespace ClaudeAgentsShell.Tests.App;
+
+/// <summary>Список проектов в памяти вместо projects.json.</summary>
+internal sealed class FakeProjectStore : IProjectStore
+{
+    private List<ProjectDefinition> _projects = [];
+
+    public IReadOnlyList<ProjectDefinition> Saved { get; private set; } = [];
+
+    public int SaveCount { get; private set; }
+
+    /// <summary>Исключение, которым отвечает следующая запись.</summary>
+    public Exception? SaveFailure { get; set; }
+
+    public void Seed(params ProjectDefinition[] projects) => _projects = [.. projects];
+
+    public Task<IReadOnlyList<ProjectDefinition>> LoadAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<ProjectDefinition>>(_projects);
+
+    public Task SaveAsync(IReadOnlyList<ProjectDefinition> projects, CancellationToken cancellationToken)
+    {
+        if (SaveFailure is { } failure)
+        {
+            SaveFailure = null;
+            return Task.FromException(failure);
+        }
+
+        Saved = [.. projects];
+        _projects = [.. projects];
+        SaveCount++;
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Ветка берётся из словаря, а не из .git/HEAD.</summary>
+internal sealed class FakeGitBranchReader : IGitBranchReader
+{
+    private readonly Dictionary<string, string?> _branches = new(StringComparer.OrdinalIgnoreCase);
+
+    public void Set(string path, string? branch) => _branches[path] = branch;
+
+    public Task<string?> ReadAsync(string workingDirectory, CancellationToken cancellationToken) =>
+        Task.FromResult(_branches.TryGetValue(workingDirectory, out var branch) ? branch : null);
+}
+
+/// <summary>Слежение за веткой без FileSystemWatcher.</summary>
+internal sealed class FakeGitBranchWatcher : IGitBranchWatcher
+{
+    public List<string> Watched { get; } = [];
+
+    public event EventHandler<GitBranchChangedEventArgs>? BranchChanged;
+
+    public void Raise(string workingDirectory, string? branch) =>
+        BranchChanged?.Invoke(this, new GitBranchChangedEventArgs(workingDirectory, branch));
+
+    public Task WatchAsync(string workingDirectory, CancellationToken cancellationToken)
+    {
+        Watched.Add(workingDirectory);
+        return Task.CompletedTask;
+    }
+
+    public void Unwatch(string workingDirectory) => Watched.Remove(workingDirectory);
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+/// <summary>Существующие каталоги задаются тестом.</summary>
+internal sealed class FakeDirectoryProbe : IDirectoryProbe
+{
+    private readonly HashSet<string> _existing = new(StringComparer.OrdinalIgnoreCase);
+
+    public void Add(string path) => _existing.Add(path);
+
+    public void Remove(string path) => _existing.Remove(path);
+
+    public Task<bool> ExistsAsync(string path, CancellationToken cancellationToken) =>
+        Task.FromResult(_existing.Contains(path));
+}
+
+/// <summary>Диалог выбора папки: возвращает заранее назначенный путь.</summary>
+internal sealed class FakeFolderPicker : IFolderPicker
+{
+    public string? NextFolder { get; set; }
+
+    public string? PickFolder(string title) => NextFolder;
+}
+
+/// <summary>Модальные окна: ответ задаётся тестом, показанное запоминается.</summary>
+internal sealed class FakeUserPrompt : IUserPrompt
+{
+    public bool ConfirmResult { get; set; } = true;
+
+    public List<string> Confirmations { get; } = [];
+
+    public List<string> Errors { get; } = [];
+
+    public bool Confirm(string title, string message)
+    {
+        Confirmations.Add(message);
+        return ConfirmResult;
+    }
+
+    public void ShowError(string title, string message) => Errors.Add(message);
+}
+
+/// <summary>Поток интерфейса в тестах — текущий поток.</summary>
+internal sealed class InlineUiDispatcher : IUiDispatcher
+{
+    public void Post(Action action) => action();
+}
+
+/// <summary>Набор вкладок без ConPTY и страницы.</summary>
+internal sealed class FakeTerminalWorkspace : ITerminalWorkspace
+{
+    private readonly List<TerminalId> _terminals = [];
+    private int _counter;
+
+    public event EventHandler<TerminalExitedEventArgs>? TerminalExited;
+
+    public IReadOnlyList<TerminalId> Terminals => _terminals;
+
+    /// <summary>Каталоги, в которых запрашивался запуск, по порядку.</summary>
+    public List<string> OpenedDirectories { get; } = [];
+
+    /// <summary>Вкладка, показанная на странице последней.</summary>
+    public TerminalId? VisibleTerminal { get; private set; }
+
+    /// <summary>Закрытые вкладки, по порядку.</summary>
+    public List<TerminalId> Closed { get; } = [];
+
+    public bool Started { get; private set; }
+
+    public bool Disposed { get; private set; }
+
+    /// <summary>Исключение, которым отвечает следующий запуск.</summary>
+    public Exception? OpenFailure { get; set; }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        Started = true;
+        return Task.CompletedTask;
+    }
+
+    public Task<TerminalId> OpenAsync(ProjectDefinition project, SessionLaunch launch, CancellationToken cancellationToken)
+    {
+        if (OpenFailure is { } failure)
+        {
+            OpenFailure = null;
+            return Task.FromException<TerminalId>(failure);
+        }
+
+        OpenedDirectories.Add(project.Path);
+        var id = new TerminalId("t" + (++_counter).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        _terminals.Add(id);
+
+        // Как в настоящем наборе вкладок: открытая вкладка сразу становится видимой.
+        VisibleTerminal = id;
+        return Task.FromResult(id);
+    }
+
+    public Task ActivateAsync(TerminalId terminalId, CancellationToken cancellationToken)
+    {
+        VisibleTerminal = terminalId;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Токен, выданный вкладке при запуске. Настоящий набор вкладок выдаёт случайный;
+    /// здесь достаточно предсказуемого — карта «токен → вкладка» проверяется тестами
+    /// самого набора вкладок, а не корневой ViewModel.
+    /// </summary>
+    public string TokenFor(TerminalId terminalId) => "tok-" + terminalId.Value;
+
+    public bool TryResolveTerminal(string? correlationToken, out TerminalId terminalId)
+    {
+        foreach (var id in _terminals)
+        {
+            if (TokenFor(id) == correlationToken)
+            {
+                terminalId = id;
+                return true;
+            }
+        }
+
+        // Неинициализированный TerminalId бросает при обращении к Value, поэтому
+        // на промахе возвращается default вместе с false — сравнивать его нельзя.
+        terminalId = default;
+        return false;
+    }
+
+    public Task CloseAsync(TerminalId terminalId, CancellationToken cancellationToken)
+    {
+        Closed.Add(terminalId);
+        _terminals.Remove(terminalId);
+        if (VisibleTerminal == terminalId)
+        {
+            VisibleTerminal = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Сообщает, что процесс вкладки завершился.</summary>
+    public void RaiseExited(TerminalId terminalId, int exitCode) =>
+        TerminalExited?.Invoke(this, new TerminalExitedEventArgs(terminalId, exitCode));
+
+    public ValueTask DisposeAsync()
+    {
+        Disposed = true;
+        return ValueTask.CompletedTask;
+    }
+}

@@ -17,6 +17,13 @@
     <ProjectReference Include="..\ClaudeAgentsShell.Sessions\ClaudeAgentsShell.Sessions.csproj" />
   </ItemGroup>
 
+  <!-- Расчёт границ развёрнутого окна (WorkAreaPlacement) — чистая арифметика над
+       прямоугольниками монитора, и проверяется она тестом, а не запуском GUI.
+       Наружу класс при этом не выставляется. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="ClaudeAgentsShell.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />

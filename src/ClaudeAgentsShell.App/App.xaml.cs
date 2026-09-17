@@ -1,4 +1,7 @@
 using System.Windows;
+using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.Services;
+using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Sessions;
 using ClaudeAgentsShell.Terminal;
@@ -54,6 +57,20 @@ public partial class App : System.Windows.Application
         // Мост — единственное место, где приложение знает про WebView2.
         services.AddSingleton<WebView2TerminalBridge>();
         services.AddSingleton<ITerminalBridge>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
+
+        // Порты уровня оболочки: всё, что ViewModel нужно от WPF и файловой системы.
+        // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.
+        services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
+        services.AddSingleton<IUserPrompt, MessageBoxUserPrompt>();
+        // IDirectoryProbe регистрирует слой Sessions: Directory.* — файловая система,
+        // а не WPF-специфика, и сборке оболочки не место её трогать.
+
+        // Захватывает Dispatcher.CurrentDispatcher, поэтому контейнер строится в потоке UI.
+        services.AddSingleton<IUiDispatcher, WpfUiDispatcher>();
+
+        services.AddSingleton<ProjectListViewModel>();
+        services.AddSingleton<ShellViewModel>();
+        services.AddSingleton<ShellShortcutHandler>();
 
         services.AddSingleton<MainWindow>();
     }
