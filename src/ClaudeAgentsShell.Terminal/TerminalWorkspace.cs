@@ -20,6 +20,7 @@ public sealed class TerminalWorkspace : IAsyncDisposable
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, TerminalPump> _pumps = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PtyStartInfo> _pending = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<Task, byte> _closing = new();
     private readonly CancellationTokenSource _cts = new();
 
     private int _disposed;
@@ -103,6 +104,16 @@ public sealed class TerminalWorkspace : IAsyncDisposable
                 .Select(id => CloseAsync(new TerminalId(id), notifyPage: false)))
             .ConfigureAwait(false);
 
+        // Дожидаемся гашений, начатых выходом оболочки: их вкладок в _pumps уже нет.
+        try
+        {
+            await Task.WhenAll(_closing.Keys).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Исход каждого такого гашения уже наблюдён через Observe.
+        }
+
         _pending.Clear();
         _cts.Dispose();
     }
@@ -136,14 +147,36 @@ public sealed class TerminalWorkspace : IAsyncDisposable
     /// Выполняется не на потоке колбэка завершения процесса — освобождение сессии
     /// дожидается этого колбэка и на нём же заблокировалось бы.
     /// </summary>
-    private void OnShellExited(TerminalId terminalId) =>
-        _ = Task.Run(() => CloseAsync(terminalId, notifyPage: false));
-
-    private async Task ReleaseDuplicateAsync(TerminalId terminalId, TerminalPump pump)
+    private void OnShellExited(TerminalId terminalId)
     {
-        await pump.DisposeAsync().ConfigureAwait(false);
-        await _bridge.CloseTerminalAsync(terminalId, CancellationToken.None).ConfigureAwait(false);
+        var closing = Task.Run(() => CloseAsync(terminalId, notifyPage: false));
+
+        // Гашение учитывается: если оболочка вышла ровно в момент закрытия окна, помпа уже
+        // убрана из _pumps, и DisposeAsync прошёл бы мимо — приложение завершилось бы, не
+        // дождавшись закрытия псевдоконсоли.
+        Track(closing);
+        Observe(closing, "освобождение вкладки после выхода оболочки");
     }
+
+    private void Track(Task task)
+    {
+        _closing[task] = 0;
+
+        _ = task.ContinueWith(
+            static (completed, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(completed, out _),
+            _closing,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Освобождает лишнюю помпу, не трогая страницу: идентификатор принадлежит уже живущей
+    /// вкладке, и <c>close</c> уничтожил бы её терминал вместе с историей, оставив
+    /// работающую помпу писать в несуществующий узел.
+    /// </summary>
+    private static async Task ReleaseDuplicateAsync(TerminalPump pump) =>
+        await pump.DisposeAsync().ConfigureAwait(false);
 
     private static string DefaultWorkingDirectory() =>
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -166,7 +199,7 @@ public sealed class TerminalWorkspace : IAsyncDisposable
             {
                 // Вкладка с таким идентификатором уже жива: освобождаем лишнюю помпу целиком
                 // и через общий путь закрытия, чтобы не осталось ни псевдоконсоли, ни учёта.
-                _ = ReleaseDuplicateAsync(args.TerminalId, pump);
+                Observe(ReleaseDuplicateAsync(pump), "освобождение лишней помпы");
                 return;
             }
 
@@ -209,14 +242,37 @@ public sealed class TerminalWorkspace : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Пишет сообщение прямо в терминал вкладки. Помпы у такой вкладки нет, поэтому её учёт
+    /// записей в мосте снимется только при освобождении моста — это ограничено временем
+    /// жизни приложения и числом неудачных запусков оболочки, а не растёт со временем.
+    /// </summary>
     private void ReportToTerminal(TerminalId terminalId, string message)
     {
         const string Red = "\u001b[31m";
         const string Reset = "\u001b[0m\r\n";
 
         byte[] bytes = Encoding.UTF8.GetBytes(Red + message + Reset);
-        _ = _bridge.WriteOutputAsync(terminalId, bytes, CancellationToken.None);
+        Observe(
+            _bridge.WriteOutputAsync(terminalId, bytes, CancellationToken.None).AsTask(),
+            "вывод сообщения об ошибке во вкладку");
     }
+
+    /// <summary>
+    /// Доводит исход фоновой операции до места, где его видно. Полноценного журнала
+    /// в приложении пока нет (появится вместе с приёмником хуков в M4), поэтому сбой
+    /// уходит в <see cref="System.Diagnostics.Trace"/>, а не теряется молча.
+    /// </summary>
+    private static void Observe(Task task, string what) =>
+        _ = task.ContinueWith(
+            (completed, state) => System.Diagnostics.Trace.TraceError(
+                "Claude Agents Shell: {0} завершилось ошибкой: {1}",
+                state,
+                completed.Exception),
+            what,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
     private void OnResizeRequested(object? sender, TerminalResizeEventArgs args)
     {

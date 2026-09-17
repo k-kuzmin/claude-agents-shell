@@ -47,6 +47,13 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     private CoreWebView2? _core;
     private int _disposed;
 
+    /// <summary>
+    /// Квитанций больше не будет ни от одной вкладки: страница мертва (упал рендерер)
+    /// либо мост освобождён. Отдельное состояние от закрытия конкретной вкладки:
+    /// закрытие снимает учёт одной вкладки, остановка запрещает ждать подтверждений вообще.
+    /// </summary>
+    private volatile bool _acknowledgementsStopped;
+
     /// <inheritdoc cref="WebView2TerminalBridge" />
     public WebView2TerminalBridge(IBridgeMessageWriter writer, IBridgeMessageParser parser, TerminalOptions options)
     {
@@ -156,7 +163,7 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     /// <inheritdoc />
     public async ValueTask WriteOutputAsync(TerminalId terminalId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
-        var pending = _acknowledgements.GetOrAdd(terminalId.Value, static _ => new PendingWriteRegistry());
+        var pending = GetOrCreateRegistry(terminalId.Value);
         long sequence = pending.Reserve(out var acknowledged);
 
         try
@@ -168,6 +175,13 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
             string message = _writer.Out(terminalId, sequence, payload.Span);
 
             await PostAsync(message, cancellationToken).ConfigureAwait(false);
+
+            // Квитирование могло остановиться, пока сообщение уходило: тогда реестр,
+            // созданный этим вызовом, некому было защёлкнуть — делаем это сами.
+            if (_acknowledgementsStopped)
+            {
+                pending.ReleaseAll();
+            }
 
             // Завершается по подтверждению страницы: колбэк term.write → сообщение ack.
             // На этом построен backpressure раздела 3.3 ТЗ.
@@ -206,10 +220,7 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
             return;
         }
 
-        foreach (string terminalId in _acknowledgements.Keys)
-        {
-            ReleaseAcknowledgements(terminalId);
-        }
+        StopAcknowledgements();
 
         // Освобождение может прийти и с потока диспетчера (App.OnExit), и со стороннего.
         // Блокирующий InvokeAsync с самого диспетчера повесил бы выход из приложения.
@@ -353,9 +364,36 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
         }
     }
 
-    private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args)
+    private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args) =>
+        // Рендерер упал: подтверждений больше не будет — ни по текущим записям, ни по будущим.
+        // Помпы при этом живы и продолжают сбрасывать пачки, поэтому одного освобождения мало.
+        StopAcknowledgements();
+
+    /// <summary>
+    /// Учёт вкладки. Если квитирование уже остановлено, новый реестр создаётся сразу
+    /// защёлкнутым: иначе снятая с учёта вкладка получила бы через <c>GetOrAdd</c> чистый
+    /// реестр, а отпустить его было бы уже некому — записи парковались бы навсегда.
+    /// </summary>
+    private PendingWriteRegistry GetOrCreateRegistry(string terminalId)
     {
-        // Рендерер упал: подтверждений больше не будет, иначе помпы встанут навсегда.
+        var pending = _acknowledgements.GetOrAdd(terminalId, static _ => new PendingWriteRegistry());
+
+        if (_acknowledgementsStopped)
+        {
+            pending.ReleaseAll();
+        }
+
+        return pending;
+    }
+
+    /// <summary>
+    /// Останавливает квитирование целиком и отпускает всё, что ждёт подтверждения.
+    /// Вызывается, когда страницы больше нет: упал рендерер или освобождается мост.
+    /// </summary>
+    private void StopAcknowledgements()
+    {
+        _acknowledgementsStopped = true;
+
         foreach (string terminalId in _acknowledgements.Keys)
         {
             ReleaseAcknowledgements(terminalId);
@@ -371,8 +409,9 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     }
 
     /// <summary>
-    /// Отпускает все ожидания вкладки и убирает её из учёта. Вызывается, когда подтверждений
-    /// больше не будет: вкладка закрыта, мост освобождён, рендерер упал.
+    /// Снимает учёт одной вкладки и отпускает её ожидания: вкладка закрыта, её помпы
+    /// больше нет, новых пачек для этого идентификатора не будет. Запрет на будущие
+    /// ожидания — отдельное состояние, см. <see cref="StopAcknowledgements"/>.
     /// </summary>
     private void ReleaseAcknowledgements(string terminalId)
     {

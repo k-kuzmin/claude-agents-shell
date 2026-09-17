@@ -38,6 +38,7 @@ public sealed class TerminalPump : IAsyncDisposable
     private Task? _loop;
     private bool _timerArmed;
     private bool _buffersReleased;
+    private int _exitNotified;
     private bool _shuttingDown;
     private int _disposed;
 
@@ -120,23 +121,15 @@ public sealed class TerminalPump : IAsyncDisposable
 
         var ptyDispose = _pty.DisposeAsync().AsTask();
 
-        bool loopFinished = _loop is null;
-        if (_loop is { } loop)
+        bool loopFinished = await WaitForLoopAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+
+        if (!loopFinished)
         {
-            try
-            {
-                await loop.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
-                loopFinished = true;
-            }
-            catch (TimeoutException)
-            {
-                // Читающий цикл не вышел за отведённое время — его буферы трогать нельзя.
-            }
-            catch (Exception)
-            {
-                // Цикл завершился с ошибкой: он уже не работает, буферы освобождать можно.
-                loopFinished = true;
-            }
+            // Цикл не уложился в бюджет. Чаще всего он стоит на финальном сбросе, ожидая
+            // квитанцию, которой уже не будет. Сообщение о завершении снимает учёт записей
+            // вкладки в мосте — ожидание отпускается, и цикл получает шанс выйти по-человечески.
+            await NotifyExitedAsync().ConfigureAwait(false);
+            loopFinished = await WaitForLoopAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
         }
 
         try
@@ -362,8 +355,42 @@ public sealed class TerminalPump : IAsyncDisposable
         _flushTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
+    private async Task<bool> WaitForLoopAsync(TimeSpan budget)
+    {
+        if (_loop is not { } loop)
+        {
+            return true;
+        }
+
+        try
+        {
+            await loop.WaitAsync(budget).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            // Читающий цикл ещё работает — его буферы трогать нельзя.
+            return false;
+        }
+        catch (Exception)
+        {
+            // Цикл завершился с ошибкой: он уже не работает, буферы освобождать можно.
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Сообщает странице код выхода ровно один раз. Кроме уведомления это снимает учёт
+    /// записей вкладки в мосте, поэтому вызов обязателен и на пути, где читающий цикл
+    /// не дошёл до конца сам.
+    /// </summary>
     private async Task NotifyExitedAsync()
     {
+        if (Interlocked.Exchange(ref _exitNotified, 1) == 1)
+        {
+            return;
+        }
+
         int exitCode;
         try
         {

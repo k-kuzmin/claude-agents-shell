@@ -12,6 +12,7 @@ public partial class MainWindow : Window
     private readonly TerminalWorkspace _workspace;
 
     private bool _shutdownStarted;
+    private bool _shutdownCompleted;
 
     /// <inheritdoc cref="MainWindow" />
     public MainWindow(WebView2TerminalBridge bridge, TerminalWorkspace workspace)
@@ -33,13 +34,20 @@ public partial class MainWindow : Window
     {
         ArgumentNullException.ThrowIfNull(e);
 
-        if (!_shutdownStarted)
+        if (!_shutdownCompleted)
         {
-            // Сначала детерминированно гасим псевдоконсоли и страницу, только потом закрываемся:
-            // иначе процесс оболочки может пережить окно.
-            _shutdownStarted = true;
+            // Закрытие отменяется на КАЖДОЙ попытке, пока гашение не закончено, а не только
+            // на первой. Иначе повторный клик по крестику закрывал бы окно посреди гашения:
+            // App.OnExit освободил бы контейнер, чьи объекты уже помечены освобождёнными и
+            // вернулись бы мгновенно, не дождавшись первой цепочки, — и псевдоконсоли
+            // пережили бы процесс.
             e.Cancel = true;
-            _ = ShutdownAsync();
+
+            if (!_shutdownStarted)
+            {
+                _shutdownStarted = true;
+                _ = ShutdownAsync();
+            }
         }
 
         base.OnClosing(e);
@@ -76,7 +84,9 @@ public partial class MainWindow : Window
         finally
         {
             // Что бы ни случилось при освобождении, окно должно закрыться:
-            // иначе крестик перестанет работать совсем.
+            // иначе крестик перестанет работать совсем. Снятый флаг пропускает
+            // повторный вход в OnClosing без отмены.
+            _shutdownCompleted = true;
             Close();
         }
     }

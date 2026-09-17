@@ -97,6 +97,56 @@ public sealed class PendingWriteRegistryTests
         Assert.True(acknowledged.IsCompleted);
     }
 
+    /// <summary>
+    /// После освобождения подтверждений не будет никогда: новая запись обязана получить
+    /// уже завершённое ожидание. Иначе она припарковалась бы навсегда, и по достижении
+    /// MaxPendingWrites чтение из PTY встало бы без возможности возобновиться.
+    /// </summary>
+    [Fact]
+    public void После_освобождения_новая_запись_не_паркуется()
+    {
+        _registry.ReleaseAll();
+
+        _registry.Reserve(out var afterRelease);
+
+        Assert.True(afterRelease.IsCompleted);
+        Assert.Equal(0, _registry.Count);
+    }
+
+    [Fact]
+    public void Защёлка_не_снимается_подтверждениями()
+    {
+        _registry.ReleaseAll();
+
+        long sequence = _registry.Reserve(out _);
+        _registry.CompleteUpTo(sequence);
+        _registry.Abandon(sequence);
+
+        _registry.Reserve(out var later);
+
+        Assert.True(_registry.IsReleased);
+        Assert.True(later.IsCompleted);
+    }
+
+    [Fact]
+    public void Незащёлкнутый_реестр_паркует_запись()
+    {
+        _registry.Reserve(out var pending);
+
+        Assert.False(pending.IsCompleted);
+        Assert.False(_registry.IsReleased);
+    }
+
+    [Fact]
+    public void Номера_пачек_растут_и_после_освобождения()
+    {
+        long before = _registry.Reserve(out _);
+        _registry.ReleaseAll();
+        long after = _registry.Reserve(out _);
+
+        Assert.True(after > before);
+    }
+
     [Fact]
     public void Номера_пачек_не_повторяются()
     {

@@ -132,6 +132,33 @@ public sealed class TerminalWorkspaceTests
             $"Закрытие {tabs} вкладок заняло {stopwatch.ElapsedMilliseconds} мс — похоже на последовательное.");
     }
 
+    /// <summary>
+    /// Оболочка вышла ровно в момент закрытия окна: помпа уже убрана из маршрутизации,
+    /// и без учёта начатых гашений <c>DisposeAsync</c> прошёл бы мимо — приложение
+    /// завершилось бы, не дождавшись закрытия псевдоконсоли.
+    /// </summary>
+    [Fact]
+    public async Task Освобождение_дожидается_гашения_начатого_выходом_оболочки()
+    {
+        var slowDispose = TimeSpan.FromMilliseconds(400);
+        var factory = new FakePtySessionFactory(slowDispose);
+        var bridge = new FakeTerminalBridge();
+        var workspace = CreateWorkspace(bridge, factory);
+
+        var terminalId = await workspace.OpenAsync(ShellKind.Pwsh, TestDirectory, CancellationToken.None);
+        bridge.RaiseReady(terminalId);
+
+        var session = await WaitForSessionAsync(factory);
+
+        // Выход оболочки запускает гашение в фоне; сразу же закрываем приложение.
+        session.RaiseExited(0);
+        await workspace.DisposeAsync();
+
+        Assert.True(
+            session.IsDisposed,
+            "DisposeAsync вернулся, пока псевдоконсоль ещё гасилась.");
+    }
+
     [Fact]
     public async Task Повторное_закрытие_безвредно()
     {
