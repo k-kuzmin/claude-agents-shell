@@ -11,13 +11,11 @@
 
   // Настройки приходят из C# (TerminalOptions) скриптом, выполняемым до создания документа.
   // Дублировать их здесь константами нельзя: получилось бы два источника правды.
-  var config = window.__terminalConfig;
-  if (!config || !config.scrollback || !config.resizeDebounceMs) {
-    // Скрипт настроек ставится до создания документа, рядом с приёмником сообщений.
-    // Если его нет — это ошибка сборки моста, и молча работать на нулевом дебаунсе хуже.
-    throw new Error('window.__terminalConfig не задан: страница запущена мимо моста.');
-  }
-
+  // Ноль здесь — легальное значение (раздел 3.5 ТЗ: «настраивается»), поэтому проверяем
+  // тип, а не правдивость. Проверка выполняется ниже, когда страница уже умеет показать
+  // сообщение: бросать исключение в начале скрипта нельзя — обработчик сообщений не будет
+  // назначен, C# никогда не получит ready и увидит чёрное окно без всякой диагностики.
+  var config = window.__terminalConfig || {};
   var RESIZE_DEBOUNCE_MS = config.resizeDebounceMs;
   var SCROLLBACK = config.scrollback;
 
@@ -270,6 +268,13 @@
     }
   }
 
+  function showFatal(text) {
+    var banner = document.createElement('div');
+    banner.className = 'fatal';
+    banner.textContent = text;
+    host.appendChild(banner);
+  }
+
   function handleMessage(raw) {
     var message;
     try {
@@ -301,6 +306,15 @@
       default:
         break;
     }
+  }
+
+  // Настройки обязаны прийти из C# скриптом, выполняемым до создания документа.
+  // Если их нет, это ошибка сборки моста: работать на неизвестном дебаунсе нельзя,
+  // но и молчать нельзя — пишем причину прямо в страницу, DevTools отключены.
+  if (typeof SCROLLBACK !== 'number' || typeof RESIZE_DEBOUNCE_MS !== 'number') {
+    showFatal('Настройки терминала не получены: window.__terminalConfig не задан. '
+      + 'Страница открыта мимо моста приложения.');
+    return;
   }
 
   // Приёмник, поставленный до навигации (AddScriptToExecuteOnDocumentCreated), успел собрать

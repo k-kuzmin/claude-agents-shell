@@ -16,6 +16,7 @@ public sealed class PendingWriteRegistry
     private readonly object _sync = new();
 
     private long _lastSequence = -1;
+    private bool _released;
 
     /// <summary>Сколько записей ждёт подтверждения.</summary>
     public int Count
@@ -32,16 +33,41 @@ public sealed class PendingWriteRegistry
     /// <summary>
     /// Резервирует номер под очередную пачку и отдаёт ожидание, которое завершится,
     /// когда страница подтвердит запись.
+    /// <para>
+    /// После <see cref="ReleaseAll"/> реестр защёлкнут: подтверждений больше не будет никогда,
+    /// поэтому новые записи получают уже завершённое ожидание. Иначе учёт «воскресал» бы, и
+    /// каждая следующая пачка парковалась бы навсегда — упавший рендерер или финальный сброс
+    /// закрывающейся вкладки останавливали бы чтение из PTY без возможности возобновления.
+    /// </para>
     /// </summary>
     public long Reserve(out Task acknowledged)
     {
         lock (_sync)
         {
             long sequence = ++_lastSequence;
+
+            if (_released)
+            {
+                acknowledged = Task.CompletedTask;
+                return sequence;
+            }
+
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _items[sequence] = completion;
             acknowledged = completion.Task;
             return sequence;
+        }
+    }
+
+    /// <summary>Реестр защёлкнут: подтверждений больше не ждём.</summary>
+    public bool IsReleased
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _released;
+            }
         }
     }
 
@@ -81,8 +107,9 @@ public sealed class PendingWriteRegistry
     }
 
     /// <summary>
-    /// Отпускает все ожидания: подтверждений больше не будет — вкладка закрыта,
-    /// мост освобождён или упал рендерер. Иначе чтение из PTY встало бы навсегда.
+    /// Отпускает все ожидания и защёлкивает реестр: подтверждений больше не будет —
+    /// вкладка закрыта, мост освобождён или упал рендерер. Иначе чтение из PTY встало
+    /// бы навсегда. Защёлка нужна, чтобы ожидание не появилось заново после освобождения.
     /// </summary>
     public void ReleaseAll()
     {
@@ -90,6 +117,8 @@ public sealed class PendingWriteRegistry
 
         lock (_sync)
         {
+            _released = true;
+
             foreach (var completion in _items.Values)
             {
                 (completed ??= []).Add(completion);

@@ -54,11 +54,12 @@ public partial class MainWindow : Window
             await _workspace.StartAsync(CancellationToken.None);
         }
         catch (Exception exception) when (exception is TerminalBridgeUnavailableException
-                                             or InvalidOperationException
-                                             or PtyStartException)
+                                             or ShellNotFoundException)
         {
             // Страницы терминалов нет либо в системе не нашлось ни одной оболочки — обе ветки
-            // предусмотрены контрактом и не должны валить процесс из async void.
+            // предусмотрены контрактом и не должны валить процесс из async void. Ловим точные
+            // типы: перехват InvalidOperationException накрыл бы и дефекты потоков WPF,
+            // показав их пользователю как «нет оболочки».
             MessageBox.Show(this, exception.Message, Title, MessageBoxButton.OK, MessageBoxImage.Error);
             Close();
         }

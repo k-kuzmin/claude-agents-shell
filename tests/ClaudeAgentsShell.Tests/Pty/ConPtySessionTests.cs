@@ -37,7 +37,9 @@ public sealed class ConPtySessionTests
     [Fact]
     public async Task Кириллица_и_эмодзи_доезжают_через_псевдоконсоль_без_потерь()
     {
-        const string text = "Привет-мир-ёж";
+        // Кириллица, символы рамок, эмодзи из суррогатной пары и составное эмодзи:
+        // всё это многобайтовые последовательности, которые нельзя рвать при склейке.
+        const string text = "Привет-мир-ёж-┌─┐-🚀-✅";
 
         // Вывод читается сырыми байтами и склеивается — декодируем только в самом конце.
         await using var session = StartShell(
@@ -99,7 +101,7 @@ public sealed class ConPtySessionTests
 
                 collected.AddRange(buffer.AsSpan(0, read).ToArray());
 
-                if (Contains(collected, marker) || Encoding.UTF8.GetString(collected.ToArray()).Contains(marker, StringComparison.Ordinal))
+                if (Contains(collected, marker))
                 {
                     break;
                 }
@@ -113,9 +115,13 @@ public sealed class ConPtySessionTests
         return [.. collected];
     }
 
+    /// <summary>
+    /// Поиск по сырым байтам: игла кодируется в UTF-8, иначе кириллица и эмодзи
+    /// не совпали бы никогда и проверка была бы фиктивной.
+    /// </summary>
     private static bool Contains(IReadOnlyList<byte> haystack, string needle)
     {
-        byte[] pattern = Encoding.ASCII.GetBytes(needle);
+        byte[] pattern = Encoding.UTF8.GetBytes(needle);
         if (haystack.Count < pattern.Length)
         {
             return false;
@@ -145,5 +151,5 @@ public sealed class ConPtySessionTests
     private static string Describe(byte[] output) =>
         output.Length == 0
             ? "пусто"
-            : $"{output.Length} байт: {Encoding.ASCII.GetString(output).Replace("", "<ESC>", StringComparison.Ordinal)}";
+            : $"{output.Length} байт: {Encoding.UTF8.GetString(output).Replace("\u001b", "<ESC>", StringComparison.Ordinal)}";
 }

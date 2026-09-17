@@ -28,6 +28,12 @@ internal sealed class FakeTerminalBridge : ITerminalBridge
 
     public List<int> ExitCodes { get; } = [];
 
+    /// <summary>Вкладки, которые мост просил страницу уничтожить.</summary>
+    public List<string> ClosedTerminals { get; } = [];
+
+    /// <summary>Вкладки, созданные на странице.</summary>
+    public List<string> CreatedTerminals { get; } = [];
+
     public IReadOnlyList<byte[]> Batches
     {
         get
@@ -74,14 +80,28 @@ internal sealed class FakeTerminalBridge : ITerminalBridge
 
     public Task InitializeAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public ValueTask CreateTerminalAsync(TerminalId terminalId, string title, CancellationToken cancellationToken) =>
-        ValueTask.CompletedTask;
+    public ValueTask CreateTerminalAsync(TerminalId terminalId, string title, CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            CreatedTerminals.Add(terminalId.Value);
+        }
+
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask ShowTerminalAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 
-    public ValueTask CloseTerminalAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
-        ValueTask.CompletedTask;
+    public ValueTask CloseTerminalAsync(TerminalId terminalId, CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            ClosedTerminals.Add(terminalId.Value);
+        }
+
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask WriteOutputAsync(TerminalId terminalId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {

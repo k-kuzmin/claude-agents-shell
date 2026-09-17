@@ -18,6 +18,7 @@ internal sealed class FakePtySession : IPtySession
     private byte[]? _current;
     private int _offset;
     private int _chunksConsumed;
+    private int _disposeCount;
 
     public bool IsRunning { get; private set; } = true;
 
@@ -27,6 +28,15 @@ internal sealed class FakePtySession : IPtySession
 
     /// <summary>Сколько чанков читающий цикл успел забрать. По нему видно, что он приостановлен.</summary>
     public int ChunksConsumed => Volatile.Read(ref _chunksConsumed);
+
+    /// <summary>Псевдоконсоль освобождена — то, что должно случиться при выходе оболочки.</summary>
+    public bool IsDisposed => Volatile.Read(ref _disposeCount) > 0;
+
+    /// <summary>Сколько раз освобождали: освобождение обязано быть идемпотентным.</summary>
+    public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+    /// <summary>Сколько длится освобождение — для проверки параллельного закрытия вкладок.</summary>
+    public TimeSpan DisposeDelay { get; init; }
 
     public IReadOnlyList<byte> WrittenInput
     {
@@ -102,9 +112,21 @@ internal sealed class FakePtySession : IPtySession
         }
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
+        Interlocked.Increment(ref _disposeCount);
         _chunks.Writer.TryComplete();
-        return ValueTask.CompletedTask;
+
+        // Закрытие псевдоконсоли гасит процесс оболочки — фейк обязан вести себя так же,
+        // иначе помпа впустую ждёт сигнала выхода до истечения таймаута.
+        if (IsRunning)
+        {
+            RaiseExited(0);
+        }
+
+        if (DisposeDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(DisposeDelay).ConfigureAwait(false);
+        }
     }
 }

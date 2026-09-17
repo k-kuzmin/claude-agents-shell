@@ -97,10 +97,11 @@ public sealed class TerminalWorkspace : IAsyncDisposable
 
         await _cts.CancelAsync().ConfigureAwait(false);
 
-        foreach (string terminalId in _pumps.Keys)
-        {
-            await CloseAsync(new TerminalId(terminalId), notifyPage: false).ConfigureAwait(false);
-        }
+        // Параллельно: у каждой вкладки свой бюджет ожидания выхода процесса, и последовательное
+        // закрытие умножало бы его на число вкладок, держа окно на экране всё это время.
+        await Task.WhenAll(_pumps.Keys
+                .Select(id => CloseAsync(new TerminalId(id), notifyPage: false)))
+            .ConfigureAwait(false);
 
         _pending.Clear();
         _cts.Dispose();
@@ -129,6 +130,21 @@ public sealed class TerminalWorkspace : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Оболочка завершилась сама. Псевдоконсоль и помпу освобождаем сразу, а терминал
+    /// на странице оставляем: пользователь должен увидеть код выхода (раздел 8 ТЗ).
+    /// Выполняется не на потоке колбэка завершения процесса — освобождение сессии
+    /// дожидается этого колбэка и на нём же заблокировалось бы.
+    /// </summary>
+    private void OnShellExited(TerminalId terminalId) =>
+        _ = Task.Run(() => CloseAsync(terminalId, notifyPage: false));
+
+    private async Task ReleaseDuplicateAsync(TerminalId terminalId, TerminalPump pump)
+    {
+        await pump.DisposeAsync().ConfigureAwait(false);
+        await _bridge.CloseTerminalAsync(terminalId, CancellationToken.None).ConfigureAwait(false);
+    }
+
     private static string DefaultWorkingDirectory() =>
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -146,14 +162,24 @@ public sealed class TerminalWorkspace : IAsyncDisposable
             var session = _ptyFactory.Create(startInfo);
             var pump = new TerminalPump(args.TerminalId, session, _bridge, _options, _timeProvider);
 
-            if (_pumps.TryAdd(args.TerminalId.Value, pump))
+            if (!_pumps.TryAdd(args.TerminalId.Value, pump))
             {
-                pump.Start();
+                // Вкладка с таким идентификатором уже жива: освобождаем лишнюю помпу целиком
+                // и через общий путь закрытия, чтобы не осталось ни псевдоконсоли, ни учёта.
+                _ = ReleaseDuplicateAsync(args.TerminalId, pump);
+                return;
             }
-            else
-            {
-                _ = pump.DisposeAsync();
-            }
+
+            var terminalId = args.TerminalId;
+
+            // Оболочка может завершиться сама (пользователь набрал exit, процесс упал).
+            // Без этой подписки псевдоконсоль оставалась бы открытой до закрытия приложения:
+            // ConPtySession достижим из _pumps, и финализатор SafeHandle не сработает.
+            // Сама вкладка на странице при этом остаётся — с пометкой о коде выхода
+            // (раздел 8 ТЗ), поэтому страницу закрывать терминал не просим.
+            session.Exited += (_, _) => OnShellExited(terminalId);
+
+            pump.Start();
         }
         catch (PtyStartException exception)
         {

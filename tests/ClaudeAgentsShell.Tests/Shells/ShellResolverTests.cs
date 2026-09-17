@@ -51,7 +51,7 @@ public sealed class ShellResolverTests
     {
         var resolver = new ShellResolver([Provider(ShellKind.Pwsh, found: false)]);
 
-        Assert.Throws<InvalidOperationException>(() => resolver.Resolve(ShellKind.Pwsh));
+        Assert.Throws<ShellNotFoundException>(() => resolver.Resolve(ShellKind.Pwsh));
     }
 
     [Fact]

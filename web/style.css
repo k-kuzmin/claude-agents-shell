@@ -27,6 +27,14 @@ body {
   display: none;
 }
 
+.fatal {
+  padding: 24px;
+  color: #d97757;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .xterm-viewport::-webkit-scrollbar {
   width: 10px;
 }

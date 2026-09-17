@@ -60,7 +60,7 @@ public sealed class ShellResolver : IShellResolver
             }
         }
 
-        throw new InvalidOperationException(
+        throw new ShellNotFoundException(
             "Не найдена ни одна оболочка: ни pwsh, ни powershell.exe, ни cmd.exe.");
     }
 

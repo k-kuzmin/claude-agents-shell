@@ -192,9 +192,19 @@ internal sealed class ConPtySession : IPtySession
         {
             // Unregister(null) не ждёт уже начавшийся колбэк. Ждём его явно, иначе
             // OnProcessExited успеет дёрнуть GetExitCodeProcess по освобождённому хэндлу.
-            using var callbacksFinished = new ManualResetEvent(false);
+            var callbacksFinished = new ManualResetEvent(false);
             registration.Unregister(callbacksFinished);
-            callbacksFinished.WaitOne(TimeSpan.FromSeconds(1));
+
+            if (callbacksFinished.WaitOne(TimeSpan.FromSeconds(1)))
+            {
+                callbacksFinished.Dispose();
+            }
+
+            // По таймауту событие намеренно не освобождается: пул сигналит его при
+            // завершении колбэка, и закрытый хэндл мог бы быть переиспользован —
+            // SetEvent ушёл бы в чужой объект синхронизации. Колбэк здесь дешёвый
+            // и ограниченный, так что ветка практически недостижима; цена промаха —
+            // один неосвобождённый хэндл события, который заберёт финализатор.
             _exitRegistration = null;
         }
 

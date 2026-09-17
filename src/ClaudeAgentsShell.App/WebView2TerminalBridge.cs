@@ -141,8 +141,16 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     /// <inheritdoc />
     public async ValueTask CloseTerminalAsync(TerminalId terminalId, CancellationToken cancellationToken)
     {
-        await PostAsync(_writer.Close(terminalId), cancellationToken).ConfigureAwait(false);
-        ReleaseAcknowledgements(terminalId.Value);
+        try
+        {
+            await PostAsync(_writer.Close(terminalId), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Даже если пост не удался (диспетчер гасится, токен отменён), учёт вкладки
+            // обязан уйти — иначе запись словаря переживает вкладку.
+            ReleaseAcknowledgements(terminalId.Value);
+        }
     }
 
     /// <inheritdoc />
@@ -151,13 +159,14 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
         var pending = _acknowledgements.GetOrAdd(terminalId.Value, static _ => new PendingWriteRegistry());
         long sequence = pending.Reserve(out var acknowledged);
 
-        // Полезная нагрузка вычитывается здесь, до первого await: вызывающий вправе вернуть
-        // буфер в пул, как только метод отдал управление. Base64 считается на вызывающем потоке,
-        // на UI уходит уже готовая строка.
-        string message = _writer.Out(terminalId, sequence, payload.Span);
-
         try
         {
+            // Полезная нагрузка вычитывается здесь, до первого await: вызывающий вправе вернуть
+            // буфер в пул, как только метод отдал управление. Base64 считается на вызывающем
+            // потоке, на UI уходит уже готовая строка. Сборка сообщения внутри try, чтобы
+            // отказ писателя не оставил резервацию в учёте.
+            string message = _writer.Out(terminalId, sequence, payload.Span);
+
             await PostAsync(message, cancellationToken).ConfigureAwait(false);
 
             // Завершается по подтверждению страницы: колбэк term.write → сообщение ack.
@@ -174,8 +183,20 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     }
 
     /// <inheritdoc />
-    public ValueTask NotifyExitedAsync(TerminalId terminalId, int exitCode, CancellationToken cancellationToken) =>
-        PostAsync(_writer.Exited(terminalId, exitCode), cancellationToken);
+    public async ValueTask NotifyExitedAsync(TerminalId terminalId, int exitCode, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await PostAsync(_writer.Exited(terminalId, exitCode), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Пачки вкладки производит только её помпа, а она к этому моменту уже закончила:
+            // ждать подтверждений больше нечего. Терминал на странице при этом остаётся —
+            // пользователь должен увидеть код выхода (раздел 8 ТЗ).
+            ReleaseAcknowledgements(terminalId.Value);
+        }
+    }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()

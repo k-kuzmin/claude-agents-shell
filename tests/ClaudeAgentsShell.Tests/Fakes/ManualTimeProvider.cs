@@ -81,9 +81,15 @@ internal sealed class ManualTimeProvider : TimeProvider
 
         public bool Change(TimeSpan dueTime, TimeSpan period)
         {
+            // Время берётся до захвата замка таймера. Иначе получается инверсия порядка
+            // блокировок: Advance держит замок провайдера и просит замок таймера, а Change
+            // держал бы замок таймера и просил замок провайдера — взаимная блокировка,
+            // которая роняет хост тестов по таймауту.
+            DateTimeOffset? dueAt = dueTime == Timeout.InfiniteTimeSpan ? null : owner.GetUtcNow() + dueTime;
+
             lock (_sync)
             {
-                _dueAt = dueTime == Timeout.InfiniteTimeSpan ? null : owner.GetUtcNow() + dueTime;
+                _dueAt = dueAt;
             }
 
             return true;
