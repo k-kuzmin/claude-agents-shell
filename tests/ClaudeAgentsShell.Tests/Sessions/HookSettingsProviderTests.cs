@@ -67,6 +67,9 @@ public sealed class HookSettingsProviderTests
         Assert.Contains("@echo off", script, StringComparison.Ordinal);
         Assert.Contains("-o nul", script, StringComparison.Ordinal);
         Assert.Contains("exit /b 0", script, StringComparison.Ordinal);
+
+        // Прокси из окружения пользователя не должен перехватывать вызов к самому себе.
+        Assert.Contains("--noproxy", script, StringComparison.Ordinal);
     }
 
     [Fact]
