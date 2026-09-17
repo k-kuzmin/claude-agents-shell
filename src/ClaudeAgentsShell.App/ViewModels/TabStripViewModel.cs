@@ -44,9 +44,6 @@ public sealed class TabStripViewModel : ObservableObject
     /// </summary>
     public IReadOnlyList<TabViewModel> AllTabs => _all;
 
-    /// <summary>Проект, чьи вкладки показывает полоса; <c>null</c>, если проект не выбран.</summary>
-    public Guid? ProjectId => _projectId;
-
     /// <summary>Активная вкладка выбранного проекта; <c>null</c>, если показывать нечего.</summary>
     public TabViewModel? ActiveTab
     {
@@ -97,7 +94,6 @@ public sealed class TabStripViewModel : ObservableObject
 
         _projectId = projectId;
         Rebuild();
-        Raise(nameof(ProjectId));
     }
 
     /// <summary>Добавляет вкладку в конец полосы.</summary>
