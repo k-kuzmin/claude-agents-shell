@@ -168,6 +168,30 @@ internal sealed class FakeTerminalWorkspace : ITerminalWorkspace
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Токен, выданный вкладке при запуске. Настоящий набор вкладок выдаёт случайный;
+    /// здесь достаточно предсказуемого — карта «токен → вкладка» проверяется тестами
+    /// самого набора вкладок, а не корневой ViewModel.
+    /// </summary>
+    public string TokenFor(TerminalId terminalId) => "tok-" + terminalId.Value;
+
+    public bool TryResolveTerminal(string? correlationToken, out TerminalId terminalId)
+    {
+        foreach (var id in _terminals)
+        {
+            if (TokenFor(id) == correlationToken)
+            {
+                terminalId = id;
+                return true;
+            }
+        }
+
+        // Неинициализированный TerminalId бросает при обращении к Value, поэтому
+        // на промахе возвращается default вместе с false — сравнивать его нельзя.
+        terminalId = default;
+        return false;
+    }
+
     public Task CloseAsync(TerminalId terminalId, CancellationToken cancellationToken)
     {
         Closed.Add(terminalId);
