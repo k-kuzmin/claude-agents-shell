@@ -56,4 +56,17 @@ public interface ITerminalWorkspace : IAsyncDisposable
 
     /// <summary>Закрывает вкладку: гасит помпу, освобождает псевдоконсоль, убирает терминал со страницы.</summary>
     Task CloseAsync(TerminalId terminalId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Находит вкладку по токену, который хук вернул в <see cref="Domain.HookEvent.CorrelationToken"/>.
+    /// Токен выдаётся вкладке при запуске и уходит в окружение псевдоконсоли, поэтому карта
+    /// «токен → вкладка» живёт здесь же, где сами вкладки.
+    /// </summary>
+    /// <remarks>
+    /// Неизвестный токен — <c>false</c>, а не ошибка: сессия могла быть запущена мимо приложения,
+    /// а вкладку могли только что закрыть. Приёмник хуков слушает обычный loopback-порт,
+    /// доступный любому локальному процессу, поэтому токен обязан быть случайным и не выводимым
+    /// из идентификатора вкладки — тот уходит на страницу в каждом сообщении моста.
+    /// </remarks>
+    bool TryResolveTerminal(string? correlationToken, out TerminalId terminalId);
 }
