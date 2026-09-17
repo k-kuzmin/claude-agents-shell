@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
@@ -17,13 +18,23 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     private readonly IPtySessionFactory _ptyFactory;
     private readonly IShellResolver _shells;
     private readonly ISessionCommandBuilder _commands;
+    private readonly IHookSettingsProvider _hooks;
+    private readonly IHookListener _hookListener;
     private readonly TerminalOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, TerminalPump> _pumps = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingTerminal> _pending = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<Task, byte> _background = new();
+
+    /// <summary>
+    /// Токен вкладки → вкладка. Направление именно такое: по токену из хука вкладка ищется
+    /// на каждом событии, а обратный поиск нужен только при закрытии — там хватает перебора.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, TerminalId> _tokens = new(StringComparer.Ordinal);
+
     private readonly List<TerminalId> _order = [];
     private readonly object _orderSync = new();
+    private readonly object _hookSync = new();
     private readonly CancellationTokenSource _cts = new();
 
     /// <summary>
@@ -32,6 +43,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     /// </summary>
     private const int StartFailureExitCode = -1;
 
+    private Task<string?>? _hookSettings;
     private int _disposed;
 
     /// <inheritdoc cref="TerminalWorkspace" />
@@ -40,6 +52,8 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         IPtySessionFactory ptyFactory,
         IShellResolver shells,
         ISessionCommandBuilder commands,
+        IHookSettingsProvider hooks,
+        IHookListener hookListener,
         TerminalOptions options,
         TimeProvider timeProvider)
     {
@@ -47,6 +61,8 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         ArgumentNullException.ThrowIfNull(ptyFactory);
         ArgumentNullException.ThrowIfNull(shells);
         ArgumentNullException.ThrowIfNull(commands);
+        ArgumentNullException.ThrowIfNull(hooks);
+        ArgumentNullException.ThrowIfNull(hookListener);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
@@ -54,6 +70,8 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         _ptyFactory = ptyFactory;
         _shells = shells;
         _commands = commands;
+        _hooks = hooks;
+        _hookListener = hookListener;
         _options = options;
         _timeProvider = timeProvider;
 
@@ -67,6 +85,14 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     /// процесса, — подписчик обязан сам уйти в свой поток (для WPF это <c>Dispatcher</c>).
     /// </summary>
     public event EventHandler<TerminalExitedEventArgs>? TerminalExited;
+
+    /// <summary>
+    /// Путь к файлу настроек с хуками, подготовленному для запускаемых сессий, — тот самый,
+    /// который должен уйти в команду запуска аргументом <c>--settings</c>.
+    /// <c>null</c> — файл создать не удалось, сессии живут без маркера состояния
+    /// (допустимая деградация раздела 5.3 ТЗ). Заполняется при открытии первой вкладки.
+    /// </summary>
+    public string? HookSettingsPath { get; private set; }
 
     /// <inheritdoc />
     public IReadOnlyList<TerminalId> Terminals
@@ -107,19 +133,36 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         // оба вызова бросают, и полузарегистрированный идентификатор остался бы в Terminals
         // навсегда — без псевдоконсоли и без терминала на странице.
         var shell = _shells.Resolve(project.Shell);
+
+        // Файл настроек с хуками готовится до сборки команды: его путь уходит в команду
+        // запуска аргументом --settings (раздел 5.3 ТЗ). Не вышло — запускаемся без хуков.
+        HookSettingsPath = await EnsureHookSettingsAsync().ConfigureAwait(false);
+
         var startupInput = _commands.Build(project, launch);
 
         var terminalId = TerminalId.New();
+
+        // Токен вкладки. Уезжает в окружение псевдоконсоли, оттуда его берёт команда хука
+        // и возвращает в HookEvent.CorrelationToken — так событие сопоставляется со вкладкой,
+        // не полагаясь на совпадение рабочих каталогов. Токен криптостойкий, а не порядковый:
+        // приёмник хуков слушает обычный HTTP на loopback, и по угаданному токену любой
+        // локальный процесс переключал бы состояние чужой вкладки.
+        string token = NewCorrelationToken();
+
         var startInfo = new PtyStartInfo(
             shell,
             project.Path,
             TerminalSize.Default,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
+                // Окружение процесса наследуется от приложения; здесь только то, что
+                // добавляется поверх. TERM обязателен — без него TUI рисует рамки псевдографикой.
                 ["TERM"] = "xterm-256color",
+                [_hooks.TokenVariableName] = token,
             });
 
         _pending[terminalId.Value] = new PendingTerminal(startInfo, startupInput);
+        _tokens[token] = terminalId;
         Register(terminalId);
 
         try
@@ -133,6 +176,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
             // Страница вкладку не приняла. Псевдоконсоли ещё нет — она поднимается по ready,
             // — поэтому освобождать нечего, достаточно убрать вкладку из учёта.
             _pending.TryRemove(terminalId.Value, out _);
+            _tokens.TryRemove(token, out _);
             Unregister(terminalId);
             throw;
         }
@@ -155,6 +199,22 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         }
 
         await _bridge.ShowTerminalAsync(terminalId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Находит вкладку по токену, пришедшему в <see cref="HookEvent.CorrelationToken"/>.
+    /// Неизвестный токен — не ошибка: хук мог прийти от сессии, запущенной мимо приложения,
+    /// или от вкладки, которую только что закрыли (раздел 5.3 ТЗ).
+    /// </summary>
+    public bool TryResolveTerminal(string? correlationToken, out TerminalId terminalId)
+    {
+        if (string.IsNullOrEmpty(correlationToken))
+        {
+            terminalId = default;
+            return false;
+        }
+
+        return _tokens.TryGetValue(correlationToken, out terminalId);
     }
 
     /// <summary>
@@ -197,6 +257,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         }
 
         _pending.Clear();
+        _tokens.Clear();
 
         lock (_orderSync)
         {
@@ -214,6 +275,17 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
             // уходит здесь же. Самостоятельно вышедшая оболочка вкладку не удаляет
             // (раздел 8 ТЗ), поэтому на том пути порядок не трогается.
             //
+            // Вместе с вкладкой уходит и её токен: события хуков по нему больше никого
+            // не найдут, а сам он не должен копиться до конца жизни приложения. Перебор
+            // здесь дешевле второй карты: вкладок десятки, а закрытие — действие человека.
+            foreach (var pair in _tokens)
+            {
+                if (pair.Value == terminalId)
+                {
+                    _tokens.TryRemove(pair.Key, out _);
+                }
+            }
+
             // Снятие с учёта идёт ДО снятия помпы. Обработчик ready может в этот момент
             // поднимать псевдоконсоль на другом потоке: он добавляет помпу, а потом сверяется
             // с учётом. Один из двух порядков обязательно увидит другой — иначе помпа,
@@ -335,6 +407,48 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
 
     /// <summary>Заголовок терминала на странице — как в примере раздела 3.2 ТЗ: проект и его каталог.</summary>
     private static string Title(ProjectDefinition project) => $"{project.Name} · {project.Path}";
+
+    /// <summary>
+    /// Токен вкладки: 128 бит из криптографического источника. Угадать его должно быть
+    /// нельзя — по нему приёмник хуков доверяет событию, а слушает он обычный HTTP
+    /// на loopback, доступный любому локальному процессу.
+    /// </summary>
+    private static string NewCorrelationToken() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+    /// <summary>
+    /// Готовит файл настроек с хуками. Файл один на приложение (см. <see cref="IHookSettingsProvider"/>),
+    /// поэтому создаётся один раз на всё время жизни набора вкладок: переписывать его при
+    /// открытии каждой вкладки значило бы менять файл под уже запущенными сессиями.
+    /// </summary>
+    private Task<string?> EnsureHookSettingsAsync()
+    {
+        lock (_hookSync)
+        {
+            return _hookSettings ??= CreateHookSettingsAsync();
+        }
+    }
+
+    private async Task<string?> CreateHookSettingsAsync()
+    {
+        try
+        {
+            return await _hooks.EnsureSettingsFileAsync(_hookListener.Endpoint, _cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException
+                                              or UnauthorizedAccessException
+                                              or InvalidOperationException
+                                              or OperationCanceledException)
+        {
+            // Раздел 5.3 ТЗ: хуки не встали — сессия запускается без --settings и живёт без
+            // маркера состояния. Это допустимая деградация, ошибку пользователю не показываем.
+            // Повторных попыток нет намеренно: результат кэшируется, иначе каждая новая
+            // вкладка снова упиралась бы в тот же недоступный каталог.
+            // InvalidOperationException ловится тоже: приёмник хуков мог не подняться,
+            // и тогда адреса для файла настроек попросту нет.
+            return null;
+        }
+    }
 
     private void OnTerminalReady(object? sender, TerminalReadyEventArgs args)
     {

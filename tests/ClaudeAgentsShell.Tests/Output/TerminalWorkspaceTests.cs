@@ -446,6 +446,8 @@ public sealed class TerminalWorkspaceTests
             gated,
             new FakeShellResolver(),
             new FakeSessionCommandBuilder(),
+            new FakeHookSettingsProvider(),
+            new FakeHookListener(),
             TestOptions,
             TimeProvider.System);
 
@@ -467,6 +469,152 @@ public sealed class TerminalWorkspaceTests
     }
 
     /// <summary>
+    /// Раздел 5.3 ТЗ: вкладка опознаётся токеном из окружения псевдоконсоли. Токен обязан
+    /// быть своим у каждой вкладки — иначе событие хука сопоставится не с той сессией, —
+    /// и не должен вытеснить <c>TERM</c>, без которого TUI рисует рамки псевдографикой.
+    /// </summary>
+    [Fact]
+    public async Task Токен_вкладки_уезжает_в_окружение_и_у_каждой_вкладки_свой()
+    {
+        var factory = new FakePtySessionFactory();
+        var bridge = new FakeTerminalBridge();
+        var hooks = new FakeHookSettingsProvider();
+        await using var workspace = new TerminalWorkspace(
+            bridge,
+            factory,
+            new FakeShellResolver(),
+            new FakeSessionCommandBuilder(),
+            hooks,
+            new FakeHookListener(),
+            TestOptions,
+            TimeProvider.System);
+
+        var (first, second) = await OpenPairAsync(workspace, bridge, factory);
+
+        string firstToken = factory.StartInfoAt(0).Environment[hooks.TokenVariableName];
+        string secondToken = factory.StartInfoAt(1).Environment[hooks.TokenVariableName];
+
+        Assert.NotEmpty(firstToken);
+        Assert.NotEqual(firstToken, secondToken);
+
+        // TERM на месте у обеих.
+        Assert.Equal("xterm-256color", factory.StartInfoAt(0).Environment["TERM"]);
+        Assert.Equal("xterm-256color", factory.StartInfoAt(1).Environment["TERM"]);
+
+        // И именно по этому токену вкладка находится обратно.
+        Assert.True(workspace.TryResolveTerminal(firstToken, out var resolvedFirst));
+        Assert.Equal(first, resolvedFirst);
+        Assert.True(workspace.TryResolveTerminal(secondToken, out var resolvedSecond));
+        Assert.Equal(second, resolvedSecond);
+
+        // Рабочий каталог — каталог проекта, а не домашний.
+        Assert.Equal(TestDirectory, factory.StartInfoAt(0).WorkingDirectory);
+    }
+
+    /// <summary>
+    /// Токен закрытой вкладки больше никого не находит: события хуков от уже погашенной
+    /// сессии не должны попадать в живую вкладку, а сами токены — копиться до конца
+    /// жизни приложения.
+    /// </summary>
+    [Fact]
+    public async Task Токен_снимается_вместе_с_вкладкой()
+    {
+        var factory = new FakePtySessionFactory();
+        var bridge = new FakeTerminalBridge();
+        var hooks = new FakeHookSettingsProvider();
+        await using var workspace = new TerminalWorkspace(
+            bridge,
+            factory,
+            new FakeShellResolver(),
+            new FakeSessionCommandBuilder(),
+            hooks,
+            new FakeHookListener(),
+            TestOptions,
+            TimeProvider.System);
+
+        var terminalId = await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+        bridge.RaiseReady(terminalId);
+        await WaitForSessionAsync(factory);
+
+        string token = factory.StartInfoAt(0).Environment[hooks.TokenVariableName];
+        Assert.True(workspace.TryResolveTerminal(token, out _));
+
+        await workspace.CloseAsync(terminalId, CancellationToken.None);
+
+        Assert.False(workspace.TryResolveTerminal(token, out _));
+        Assert.False(workspace.TryResolveTerminal(null, out _));
+    }
+
+    /// <summary>
+    /// Раздел 5.3 ТЗ прямо разрешает жизнь без хуков: файл настроек создать не удалось —
+    /// сессия всё равно запускается, просто без маркера состояния. Ошибку не показываем.
+    /// </summary>
+    [Fact]
+    public async Task Сбой_создания_файла_настроек_не_мешает_запуску_сессии()
+    {
+        var factory = new FakePtySessionFactory();
+        var bridge = new FakeTerminalBridge();
+        var hooks = new FakeHookSettingsProvider(failure: new IOException("каталог данных недоступен"));
+        await using var workspace = new TerminalWorkspace(
+            bridge,
+            factory,
+            new FakeShellResolver(),
+            new FakeSessionCommandBuilder("claude\r"),
+            hooks,
+            new FakeHookListener(),
+            TestOptions,
+            TimeProvider.System);
+
+        var terminalId = await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+        bridge.RaiseReady(terminalId);
+
+        var session = await WaitForSessionAsync(factory);
+
+        Assert.Null(workspace.HookSettingsPath);
+        Assert.Equal([terminalId], workspace.Terminals);
+
+        // Сессия живёт полноценно: команда запуска доезжает, токен в окружении остаётся —
+        // он безвреден и понадобится, если хуки поднимутся при следующем запуске.
+        session.Emit(27);
+        await WaitUntilAsync(() => session.WrittenInput.Count == "claude\r".Length);
+        Assert.Contains(hooks.TokenVariableName, factory.StartInfoAt(0).Environment.Keys);
+
+        // Вторая вкладка не упирается в тот же сбой повторно: файл один на приложение.
+        var second = await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+        bridge.RaiseReady(second);
+        await WaitUntilAsync(() => factory.Created.Count == 2);
+
+        Assert.Equal(1, hooks.Calls);
+    }
+
+    /// <summary>
+    /// Каталог данных лежит в профиле пользователя, а в имени профиля бывают пробелы.
+    /// Путь обязан доехать до команды запуска целым — экранирование делает построитель
+    /// команды, но испортить путь по дороге нельзя.
+    /// </summary>
+    [Fact]
+    public async Task Путь_к_файлу_настроек_с_пробелами_доезжает_целым()
+    {
+        const string Path = @"C:\Users\Имя Фамилия\AppData\Roaming\Claude Agents Shell\hooks.json";
+
+        var factory = new FakePtySessionFactory();
+        var bridge = new FakeTerminalBridge();
+        await using var workspace = new TerminalWorkspace(
+            bridge,
+            factory,
+            new FakeShellResolver(),
+            new FakeSessionCommandBuilder(),
+            new FakeHookSettingsProvider(Path),
+            new FakeHookListener(),
+            TestOptions,
+            TimeProvider.System);
+
+        await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+
+        Assert.Equal(Path, workspace.HookSettingsPath);
+    }
+
+    /// <summary>
     /// Псевдоконсоль поднимается уже после возврата из <c>OpenAsync</c>, поэтому её сбой
     /// наружу не бросить. Пользователь видит причину прямо во вкладке (раздел 8 ТЗ), а
     /// прикладной код узнаёт о нежилой вкладке единственным доступным ему способом —
@@ -481,6 +629,8 @@ public sealed class TerminalWorkspaceTests
             new ThrowingPtySessionFactory("pwsh.exe не запускается"),
             new FakeShellResolver(),
             new FakeSessionCommandBuilder(),
+            new FakeHookSettingsProvider(),
+            new FakeHookListener(),
             TestOptions,
             TimeProvider.System);
 
@@ -547,6 +697,8 @@ public sealed class TerminalWorkspaceTests
             factory,
             new FailingShellResolver(),
             new FakeSessionCommandBuilder(),
+            new FakeHookSettingsProvider(),
+            new FakeHookListener(),
             TestOptions,
             TimeProvider.System);
 
@@ -576,6 +728,8 @@ public sealed class TerminalWorkspaceTests
             factory,
             new FakeShellResolver(),
             new FakeSessionCommandBuilder(startupInput),
+            new FakeHookSettingsProvider(),
+            new FakeHookListener(),
             TestOptions,
             TimeProvider.System);
 
@@ -649,6 +803,45 @@ internal sealed class GatedPtySessionFactory(FakePtySessionFactory inner) : IPty
 
     /// <summary>Отпускает подъём псевдоконсоли.</summary>
     public void Release() => _release.Release();
+}
+
+/// <summary>
+/// Поставщик настроек хуков — заглушка: отдаёт заранее заданный путь либо не создаёт файл
+/// вовсе. Настоящая реализация живёт в слое Sessions.
+/// </summary>
+internal sealed class FakeHookSettingsProvider(string? path = @"C:\data\hooks.json", Exception? failure = null)
+    : IHookSettingsProvider
+{
+    public string TokenVariableName => "CLAUDE_AGENTS_SHELL_TAB";
+
+    /// <summary>Сколько раз просили файл: по этому счётчику видно, что он готовится один раз.</summary>
+    public int Calls { get; private set; }
+
+    public Task<string> EnsureSettingsFileAsync(Uri endpoint, CancellationToken cancellationToken)
+    {
+        Calls++;
+
+        return failure is not null
+            ? Task.FromException<string>(failure)
+            : Task.FromResult(path!);
+    }
+}
+
+/// <summary>Приёмник хуков — заглушка: нужен только ради адреса.</summary>
+internal sealed class FakeHookListener : IHookListener
+{
+    public Uri Endpoint { get; } = new("http://127.0.0.1:51789/hook");
+
+    /// <summary>Подписаться можно, событий не будет: слою терминала нужен только адрес.</summary>
+    public event EventHandler<HookEventArgs>? HookReceived
+    {
+        add { }
+        remove { }
+    }
+
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
 /// <summary>Фабрика, у которой подъём псевдоконсоли не удаётся, — процесс оболочки не стартовал.</summary>
