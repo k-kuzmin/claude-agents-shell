@@ -30,6 +30,16 @@ public partial class MainWindow : Window
     }
 
     /// <inheritdoc />
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+
+        // Дескриптор уже есть — можно спросить рабочую область именно того монитора,
+        // на котором оказалось окно, и вписаться в неё вместе с масштабом этого монитора.
+        WorkAreaPlacement.FitIntoWorkArea(this);
+    }
+
+    /// <inheritdoc />
     protected override void OnClosing(CancelEventArgs e)
     {
         ArgumentNullException.ThrowIfNull(e);

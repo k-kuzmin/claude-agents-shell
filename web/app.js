@@ -35,6 +35,41 @@
     window.chrome.webview.postMessage(JSON.stringify(message));
   }
 
+  // Горячие клавиши браузера, которые ломают окно терминала: перезагрузка страницы,
+  // поиск, печать, навигация по истории, зум.
+  //
+  // Гасится только действие браузера (preventDefault), но НЕ распространение события:
+  // Ctrl+R, Ctrl+F, Ctrl+P и Ctrl+G — обычные управляющие символы для readline, и они
+  // обязаны дойти до xterm.js. stopPropagation здесь отнял бы их у терминала.
+  //
+  // Клавиши буфера обмена (Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A) в список не входят намеренно.
+  function isDestructiveBrowserShortcut(event) {
+    if (event.key === 'F5') {
+      return true;
+    }
+
+    if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      return true;
+    }
+
+    if (!event.ctrlKey) {
+      return false;
+    }
+
+    var key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+    if (key === 'r' || key === 'f' || key === 'p' || key === 'g') {
+      return true;
+    }
+
+    return key === '+' || key === '-' || key === '=' || key === '0';
+  }
+
+  document.addEventListener('keydown', function (event) {
+    if (isDestructiveBrowserShortcut(event)) {
+      event.preventDefault();
+    }
+  }, true);
+
   // base64 → байты, побайтно. Никакого TextDecoder: строка на пути вывода порвала бы
   // UTF-8 последовательность на границе пачки.
   function decodeBase64(b64) {
@@ -122,6 +157,74 @@
     }
   }
 
+  function copySelection(term) {
+    var selection = term.getSelection();
+    if (!selection) {
+      return;
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(selection).catch(function () {
+        /* Буфер обмена недоступен — выделение просто остаётся на месте. */
+      });
+    }
+  }
+
+  function pasteFromClipboard(term) {
+    if (!navigator.clipboard || !navigator.clipboard.readText) {
+      return;
+    }
+
+    navigator.clipboard.readText().then(function (text) {
+      if (text) {
+        // term.paste сам оборачивает текст в bracketed paste, когда оболочка его включила.
+        term.paste(text);
+      }
+    }).catch(function () {
+      /* Доступ к буферу обмена не дали — вставки не будет. */
+    });
+  }
+
+  function installKeyHandler(entry) {
+    entry.term.attachCustomKeyEventHandler(function (event) {
+      if (event.type !== 'keydown') {
+        return true;
+      }
+
+      // Shift+Enter → ESC CR. Обычный терминал не отличает эту комбинацию от Enter, поэтому
+      // Claude Code и предлагает /terminal-setup; здесь это работает из коробки.
+      // Чистый Enter и Ctrl+Enter не затрагиваются — условие требует именно Shift без Ctrl и Alt.
+      if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        event.preventDefault();
+        sendInput(entry.id, encoder.encode('\u001b\r'));
+        return false;
+      }
+
+      var key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+
+      // Ctrl+Shift+V — классическая терминальная вставка, мимо акселераторов браузера.
+      if (event.ctrlKey && event.shiftKey && !event.altKey && key === 'v') {
+        // Без preventDefault браузер вставил бы текст ещё и сам, в скрытую textarea xterm.js,
+        // и вставка задвоилась бы.
+        event.preventDefault();
+        pasteFromClipboard(entry.term);
+        return false;
+      }
+
+      // Ctrl+C: есть выделение — копируем, нет — пусть уходит SIGINT в оболочку.
+      if (event.ctrlKey && !event.shiftKey && !event.altKey && key === 'c' && entry.term.hasSelection()) {
+        // Выделение xterm.js рисует сам, в DOM его нет. Копирование браузера отработало бы
+        // по пустому выделению и успело бы затереть буфер раньше нашей асинхронной записи.
+        event.preventDefault();
+        copySelection(entry.term);
+        entry.term.clearSelection();
+        return false;
+      }
+
+      return true;
+    });
+  }
+
   function createTerminal(id, title) {
     if (terminals.has(id)) {
       return;
@@ -167,6 +270,7 @@
 
     term.open(element);
     attachRenderer(entry);
+    installKeyHandler(entry);
 
     term.onData(function (data) {
       sendInput(id, encoder.encode(data));

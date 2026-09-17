@@ -54,6 +54,12 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     /// </summary>
     private volatile bool _acknowledgementsStopped;
 
+    /// <summary>
+    /// Страница загружена. После этого любая навигация запрещена: перезагрузка обнулила бы
+    /// карту терминалов, а C# об этом не узнал бы — вкладки остались бы мёртвыми навсегда.
+    /// </summary>
+    private volatile bool _pageLoaded;
+
     /// <inheritdoc cref="WebView2TerminalBridge" />
     public WebView2TerminalBridge(IBridgeMessageWriter writer, IBridgeMessageParser parser, TerminalOptions options)
     {
@@ -111,6 +117,8 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
 
         _core.WebMessageReceived += OnWebMessageReceived;
         _core.ProcessFailed += OnProcessFailed;
+        _core.NavigationStarting += OnNavigationStarting;
+        _core.PermissionRequested += OnPermissionRequested;
 
         await _core.AddScriptToExecuteOnDocumentCreatedAsync(InboxScript).ConfigureAwait(true);
         await _core.AddScriptToExecuteOnDocumentCreatedAsync(BuildConfigScript(_options)).ConfigureAwait(true);
@@ -122,6 +130,7 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
 
             if (args.IsSuccess)
             {
+                _pageLoaded = true;
                 navigated.TrySetResult();
             }
             else
@@ -239,6 +248,8 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
         {
             core.WebMessageReceived -= OnWebMessageReceived;
             core.ProcessFailed -= OnProcessFailed;
+            core.NavigationStarting -= OnNavigationStarting;
+            core.PermissionRequested -= OnPermissionRequested;
             _core = null;
         }
 
@@ -246,13 +257,16 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     }
 
     /// <summary>
-    /// Окно терминала не должно вести себя как браузер. Особенно важны горячие клавиши:
-    /// F5 и Ctrl+R перезагрузили бы страницу, карта терминалов обнулилась бы, а C# об этом
-    /// не узнал бы — вкладка осталась бы мёртвой навсегда.
+    /// Окно терминала не должно вести себя как браузер: ни контекстного меню, ни DevTools,
+    /// ни зума, ни навигации свайпом.
     /// </summary>
     private static void ApplySettings(CoreWebView2Settings settings)
     {
-        settings.AreBrowserAcceleratorKeysEnabled = false;
+        // Акселераторы браузера включены намеренно: их общее отключение уносило с собой
+        // работу с буфером обмена. От разрушительных клавиш защищают два других рубежа —
+        // запрет навигации ниже (жёсткий, не зависит от клавиш) и точечный preventDefault
+        // на странице.
+        settings.AreBrowserAcceleratorKeysEnabled = true;
         settings.AreDefaultContextMenusEnabled = false;
         settings.AreDevToolsEnabled = false;
         settings.IsStatusBarEnabled = false;
@@ -361,6 +375,37 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
             case InboundBridgeMessage.Ack ack:
                 CompleteAcknowledgement(ack.TerminalId.Value, ack.Sequence);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Жёсткий запрет перезагрузки и любой навигации после первой загрузки страницы.
+    /// Это надёжнее фильтрации клавиш: перезагрузку можно вызвать не только F5 и Ctrl+R,
+    /// но и Alt+←, и переходом по ссылке. Карта терминалов живёт в документе, поэтому
+    /// перезагрузка убила бы все вкладки без единого шанса восстановиться.
+    /// </summary>
+    private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
+    {
+        if (_pageLoaded)
+        {
+            args.Cancel = true;
+        }
+    }
+
+    /// <summary>
+    /// Странице нужен доступ к буферу обмена: без него не работают вставка по Ctrl+Shift+V
+    /// и копирование выделения по Ctrl+C. Разрешение выдаётся молча и только собственной
+    /// странице приложения — спрашивать пользователя в окне терминала неуместно.
+    /// </summary>
+    private void OnPermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs args)
+    {
+        bool clipboard = args.PermissionKind is CoreWebView2PermissionKind.ClipboardRead;
+        bool ownPage = args.Uri.StartsWith($"https://{VirtualHost}/", StringComparison.OrdinalIgnoreCase);
+
+        if (clipboard && ownPage)
+        {
+            args.State = CoreWebView2PermissionState.Allow;
+            args.Handled = true;
         }
     }
 

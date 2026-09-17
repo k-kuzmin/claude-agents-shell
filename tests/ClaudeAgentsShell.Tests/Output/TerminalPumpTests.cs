@@ -2,6 +2,7 @@ using System.Text;
 using ClaudeAgentsShell.Domain;
 using ClaudeAgentsShell.Terminal;
 using ClaudeAgentsShell.Terminal.Output;
+using ClaudeAgentsShell.Terminal.Protocol;
 using ClaudeAgentsShell.Tests.Fakes;
 using Xunit;
 
@@ -165,6 +166,42 @@ public sealed class TerminalPumpTests
 
         Assert.Equal(source, bridge.AllBytes);
         Assert.Equal(text, Encoding.UTF8.GetString(bridge.AllBytes));
+    }
+
+    /// <summary>
+    /// Вставка приходит со страницы обёрнутой в bracketed paste: ESC[200~ … ESC[201~.
+    /// Если её разрезать между сообщениями, оболочка не должна увидеть ни потерянных байтов,
+    /// ни разорванной обёртки — иначе многострочная вставка превращается в серию Enter.
+    /// Проверяется разрез по всем позициям, включая середину управляющей последовательности
+    /// и середину многобайтового символа.
+    /// </summary>
+    [Fact]
+    public async Task Вставка_разрезанная_между_сообщениями_доезжает_в_исходном_виде()
+    {
+        const string pasted = "\u001b[200~первая строка\rвторая строка\r🚀 третья\u001b[201~";
+        byte[] source = Encoding.UTF8.GetBytes(pasted);
+        var parser = new BridgeMessageParser();
+
+        for (int cut = 0; cut <= source.Length; cut++)
+        {
+            var pty = new FakePtySession();
+            var bridge = new FakeTerminalBridge();
+            await using var pump = new TerminalPump(Id, pty, bridge, new TerminalOptions(), new ManualTimeProvider());
+
+            foreach (var part in new[] { source.AsMemory(0, cut), source.AsMemory(cut) })
+            {
+                string json = $$"""{"type":"in","id":"t1","b64":"{{Convert.ToBase64String(part.Span)}}"}""";
+
+                Assert.True(parser.TryParse(json, out var message));
+                var input = Assert.IsType<InboundBridgeMessage.Input>(message);
+                await pump.SendInputAsync(input.Data, CancellationToken.None);
+            }
+
+            Assert.True(
+                source.AsSpan().SequenceEqual(pty.WrittenInput.ToArray()),
+                $"Разрез на позиции {cut} исказил вставку.");
+            Assert.Equal(pasted, Encoding.UTF8.GetString(pty.WrittenInput.ToArray()));
+        }
     }
 
     [Fact]
