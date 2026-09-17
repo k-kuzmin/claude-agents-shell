@@ -16,17 +16,22 @@ public sealed class RelayCommand : ICommand
         _canExecute = canExecute;
     }
 
-    /// <inheritdoc />
-    public event EventHandler? CanExecuteChanged;
+    /// <summary>
+    /// Доступность перепроверяется вместе со всеми командами окна.
+    /// Своё событие здесь было бы мёртвым: возбуждать его неоткуда, и кнопка
+    /// навсегда застывала бы в том состоянии, которое вычислилось при привязке.
+    /// </summary>
+    public event EventHandler? CanExecuteChanged
+    {
+        add => CommandManager.RequerySuggested += value;
+        remove => CommandManager.RequerySuggested -= value;
+    }
 
     /// <inheritdoc />
     public bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
 
     /// <inheritdoc />
     public void Execute(object? parameter) => _execute(parameter);
-
-    /// <summary>Просит интерфейс перепроверить доступность команды.</summary>
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }
 
 /// <summary>
@@ -61,8 +66,12 @@ public sealed class AsyncRelayCommand : ICommand
         _onError = onError;
     }
 
-    /// <inheritdoc />
-    public event EventHandler? CanExecuteChanged;
+    /// <inheritdoc cref="RelayCommand.CanExecuteChanged" />
+    public event EventHandler? CanExecuteChanged
+    {
+        add => CommandManager.RequerySuggested += value;
+        remove => CommandManager.RequerySuggested -= value;
+    }
 
     /// <inheritdoc />
     public bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
@@ -98,7 +107,4 @@ public sealed class AsyncRelayCommand : ICommand
             TaskContinuationOptions.ExecuteSynchronously,
             scheduler);
     }
-
-    /// <summary>Просит интерфейс перепроверить доступность команды.</summary>
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }

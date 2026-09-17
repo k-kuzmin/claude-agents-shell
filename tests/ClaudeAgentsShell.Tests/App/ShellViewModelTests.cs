@@ -295,19 +295,143 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
-    public async Task Shortcuts_on_an_empty_strip_do_nothing()
+    public async Task Shortcuts_without_tabs_and_without_a_chosen_project_do_nothing()
     {
         var harness = await StartedAsync(Project("alpha", PathA, 0));
 
         await harness.Shell.ApplyShortcutAsync(ShellShortcut.NextTab, 0, CancellationToken.None);
         await harness.Shell.ApplyShortcutAsync(ShellShortcut.SelectTab, 1, CancellationToken.None);
         await harness.Shell.ApplyShortcutAsync(ShellShortcut.CloseTab, 0, CancellationToken.None);
-        // Активного проекта без вкладок нет, поэтому новую сессию открывать не в чем.
+        // Проект не выбран: открывать сессию не в чем, но и ошибки это не повод показывать.
         await harness.Shell.ApplyShortcutAsync(ShellShortcut.NewSession, 0, CancellationToken.None);
 
         Assert.Empty(harness.Shell.Tabs.Tabs);
         Assert.Empty(harness.Prompt.Confirmations);
         Assert.Empty(harness.Prompt.Errors);
+    }
+
+    [Fact]
+    public async Task Clicking_a_project_row_makes_it_the_target_for_a_new_session()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        Assert.Null(harness.Shell.ActiveProjectRow);
+        Assert.False(harness.Shell.NewSessionCommand.CanExecute(null));
+
+        // Клик по строке без вкладок переключать нечего, но проект он выбирает.
+        await harness.Shell.ActivateProjectAsync(harness.Row(1), CancellationToken.None);
+
+        Assert.Same(harness.Row(1), harness.Shell.ActiveProjectRow);
+        Assert.True(harness.Row(1).IsCurrent);
+        Assert.True(harness.Shell.NewSessionCommand.CanExecute(null));
+
+        await harness.Shell.ApplyShortcutAsync(ShellShortcut.NewSession, 0, CancellationToken.None);
+
+        Assert.Single(harness.Shell.Tabs.Tabs);
+        Assert.Equal(PathB, Assert.Single(harness.Workspace.OpenedDirectories));
+    }
+
+    [Fact]
+    public async Task A_chosen_project_with_a_missing_directory_does_not_offer_a_new_session()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        await harness.Shell.ActivateProjectAsync(harness.Row(0), CancellationToken.None);
+        Assert.True(harness.Shell.NewSessionCommand.CanExecute(null));
+
+        harness.Probe.Remove(PathA);
+        await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.False(harness.Row(0).IsAvailable);
+        Assert.False(harness.Shell.NewSessionCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task The_last_closed_tab_leaves_its_project_chosen()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+
+        await harness.Shell.CloseTabAsync(tab!, CancellationToken.None);
+
+        // Полоса пуста, но Ctrl+Shift+T по-прежнему знает, куда открывать.
+        Assert.Empty(harness.Shell.Tabs.Tabs);
+        Assert.Same(harness.Row(1), harness.Shell.ActiveProjectRow);
+
+        await harness.Shell.ApplyShortcutAsync(ShellShortcut.NewSession, 0, CancellationToken.None);
+
+        Assert.Single(harness.Shell.Tabs.Tabs);
+        Assert.Equal([PathB, PathB], harness.Workspace.OpenedDirectories);
+    }
+
+    [Fact]
+    public async Task Opening_a_session_moves_the_choice_to_that_project()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+
+        // Выбрали beta, но запустили сессию кнопкой на строке alpha.
+        await harness.Shell.ActivateProjectAsync(harness.Row(1), CancellationToken.None);
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        await harness.Shell.CloseTabAsync(tab!, CancellationToken.None);
+
+        // Выбранным остаётся тот проект, с которым работали последним.
+        Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+        Assert.True(harness.Row(0).IsCurrent);
+        Assert.False(harness.Row(1).IsCurrent);
+    }
+
+    [Fact]
+    public async Task A_tab_whose_pty_failed_to_start_closes_without_a_question()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        // Псевдоконсоль поднимается после возврата из OpenAsync; её сбой приходит
+        // событием с ненулевым кодом, и вкладка перестаёт считаться живой.
+        harness.Workspace.RaiseExited(tab!.TerminalId, 1);
+
+        Assert.False(tab.IsRunning);
+        Assert.True(await harness.Shell.CloseTabAsync(tab, CancellationToken.None));
+        Assert.Empty(harness.Prompt.Confirmations);
+    }
+
+    [Fact]
+    public async Task A_failed_save_adds_no_row()
+    {
+        var harness = await StartedAsync();
+        harness.Picker.NextFolder = @"D:\src\gamma";
+        harness.Probe.Add(@"D:\src\gamma");
+        harness.Store.SaveFailure = new IOException("диск занят");
+
+        await Assert.ThrowsAsync<IOException>(() => harness.Shell.AddProjectAsync(CancellationToken.None));
+
+        Assert.Empty(harness.Shell.Projects.Rows);
+    }
+
+    [Fact]
+    public async Task The_same_folder_is_not_added_twice()
+    {
+        var harness = await StartedAsync();
+        harness.Picker.NextFolder = @"D:\src\gamma";
+        harness.Probe.Add(@"D:\src\gamma");
+
+        await harness.Shell.AddProjectAsync(CancellationToken.None);
+        harness.Picker.NextFolder = @"D:\src\gamma";
+        await harness.Shell.AddProjectAsync(CancellationToken.None);
+
+        Assert.Single(harness.Shell.Projects.Rows);
+        Assert.Equal(1, harness.Store.SaveCount);
+    }
+
+    [Fact]
+    public async Task Reloading_the_list_drops_the_previous_watchers()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        Assert.Equal([PathA], harness.Watcher.Watched);
+
+        harness.Store.Seed(Project("beta", PathB, 0));
+        harness.Probe.Add(PathB);
+        await harness.Shell.Projects.LoadAsync(CancellationToken.None);
+
+        Assert.Equal([PathB], harness.Watcher.Watched);
     }
 
     [Fact]

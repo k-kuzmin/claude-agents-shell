@@ -13,6 +13,9 @@ internal sealed class FakeProjectStore : IProjectStore
 
     public int SaveCount { get; private set; }
 
+    /// <summary>Исключение, которым отвечает следующая запись.</summary>
+    public Exception? SaveFailure { get; set; }
+
     public void Seed(params ProjectDefinition[] projects) => _projects = [.. projects];
 
     public Task<IReadOnlyList<ProjectDefinition>> LoadAsync(CancellationToken cancellationToken) =>
@@ -20,6 +23,12 @@ internal sealed class FakeProjectStore : IProjectStore
 
     public Task SaveAsync(IReadOnlyList<ProjectDefinition> projects, CancellationToken cancellationToken)
     {
+        if (SaveFailure is { } failure)
+        {
+            SaveFailure = null;
+            return Task.FromException(failure);
+        }
+
         Saved = [.. projects];
         _projects = [.. projects];
         SaveCount++;
@@ -68,7 +77,8 @@ internal sealed class FakeDirectoryProbe : IDirectoryProbe
 
     public void Remove(string path) => _existing.Remove(path);
 
-    public bool Exists(string path) => _existing.Contains(path);
+    public Task<bool> ExistsAsync(string path, CancellationToken cancellationToken) =>
+        Task.FromResult(_existing.Contains(path));
 }
 
 /// <summary>Диалог выбора папки: возвращает заранее назначенный путь.</summary>

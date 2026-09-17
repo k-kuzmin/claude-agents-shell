@@ -55,7 +55,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
 
         NewSessionCommand = new AsyncRelayCommand(
             _ => OpenSessionInActiveProjectAsync(CancellationToken.None),
-            onError: ReportError);
+            _ => ActiveProjectRow is { IsAvailable: true },
+            ReportError);
         ActivateTabCommand = new AsyncRelayCommand(
             parameter => parameter is TabViewModel tab
                 ? ActivateTabAsync(tab, CancellationToken.None)
@@ -97,9 +98,15 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Закрыть вкладку.</summary>
     public ICommand CloseTabCommand { get; }
 
-    /// <summary>Строка проекта, которому принадлежит активная вкладка; <c>null</c>, если вкладок нет.</summary>
+    /// <summary>
+    /// Проект, в котором откроется новая сессия: проект активной вкладки, а пока вкладок нет —
+    /// строка, выбранная пользователем. Без второго варианта на холодном старте новую сессию
+    /// негде было бы открыть, кроме как кнопкой на строке проекта.
+    /// </summary>
     public ProjectRowViewModel? ActiveProjectRow =>
-        Tabs.ActiveTab is { } tab ? Projects.Rows.FirstOrDefault(row => row.Id == tab.ProjectId) : null;
+        Tabs.ActiveTab is { } tab
+            ? Projects.Rows.FirstOrDefault(row => row.Id == tab.ProjectId)
+            : Projects.SelectedRow;
 
     /// <summary>Поднимает страницу терминалов и читает список проектов.</summary>
     public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -115,6 +122,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         var row = await Projects.AddProjectAsync(cancellationToken).ConfigureAwait(true);
         if (row is not null)
         {
+            // Сразу после добавления «+» в полосе вкладок должен работать.
+            Projects.Select(row);
             RefreshSessionCounts();
         }
     }
@@ -128,7 +137,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(row);
 
-        if (!Projects.RefreshAvailability(row))
+        if (!await Projects.RefreshAvailabilityAsync(row, cancellationToken).ConfigureAwait(true))
         {
             _prompt.ShowError(
                 "Каталог недоступен",
@@ -143,14 +152,18 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
                 .OpenAsync(row.Project, new SessionLaunch.NewSession(), cancellationToken)
                 .ConfigureAwait(true);
         }
-        catch (Exception exception) when (exception is PtyStartException or ShellNotFoundException)
+        catch (ShellNotFoundException exception)
         {
-            // Обе ветки предусмотрены контрактом: сессия не открылась, но окно живёт дальше.
+            // Единственный сбой, который приходит сюда: оболочки в системе нет.
+            // Псевдоконсоль поднимается уже после возврата из OpenAsync, и её сбой
+            // прилетает событием TerminalExited с ненулевым кодом — вкладка к тому моменту
+            // уже в полосе и просто перестаёт считаться живой.
             _prompt.ShowError("Не удалось открыть сессию", exception.Message);
             return null;
         }
 
         var tab = new TabViewModel(terminalId, row.Id, row.Name);
+        Projects.Select(row);
         Tabs.Add(tab);
 
         // Открытую вкладку страница показывает сама внутри OpenAsync — второй показ
@@ -175,10 +188,17 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(row);
 
+        Projects.Select(row);
+
         if (Tabs.ActiveTabFor(row.Id) is { } tab)
         {
             await ActivateTabAsync(tab, cancellationToken).ConfigureAwait(true);
+            return;
         }
+
+        // Вкладок у проекта нет: переключать нечего, но выбор строки теперь виден
+        // и в подсветке, и в кнопке новой сессии.
+        RefreshCurrentProject();
     }
 
     /// <summary>Делает вкладку видимой: на странице меняется видимость контейнера, не более.</summary>
@@ -193,6 +213,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
 
         await _workspace.ActivateAsync(tab.TerminalId, cancellationToken).ConfigureAwait(true);
         Tabs.SetActive(tab);
+        Projects.Select(Projects.Rows.FirstOrDefault(row => row.Id == tab.ProjectId));
         RefreshCurrentProject();
     }
 
@@ -310,10 +331,10 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
 
     private void RefreshCurrentProject()
     {
-        var activeProjectId = Tabs.ActiveTab?.ProjectId;
+        var target = ActiveProjectRow;
         foreach (var row in Projects.Rows)
         {
-            row.IsCurrent = activeProjectId == row.Id;
+            row.IsCurrent = ReferenceEquals(row, target);
         }
 
         Raise(nameof(ActiveProjectRow));
