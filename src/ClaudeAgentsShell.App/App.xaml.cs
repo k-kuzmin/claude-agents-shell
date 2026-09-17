@@ -62,7 +62,8 @@ public partial class App : System.Windows.Application
         // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.
         services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
         services.AddSingleton<IUserPrompt, MessageBoxUserPrompt>();
-        services.AddSingleton<IDirectoryProbe, FileSystemDirectoryProbe>();
+        // IDirectoryProbe регистрирует слой Sessions: Directory.* — файловая система,
+        // а не WPF-специфика, и сборке оболочки не место её трогать.
 
         // Захватывает Dispatcher.CurrentDispatcher, поэтому контейнер строится в потоке UI.
         services.AddSingleton<IUiDispatcher, WpfUiDispatcher>();

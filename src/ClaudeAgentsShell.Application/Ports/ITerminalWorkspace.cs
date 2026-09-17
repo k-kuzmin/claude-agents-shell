@@ -35,10 +35,16 @@ public interface ITerminalWorkspace : IAsyncDisposable
     Task StartAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Открывает вкладку: поднимает оболочку проекта в новой псевдоконсоли и пишет в её stdin
-    /// команду запуска. Возвращает идентификатор созданной вкладки.
+    /// Открывает вкладку: создаёт терминал на странице и, когда та отчитается о готовности,
+    /// поднимает оболочку проекта в псевдоконсоли и пишет в её stdin команду запуска.
+    /// Возвращает идентификатор созданной вкладки.
     /// </summary>
-    /// <exception cref="PtyStartException">Псевдоконсоль или процесс создать не удалось.</exception>
+    /// <remarks>
+    /// Псевдоконсоль поднимается **после** возврата из метода, поэтому сбой её создания сюда
+    /// не приходит: он сообщается текстом в саму вкладку и событием <see cref="TerminalExited"/>
+    /// с ненулевым кодом. Подписчик обязан считать вкладку неживой по этому событию —
+    /// иначе она навсегда останется «работающей» без псевдоконсоли под ней.
+    /// </remarks>
     /// <exception cref="ShellNotFoundException">Ни одна оболочка не найдена.</exception>
     Task<TerminalId> OpenAsync(ProjectDefinition project, SessionLaunch launch, CancellationToken cancellationToken);
 
