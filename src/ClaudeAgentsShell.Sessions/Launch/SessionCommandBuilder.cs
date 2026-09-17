@@ -16,8 +16,11 @@ public sealed class SessionCommandBuilder : ISessionCommandBuilder
 
     private const string ClaudeExecutable = "claude";
 
+    /// <summary>Аргумент, которым сессии передаётся сгенерированный файл настроек с хуками.</summary>
+    private const string SettingsOption = "--settings";
+
     /// <inheritdoc />
-    public IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch)
+    public IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch, string? hookSettingsPath)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(launch);
@@ -29,27 +32,49 @@ public sealed class SessionCommandBuilder : ISessionCommandBuilder
             lines.Add(project.PreLaunch.Trim() + LineTerminator);
         }
 
-        lines.Add(BuildLaunchCommand(project, launch) + LineTerminator);
+        lines.Add(BuildLaunchCommand(project, launch, hookSettingsPath) + LineTerminator);
         return lines;
     }
 
-    private static string BuildLaunchCommand(ProjectDefinition project, SessionLaunch launch) => launch switch
+    private static string BuildLaunchCommand(ProjectDefinition project, SessionLaunch launch, string? hookSettingsPath)
     {
+        var parts = new List<string>(4) { ClaudeExecutable };
+
+        // Пустого --settings не бывает: путь либо есть, либо сессия запускается без хуков.
+        if (!string.IsNullOrWhiteSpace(hookSettingsPath))
+        {
+            parts.Add(SettingsOption);
+            parts.Add(PowerShellArgument.Quote(hookSettingsPath));
+        }
+
         // Иерархия SessionLaunch закрыта приватным конструктором: новых вариантов извне не бывает,
         // поэтому разбор по образцу здесь не мешает расширению.
-        SessionLaunch.ResumeSession resume => $"{ClaudeExecutable} --resume {PowerShellArgument.Quote(resume.SessionId)}",
-        SessionLaunch.ContinueLast => $"{ClaudeExecutable} --continue",
-        _ => NewSessionCommand(project),
-    };
+        switch (launch)
+        {
+            case SessionLaunch.ResumeSession resume:
+                parts.Add("--resume");
+                parts.Add(PowerShellArgument.Quote(resume.SessionId));
+                break;
 
-    private static string NewSessionCommand(ProjectDefinition project)
+            case SessionLaunch.ContinueLast:
+                parts.Add("--continue");
+                break;
+
+            default:
+                AppendExtraArgs(project, parts);
+                break;
+        }
+
+        return string.Join(' ', parts);
+    }
+
+    private static void AppendExtraArgs(ProjectDefinition project, List<string> parts)
     {
         if (project.ExtraArgs is not { Count: > 0 } extraArgs)
         {
-            return ClaudeExecutable;
+            return;
         }
 
-        var parts = new List<string>(extraArgs.Count + 1) { ClaudeExecutable };
         foreach (var argument in extraArgs)
         {
             if (!string.IsNullOrEmpty(argument))
@@ -57,7 +82,5 @@ public sealed class SessionCommandBuilder : ISessionCommandBuilder
                 parts.Add(PowerShellArgument.Quote(argument));
             }
         }
-
-        return string.Join(' ', parts);
     }
 }
