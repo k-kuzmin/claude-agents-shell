@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\src\ClaudeAgentsShell.Application\ClaudeAgentsShell.Application.csproj" />
     <ProjectReference Include="..\..\src\ClaudeAgentsShell.Terminal\ClaudeAgentsShell.Terminal.csproj" />
     <ProjectReference Include="..\..\src\ClaudeAgentsShell.Sessions\ClaudeAgentsShell.Sessions.csproj" />
+    <ProjectReference Include="..\..\src\ClaudeAgentsShell.App\ClaudeAgentsShell.App.csproj" />
   </ItemGroup>
 
   <ItemGroup>

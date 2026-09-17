@@ -8,19 +8,22 @@ namespace ClaudeAgentsShell.Terminal;
 
 /// <summary>
 /// Связывает мост и псевдоконсоли: маршрутизирует сообщения страницы по идентификатору вкладки
-/// и держит помпу на каждую открытую вкладку. В M1 открывается ровно одна вкладка, но
-/// маршрутизация с самого начала рассчитана на N терминалов — так устроена страница (раздел 3.1 ТЗ).
+/// и держит помпу на каждую открытую вкладку. Страница рассчитана на N терминалов в одном
+/// WebView2 (раздел 3.1 ТЗ), поэтому вкладки различаются только идентификатором.
 /// </summary>
-public sealed class TerminalWorkspace : IAsyncDisposable
+public sealed class TerminalWorkspace : ITerminalWorkspace
 {
     private readonly ITerminalBridge _bridge;
     private readonly IPtySessionFactory _ptyFactory;
     private readonly IShellResolver _shells;
+    private readonly ISessionCommandBuilder _commands;
     private readonly TerminalOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, TerminalPump> _pumps = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, PtyStartInfo> _pending = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<Task, byte> _closing = new();
+    private readonly ConcurrentDictionary<string, PendingTerminal> _pending = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<Task, byte> _background = new();
+    private readonly List<TerminalId> _order = [];
+    private readonly object _orderSync = new();
     private readonly CancellationTokenSource _cts = new();
 
     private int _disposed;
@@ -30,18 +33,21 @@ public sealed class TerminalWorkspace : IAsyncDisposable
         ITerminalBridge bridge,
         IPtySessionFactory ptyFactory,
         IShellResolver shells,
+        ISessionCommandBuilder commands,
         TerminalOptions options,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(bridge);
         ArgumentNullException.ThrowIfNull(ptyFactory);
         ArgumentNullException.ThrowIfNull(shells);
+        ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _bridge = bridge;
         _ptyFactory = ptyFactory;
         _shells = shells;
+        _commands = commands;
         _options = options;
         _timeProvider = timeProvider;
 
@@ -51,38 +57,107 @@ public sealed class TerminalWorkspace : IAsyncDisposable
     }
 
     /// <summary>
-    /// Поднимает страницу терминалов и открывает стартовую вкладку с оболочкой.
-    /// <c>claude</c> в M1 пользователь запускает внутри терминала руками.
+    /// Процесс вкладки завершился. Событие приходит с потока, на котором ОС сообщила о выходе
+    /// процесса, — подписчик обязан сам уйти в свой поток (для WPF это <c>Dispatcher</c>).
     /// </summary>
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public event EventHandler<TerminalExitedEventArgs>? TerminalExited;
+
+    /// <inheritdoc />
+    public IReadOnlyList<TerminalId> Terminals
     {
-        await _bridge.InitializeAsync(cancellationToken).ConfigureAwait(false);
-        await OpenAsync(ShellKind.Pwsh, DefaultWorkingDirectory(), cancellationToken).ConfigureAwait(false);
+        get
+        {
+            lock (_orderSync)
+            {
+                return _order.ToArray();
+            }
+        }
     }
 
-    /// <summary>Открывает новую вкладку: просит страницу создать терминал и ждёт от неё <c>ready</c>.</summary>
-    public async Task<TerminalId> OpenAsync(ShellKind preferredShell, string workingDirectory, CancellationToken cancellationToken)
-    {
-        var shell = _shells.Resolve(preferredShell);
-        var terminalId = TerminalId.New();
+    /// <summary>
+    /// Поднимает страницу терминалов. Вкладки открывает прикладной код: какие проекты
+    /// восстанавливать при старте, слой терминала не решает.
+    /// </summary>
+    public async Task StartAsync(CancellationToken cancellationToken) =>
+        await _bridge.InitializeAsync(cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Открывает вкладку проекта: просит страницу создать терминал, поднимает оболочку
+    /// в рабочем каталоге проекта и пишет в её stdin команду запуска.
+    /// <para>
+    /// Открытая вкладка сразу становится видимой: страница показывает ровно один терминал,
+    /// и вкладка, которой никто не показал, осталась бы чёрным окном.
+    /// </para>
+    /// </summary>
+    public async Task<TerminalId> OpenAsync(
+        ProjectDefinition project,
+        SessionLaunch launch,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(launch);
+
+        // Оболочка разрешается и команда собирается до того, как вкладка попала в учёт:
+        // оба вызова бросают, и полузарегистрированный идентификатор остался бы в Terminals
+        // навсегда — без псевдоконсоли и без терминала на странице.
+        var shell = _shells.Resolve(project.Shell);
+        var startupInput = _commands.Build(project, launch);
+
+        var terminalId = TerminalId.New();
         var startInfo = new PtyStartInfo(
             shell,
-            workingDirectory,
+            project.Path,
             TerminalSize.Default,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["TERM"] = "xterm-256color",
             });
 
-        _pending[terminalId.Value] = startInfo;
+        _pending[terminalId.Value] = new PendingTerminal(startInfo, startupInput);
+        Register(terminalId);
 
-        string title = $"{shell.Kind} · {workingDirectory}";
-        await _bridge.CreateTerminalAsync(terminalId, title, cancellationToken).ConfigureAwait(false);
-        await _bridge.ShowTerminalAsync(terminalId, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _bridge.CreateTerminalAsync(terminalId, Title(project), cancellationToken)
+                .ConfigureAwait(false);
+            await _bridge.ShowTerminalAsync(terminalId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Страница вкладку не приняла. Псевдоконсоли ещё нет — она поднимается по ready,
+            // — поэтому освобождать нечего, достаточно убрать вкладку из учёта.
+            _pending.TryRemove(terminalId.Value, out _);
+            Unregister(terminalId);
+            throw;
+        }
 
         return terminalId;
     }
+
+    /// <summary>
+    /// Делает вкладку видимой — ровно одно сообщение <c>show</c> на страницу.
+    /// Ни пересоздания терминала, ни перерисовки, ни ресайза: все вкладки страницы держатся
+    /// одного размера, поэтому показ ничего не пересчитывает (раздел 7 ТЗ, критерий 2).
+    /// </summary>
+    public async Task ActivateAsync(TerminalId terminalId, CancellationToken cancellationToken)
+    {
+        if (!Contains(terminalId))
+        {
+            // Неизвестный идентификатор спрятал бы на странице все терминалы разом:
+            // show скрывает всё, кроме указанного.
+            return;
+        }
+
+        await _bridge.ShowTerminalAsync(terminalId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Закрывает вкладку: гасит псевдоконсоль, убирает помпу из маршрутизации и просит
+    /// страницу уничтожить терминал. Единственный путь удаления вкладки — здесь же
+    /// снимаются ожидания записи, иначе они копились бы на каждой закрытой вкладке.
+    /// </summary>
+    public async Task CloseAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
+        await CloseAsync(terminalId, notifyPage: true, cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
@@ -104,30 +179,42 @@ public sealed class TerminalWorkspace : IAsyncDisposable
                 .Select(id => CloseAsync(new TerminalId(id), notifyPage: false)))
             .ConfigureAwait(false);
 
-        // Дожидаемся гашений, начатых выходом оболочки: их вкладок в _pumps уже нет.
+        // Дожидаемся фоновых работ: гашений, начатых выходом оболочки (их вкладок в _pumps
+        // уже нет), и записей команды запуска.
         try
         {
-            await Task.WhenAll(_closing.Keys).ConfigureAwait(false);
+            await Task.WhenAll(_background.Keys).ConfigureAwait(false);
         }
         catch (Exception)
         {
-            // Исход каждого такого гашения уже наблюдён через Observe.
+            // Исход каждой такой работы уже наблюдён через Observe.
         }
 
         _pending.Clear();
+
+        lock (_orderSync)
+        {
+            _order.Clear();
+        }
+
         _cts.Dispose();
     }
 
-    /// <summary>
-    /// Закрывает вкладку: гасит псевдоконсоль, убирает помпу из маршрутизации и просит
-    /// страницу уничтожить терминал. Единственный путь удаления вкладки — здесь же
-    /// снимаются ожидания записи, иначе они копились бы на каждой закрытой вкладке.
-    /// </summary>
-    public async Task CloseAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
-        await CloseAsync(terminalId, notifyPage: true, cancellationToken).ConfigureAwait(false);
-
     private async Task CloseAsync(TerminalId terminalId, bool notifyPage, CancellationToken cancellationToken = default)
     {
+        if (notifyPage)
+        {
+            // Вкладка уходит со страницы только по явному закрытию — значит, и из учёта она
+            // уходит здесь же. Самостоятельно вышедшая оболочка вкладку не удаляет
+            // (раздел 8 ТЗ), поэтому на том пути порядок не трогается.
+            //
+            // Снятие с учёта идёт ДО снятия помпы. Обработчик ready может в этот момент
+            // поднимать псевдоконсоль на другом потоке: он добавляет помпу, а потом сверяется
+            // с учётом. Один из двух порядков обязательно увидит другой — иначе помпа,
+            // добавленная сразу после поиска здесь, осталась бы жить без вкладки.
+            Unregister(terminalId);
+        }
+
         _pending.TryRemove(terminalId.Value, out _);
 
         if (_pumps.TryRemove(terminalId.Value, out var pump))
@@ -147,7 +234,7 @@ public sealed class TerminalWorkspace : IAsyncDisposable
     /// Выполняется не на потоке колбэка завершения процесса — освобождение сессии
     /// дожидается этого колбэка и на нём же заблокировалось бы.
     /// </summary>
-    private void OnShellExited(TerminalId terminalId)
+    private void OnShellExited(TerminalId terminalId, int exitCode)
     {
         var closing = Task.Run(() => CloseAsync(terminalId, notifyPage: false));
 
@@ -156,18 +243,63 @@ public sealed class TerminalWorkspace : IAsyncDisposable
         // дождавшись закрытия псевдоконсоли.
         Track(closing);
         Observe(closing, "освобождение вкладки после выхода оболочки");
+
+        if (!Contains(terminalId))
+        {
+            // Вкладку закрыл пользователь: закрытие псевдоконсоли гасит оболочку, и её выход —
+            // следствие закрытия, а не событие для интерфейса. Оговорка: закрытие и выход
+            // могут совпасть, поэтому подписчик обязан терпеть событие о неизвестной вкладке.
+            return;
+        }
+
+        try
+        {
+            TerminalExited?.Invoke(this, new TerminalExitedEventArgs(terminalId, exitCode));
+        }
+        catch (Exception exception)
+        {
+            // Вызов пришёл с колбэка ОС о выходе процесса: исключение подписчика здесь
+            // никто не поймает и оно снесёт процесс целиком.
+            System.Diagnostics.Trace.TraceError(
+                "Claude Agents Shell: обработчик TerminalExited бросил исключение: {0}",
+                exception);
+        }
     }
 
     private void Track(Task task)
     {
-        _closing[task] = 0;
+        _background[task] = 0;
 
         _ = task.ContinueWith(
             static (completed, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(completed, out _),
-            _closing,
+            _background,
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+    }
+
+    private void Register(TerminalId terminalId)
+    {
+        lock (_orderSync)
+        {
+            _order.Add(terminalId);
+        }
+    }
+
+    private void Unregister(TerminalId terminalId)
+    {
+        lock (_orderSync)
+        {
+            _order.Remove(terminalId);
+        }
+    }
+
+    private bool Contains(TerminalId terminalId)
+    {
+        lock (_orderSync)
+        {
+            return _order.Contains(terminalId);
+        }
     }
 
     /// <summary>
@@ -178,12 +310,12 @@ public sealed class TerminalWorkspace : IAsyncDisposable
     private static async Task ReleaseDuplicateAsync(TerminalPump pump) =>
         await pump.DisposeAsync().ConfigureAwait(false);
 
-    private static string DefaultWorkingDirectory() =>
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    /// <summary>Заголовок терминала на странице — как в примере раздела 3.2 ТЗ: проект и его каталог.</summary>
+    private static string Title(ProjectDefinition project) => $"{project.Name} · {project.Path}";
 
     private void OnTerminalReady(object? sender, TerminalReadyEventArgs args)
     {
-        if (!_pending.TryRemove(args.TerminalId.Value, out var startInfo))
+        if (!_pending.TryRemove(args.TerminalId.Value, out var pending))
         {
             return;
         }
@@ -192,7 +324,7 @@ public sealed class TerminalWorkspace : IAsyncDisposable
         {
             // Псевдоконсоль поднимается синхронно, до возврата из обработчика: следом за ready
             // страница пришлёт resize, и помпа к этому моменту уже зарегистрирована.
-            var session = _ptyFactory.Create(startInfo);
+            var session = _ptyFactory.Create(pending.StartInfo);
             var pump = new TerminalPump(args.TerminalId, session, _bridge, _options, _timeProvider);
 
             if (!_pumps.TryAdd(args.TerminalId.Value, pump))
@@ -203,6 +335,18 @@ public sealed class TerminalWorkspace : IAsyncDisposable
                 return;
             }
 
+            // Пока поднималась псевдоконсоль (а это CreateProcess), вкладку могли закрыть
+            // или закрыться могло всё окно. Тогда искать эту помпу уже некому — освобождаем
+            // сами, иначе останется открытая псевдоконсоль без вкладки.
+            if ((Volatile.Read(ref _disposed) == 1 || !Contains(args.TerminalId))
+                && _pumps.TryRemove(args.TerminalId.Value, out var orphan))
+            {
+                var release = ReleaseDuplicateAsync(orphan);
+                Track(release);
+                Observe(release, "освобождение помпы закрытой вкладки");
+                return;
+            }
+
             var terminalId = args.TerminalId;
 
             // Оболочка может завершиться сама (пользователь набрал exit, процесс упал).
@@ -210,15 +354,83 @@ public sealed class TerminalWorkspace : IAsyncDisposable
             // ConPtySession достижим из _pumps, и финализатор SafeHandle не сработает.
             // Сама вкладка на странице при этом остаётся — с пометкой о коде выхода
             // (раздел 8 ТЗ), поэтому страницу закрывать терминал не просим.
-            session.Exited += (_, _) => OnShellExited(terminalId);
+            session.Exited += (_, exit) => OnShellExited(terminalId, exit.ExitCode);
 
             pump.Start();
+
+            if (pending.StartupInput.Count > 0)
+            {
+                var startup = Task.Run(() => SendStartupInputAsync(pump, pending.StartupInput, _cts.Token));
+                Track(startup);
+                Observe(startup, "запись команды запуска в stdin");
+            }
         }
         catch (PtyStartException exception)
         {
             // Оболочку поднять не удалось — пользователь должен увидеть причину прямо в терминале,
             // а не в молчаливо закрытой вкладке (раздел 8 ТЗ).
             ReportToTerminal(args.TerminalId, exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Пишет в stdin строки запуска сессии — раздел 5.1 ТЗ фиксирует именно запись в stdin,
+    /// а не запуск оболочки с <c>-Command</c>.
+    /// <para>
+    /// Сигнала готовности readline у оболочки нет, а разбирать вывод в поисках приглашения
+    /// запрещено (раздел 7 CLAUDE.md). Поэтому строки пишутся после первого байта вывода:
+    /// до него оболочка заведомо не дошла до чтения stdin. Это признак по времени, а не по
+    /// содержимому — что именно пришло, здесь не смотрит никто.
+    /// </para>
+    /// </summary>
+    private async Task SendStartupInputAsync(
+        TerminalPump pump,
+        IReadOnlyList<string> lines,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            bool shellIsGone = false;
+
+            try
+            {
+                shellIsGone = !await pump.FirstOutputReceived
+                    .WaitAsync(_options.StartupOutputTimeout, _timeProvider, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // Оболочка молчит дольше отведённого. Команду пишем всё равно: потерянный
+                // запуск хуже, чем запуск, который пользователь увидит в приглашении.
+            }
+
+            if (shellIsGone)
+            {
+                // Вкладку закрыли или поток вывода кончился раньше, чем оболочка отозвалась.
+                return;
+            }
+
+            if (_options.StartupInputDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(_options.StartupInputDelay, _timeProvider, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            foreach (string line in lines)
+            {
+                // Строго по одной и по порядку: preLaunch обязан выполниться до claude
+                // (раздел 5.1 ТЗ). Строки уже завершены переводом строки — это контракт
+                // ISessionCommandBuilder.
+                await pump.SendInputAsync(Encoding.UTF8.GetBytes(line), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception) when (exception is OperationCanceledException
+                                              or ObjectDisposedException
+                                              or IOException)
+        {
+            // Вкладку закрыли между ready и записью. Потерять запуск допустимо,
+            // уронить приложение из фоновой задачи — нет.
         }
     }
 
@@ -249,8 +461,8 @@ public sealed class TerminalWorkspace : IAsyncDisposable
     /// </summary>
     private void ReportToTerminal(TerminalId terminalId, string message)
     {
-        const string Red = "\u001b[31m";
-        const string Reset = "\u001b[0m\r\n";
+        const string Red = "[31m";
+        const string Reset = "[0m\r\n";
 
         byte[] bytes = Encoding.UTF8.GetBytes(Red + message + Reset);
         Observe(
@@ -281,4 +493,10 @@ public sealed class TerminalWorkspace : IAsyncDisposable
             pump.Resize(args.Size);
         }
     }
+
+    /// <summary>
+    /// Вкладка, которую страница ещё не подтвердила: чем поднимать оболочку и что писать
+    /// в её stdin, когда придёт <c>ready</c>.
+    /// </summary>
+    private readonly record struct PendingTerminal(PtyStartInfo StartInfo, IReadOnlyList<string> StartupInput);
 }

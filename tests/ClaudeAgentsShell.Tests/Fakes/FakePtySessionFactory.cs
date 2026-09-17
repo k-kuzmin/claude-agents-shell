@@ -11,6 +11,9 @@ internal sealed class FakePtySessionFactory(TimeSpan disposeDelay = default) : I
 
     public IReadOnlyCollection<FakePtySession> Created => _created;
 
+    /// <summary>Псевдоконсоль по порядку создания: он совпадает с порядком <c>ready</c> от страницы.</summary>
+    public FakePtySession At(int index) => _created.ElementAt(index);
+
     public IPtySession Create(PtyStartInfo startInfo)
     {
         var session = new FakePtySession { DisposeDelay = disposeDelay };

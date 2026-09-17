@@ -31,6 +31,18 @@
   var terminals = new Map();
   var encoder = new TextEncoder();
 
+  // Размер один на всю страницу. Терминалы — соседние элементы одного контейнера, различаются
+  // только видимостью, поэтому cols/rows у них общие; 0 означает «ещё не мерили».
+  var currentCols = 0;
+  var currentRows = 0;
+  var resizeTimer = 0;
+  var measureAttempts = 0;
+
+  // Сколько раз повторить замер, если рендерер видимой вкладки ещё не померил знакоместо.
+  // Он просыпается по IntersectionObserver уже после снятия display:none, и первый замер
+  // сразу после показа может не успеть.
+  var MAX_MEASURE_ATTEMPTS = 10;
+
   function post(message) {
     window.chrome.webview.postMessage(JSON.stringify(message));
   }
@@ -110,36 +122,102 @@
     return element.offsetParent !== null && element.clientWidth > 0 && element.clientHeight > 0;
   }
 
-  // У скрытых терминалов fit() не вызывается: нулевые размеры дали бы мусорный resize.
-  function fitAndReport(entry) {
-    if (!isVisible(entry.element)) {
-      return;
-    }
-
-    try {
-      entry.fit.fit();
-    } catch (error) {
-      return;
-    }
-
-    var cols = entry.term.cols;
-    var rows = entry.term.rows;
-    if (cols > 0 && rows > 0 && (cols !== entry.cols || rows !== entry.rows)) {
-      entry.cols = cols;
-      entry.rows = rows;
-      post({ type: 'resize', id: entry.id, cols: cols, rows: rows });
-    }
+  function visibleEntry() {
+    var found = null;
+    terminals.forEach(function (entry) {
+      if (found === null && isVisible(entry.element)) {
+        found = entry;
+      }
+    });
+    return found;
   }
 
-  function scheduleFit(entry) {
-    if (entry.resizeTimer !== 0) {
-      clearTimeout(entry.resizeTimer);
+  // Замер делается ОДИН раз и только по видимому контейнеру: у скрытого элемента нулевые
+  // размеры, и fit() у него запрещён (раздел 3.4 ТЗ). Размер контейнера общий для всех
+  // вкладок, поэтому померенного хватает на всех.
+  function measure() {
+    var entry = visibleEntry();
+    if (!entry) {
+      return null;
     }
 
-    entry.resizeTimer = setTimeout(function () {
-      entry.resizeTimer = 0;
-      fitAndReport(entry);
-    }, RESIZE_DEBOUNCE_MS);
+    var dims;
+    try {
+      dims = entry.fit.proposeDimensions();
+    } catch (error) {
+      return null;
+    }
+
+    if (!dims || !(dims.cols > 0) || !(dims.rows > 0)) {
+      // Знакоместо ещё не померено — держим прежний размер, повторим на следующем тике.
+      return null;
+    }
+
+    return dims;
+  }
+
+  // Размер применяется ко ВСЕМ терминалам, включая скрытые, и в C# уходит по сообщению
+  // resize на каждый идентификатор. Иначе скрытая вкладка вернулась бы со старыми cols/rows
+  // и перерисовалась по неверной ширине — это «лесенка» из критерия 5 раздела 7 ТЗ
+  // и полная перерисовка вопреки критерию 2.
+  function applySize(cols, rows) {
+    currentCols = cols;
+    currentRows = rows;
+
+    terminals.forEach(function (entry) {
+      resizeTerminal(entry, cols, rows);
+    });
+  }
+
+  // Скрытым размер ставится напрямую term.resize, без fit(): fit() читает размеры элемента,
+  // а у невидимого они нулевые. Буфер при этом перекладывается как надо, а рендерер xterm
+  // догоняет сам — он приостановлен, пока вкладка скрыта, и просыпается при показе.
+  function resizeTerminal(entry, cols, rows) {
+    if (entry.cols === cols && entry.rows === rows) {
+      // Размер не менялся: ни перекладки буфера, ни сообщения в C#.
+      return;
+    }
+
+    entry.cols = cols;
+    entry.rows = rows;
+
+    try {
+      entry.term.resize(cols, rows);
+    } catch (error) {
+      // Терминал уже освобождён — сообщать о его размере нечему.
+      return;
+    }
+
+    post({ type: 'resize', id: entry.id, cols: cols, rows: rows });
+  }
+
+  function scheduleResize() {
+    measureAttempts = 0;
+    armResizeTimer();
+  }
+
+  function armResizeTimer() {
+    if (resizeTimer !== 0) {
+      clearTimeout(resizeTimer);
+    }
+
+    resizeTimer = setTimeout(onResizeTick, RESIZE_DEBOUNCE_MS);
+  }
+
+  function onResizeTick() {
+    resizeTimer = 0;
+
+    var dims = measure();
+    if (dims) {
+      applySize(dims.cols, dims.rows);
+      return;
+    }
+
+    // Мерить было нечем. Если видимая вкладка есть, её рендерер просто ещё не проснулся —
+    // повторяем ограниченное число раз, иначе вкладка осталась бы с размером по умолчанию.
+    if (visibleEntry() && ++measureAttempts < MAX_MEASURE_ATTEMPTS) {
+      armResizeTimer();
+    }
   }
 
   function attachRenderer(entry) {
@@ -282,8 +360,6 @@
       fit: fit,
       webgl: null,
       element: element,
-      observer: null,
-      resizeTimer: 0,
       cols: 0,
       rows: 0
     };
@@ -305,33 +381,41 @@
       sendInput(id, bytes);
     });
 
-    entry.observer = new ResizeObserver(function () {
-      scheduleFit(entry);
-    });
-    entry.observer.observe(element);
-
     terminals.set(id, entry);
 
-    // ready → fit() → resize с реальными размерами.
+    // Сначала ready: помпа в C# ставится именно на него, и resize, пришедший раньше,
+    // отбросить некому.
     post({ type: 'ready', id: id });
-    requestAnimationFrame(function () {
-      fitAndReport(entry);
-    });
+
+    if (currentCols > 0) {
+      // Размер страницы уже известен по другим вкладкам. Ставим его сразу, до первого байта
+      // вывода: иначе оболочка успела бы напечатать приглашение по размеру по умолчанию,
+      // и первый же ресайз переложил бы его заново.
+      resizeTerminal(entry, currentCols, currentRows);
+    }
+
+    scheduleResize();
   }
 
   function showTerminal(id) {
+    if (!terminals.has(id)) {
+      // Неизвестный идентификатор скрыл бы на странице все терминалы разом.
+      return;
+    }
+
     terminals.forEach(function (entry) {
-      var visible = entry.id === id;
-      entry.element.classList.toggle('hidden', !visible);
+      entry.element.classList.toggle('hidden', entry.id !== id);
     });
 
     var target = terminals.get(id);
-    if (target) {
-      requestAnimationFrame(function () {
-        fitAndReport(target);
-        target.term.focus();
-      });
-    }
+    requestAnimationFrame(function () {
+      target.term.focus();
+    });
+
+    // Пересчёт после показа даёт те же cols/rows — размер у вкладок общий, — поэтому
+    // переключение не перекладывает буфер и не шлёт ни одного resize. Замер нужен ради
+    // самого первого показа: до него мерить было нечего, все вкладки были скрыты.
+    scheduleResize();
   }
 
   function closeTerminal(id) {
@@ -342,16 +426,18 @@
 
     terminals.delete(id);
 
-    if (entry.resizeTimer !== 0) {
-      clearTimeout(entry.resizeTimer);
-      entry.resizeTimer = 0;
-    }
+    releaseRenderer(entry);
 
-    if (entry.observer) {
-      entry.observer.disconnect();
-      entry.observer = null;
-    }
+    entry.term.dispose();
 
+    if (entry.element.parentNode) {
+      entry.element.parentNode.removeChild(entry.element);
+    }
+  }
+
+  // Снимает аддон WebGL: рендер продолжается на canvas, а контекст GL возвращается странице.
+  // Их у Chromium на страницу ограниченное число, и мёртвые вкладки не должны их занимать.
+  function releaseRenderer(entry) {
     if (entry.webgl) {
       try {
         entry.webgl.dispose();
@@ -359,12 +445,6 @@
         // Уже освобождён.
       }
       entry.webgl = null;
-    }
-
-    entry.term.dispose();
-
-    if (entry.element.parentNode) {
-      entry.element.parentNode.removeChild(entry.element);
     }
   }
 
@@ -389,6 +469,11 @@
     var entry = terminals.get(id);
     if (entry) {
       entry.term.write('\r\n[33m[процесс завершился с кодом ' + code + '][0m\r\n');
+
+      // Вкладка остаётся на странице с кодом выхода (раздел 8 ТЗ), но вывода в ней больше
+      // не будет — контекст WebGL ей больше не нужен. Буфер остаётся виден: xterm
+      // переходит на canvas-рендерер, как и при потере контекста.
+      releaseRenderer(entry);
     }
   }
 
@@ -440,6 +525,10 @@
       + 'Страница открыта мимо моста приложения.');
     return;
   }
+
+  // Наблюдатель один на всю страницу: размер у терминалов общий, и следить за каждым
+  // по отдельности незачем — скрытые всё равно отдают нули.
+  new ResizeObserver(scheduleResize).observe(host);
 
   // Приёмник, поставленный до навигации (AddScriptToExecuteOnDocumentCreated), успел собрать
   // сообщения, пришедшие до загрузки app.js. Забираем их и подключаемся сами.

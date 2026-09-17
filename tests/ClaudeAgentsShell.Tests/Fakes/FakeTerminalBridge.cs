@@ -10,6 +10,7 @@ namespace ClaudeAgentsShell.Tests.Fakes;
 internal sealed class FakeTerminalBridge : ITerminalBridge
 {
     private readonly List<byte[]> _batches = [];
+    private readonly Dictionary<string, List<byte>> _byTerminal = new(StringComparer.Ordinal);
     private readonly Queue<TaskCompletionSource> _pending = new();
     private readonly object _sync = new();
 
@@ -33,6 +34,18 @@ internal sealed class FakeTerminalBridge : ITerminalBridge
 
     /// <summary>Вкладки, созданные на странице.</summary>
     public List<string> CreatedTerminals { get; } = [];
+
+    /// <summary>Вкладки, которые мост просил страницу показать, по порядку запросов.</summary>
+    public List<string> ShownTerminals { get; } = [];
+
+    /// <summary>Байты, отправленные в конкретную вкладку: по ним видно маршрутизацию вывода.</summary>
+    public byte[] BytesFor(TerminalId terminalId)
+    {
+        lock (_sync)
+        {
+            return _byTerminal.TryGetValue(terminalId.Value, out var bytes) ? bytes.ToArray() : [];
+        }
+    }
 
     public IReadOnlyList<byte[]> Batches
     {
@@ -90,8 +103,15 @@ internal sealed class FakeTerminalBridge : ITerminalBridge
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask ShowTerminalAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
-        ValueTask.CompletedTask;
+    public ValueTask ShowTerminalAsync(TerminalId terminalId, CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            ShownTerminals.Add(terminalId.Value);
+        }
+
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask CloseTerminalAsync(TerminalId terminalId, CancellationToken cancellationToken)
     {
@@ -110,7 +130,16 @@ internal sealed class FakeTerminalBridge : ITerminalBridge
 
         lock (_sync)
         {
-            _batches.Add(payload.ToArray());
+            byte[] copy = payload.ToArray();
+            _batches.Add(copy);
+
+            if (!_byTerminal.TryGetValue(terminalId.Value, out var bytes))
+            {
+                bytes = [];
+                _byTerminal[terminalId.Value] = bytes;
+            }
+
+            bytes.AddRange(copy);
 
             if (!AcknowledgeImmediately)
             {

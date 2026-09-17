@@ -30,6 +30,7 @@ public sealed class TerminalPump : IAsyncDisposable
     private readonly SemaphoreSlim _flushLock = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
     private readonly TaskCompletionSource<int> _exitSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _firstOutput = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _shutdownSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ITimer _flushTimer;
     private readonly byte[] _readBuffer;
@@ -75,6 +76,17 @@ public sealed class TerminalPump : IAsyncDisposable
         _pty.Exited += OnPtyExited;
     }
 
+    /// <summary>
+    /// Завершается, когда из псевдоконсоли пришёл первый байт вывода: <c>true</c> — байт пришёл,
+    /// <c>false</c> — помпа остановлена или поток закрылся раньше, чем оболочка отозвалась.
+    /// <para>
+    /// Это факт уровня помпы («из PTY что-то пришло»), а не разбор вывода: содержимое байтов
+    /// здесь не смотрит никто. Нужен тому, кто пишет в stdin сразу после запуска оболочки, —
+    /// до первого байта она ещё не дошла до чтения ввода.
+    /// </para>
+    /// </summary>
+    public Task<bool> FirstOutputReceived => _firstOutput.Task;
+
     /// <summary>Запускает читающий цикл. Вызывается после того, как страница прислала <c>ready</c>.</summary>
     public void Start()
     {
@@ -118,6 +130,11 @@ public sealed class TerminalPump : IAsyncDisposable
         }
 
         _shutdownSignal.TrySetResult();
+
+        // Вкладку закрыли раньше, чем оболочка отозвалась: ожидающий первого байта отпускается
+        // с «не дождётся», иначе он простоял бы весь свой бюджет и записал бы команду
+        // в уже освобождённую псевдоконсоль.
+        _firstOutput.TrySetResult(false);
 
         var ptyDispose = _pty.DisposeAsync().AsTask();
 
@@ -204,6 +221,8 @@ public sealed class TerminalPump : IAsyncDisposable
                     break;
                 }
 
+                _firstOutput.TrySetResult(true);
+
                 bool flushNow;
                 lock (_sync)
                 {
@@ -227,6 +246,12 @@ public sealed class TerminalPump : IAsyncDisposable
         catch (OperationCanceledException)
         {
             // Обычное завершение при закрытии вкладки.
+        }
+        finally
+        {
+            // Цикл вышел, а байта вывода так и не было: тот, кто ждёт первого байта, должен
+            // узнать не «дождался», а «не дождётся» — писать в stdin уже некому.
+            _firstOutput.TrySetResult(false);
         }
     }
 

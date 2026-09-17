@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Input;
+using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
-using ClaudeAgentsShell.Terminal;
 
 namespace ClaudeAgentsShell.App;
 
@@ -9,23 +11,27 @@ namespace ClaudeAgentsShell.App;
 public partial class MainWindow : Window
 {
     private readonly WebView2TerminalBridge _bridge;
-    private readonly TerminalWorkspace _workspace;
+    private readonly ShellViewModel _shell;
+    private readonly ShellShortcutHandler _shortcuts;
 
     private bool _shutdownStarted;
     private bool _shutdownCompleted;
 
     /// <inheritdoc cref="MainWindow" />
-    public MainWindow(WebView2TerminalBridge bridge, TerminalWorkspace workspace)
+    public MainWindow(WebView2TerminalBridge bridge, ShellViewModel shell, ShellShortcutHandler shortcuts)
     {
         ArgumentNullException.ThrowIfNull(bridge);
-        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(shortcuts);
 
         InitializeComponent();
 
         _bridge = bridge;
-        _workspace = workspace;
+        _shell = shell;
+        _shortcuts = shortcuts;
 
-        Root.Children.Add(_bridge.Control);
+        DataContext = _shell;
+        TerminalHost.Children.Add(_bridge.Control);
         Loaded += OnLoaded;
     }
 
@@ -37,6 +43,31 @@ public partial class MainWindow : Window
         // Дескриптор уже есть — можно спросить рабочую область именно того монитора,
         // на котором оказалось окно, и вписаться в неё вместе с масштабом этого монитора.
         WorkAreaPlacement.FitIntoWorkArea(this);
+    }
+
+    /// <inheritdoc />
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+
+        // Автоповтор удержанной клавиши окну не адресован: удержанный Ctrl+Shift+W иначе
+        // успевал бы поставить второе подтверждение поверх первого. В терминал автоповтор
+        // уходит как обычно — это событие остаётся необработанным.
+        if (e.IsRepeat && ShellShortcutMap.TryMap(e.Key, Keyboard.Modifiers, out _, out _))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        // Туннелирование: оконные сочетания перехватываются до того, как их увидит терминал.
+        // Всё остальное остаётся необработанным и доходит до оболочки без изменений.
+        if (_shortcuts.Handle(e.Key, Keyboard.Modifiers))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        base.OnPreviewKeyDown(e);
     }
 
     /// <inheritdoc />
@@ -69,7 +100,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await _workspace.StartAsync(CancellationToken.None);
+            await _shell.InitializeAsync(CancellationToken.None);
         }
         catch (Exception exception) when (exception is TerminalBridgeUnavailableException
                                              or ShellNotFoundException)
@@ -88,7 +119,8 @@ public partial class MainWindow : Window
         try
         {
             // Помпы освобождаются раньше моста: им нужно дождаться подтверждений страницы.
-            await _workspace.DisposeAsync();
+            // Набором вкладок владеет корневая ViewModel — она же его и гасит.
+            await _shell.DisposeAsync();
             await _bridge.DisposeAsync();
         }
         finally
