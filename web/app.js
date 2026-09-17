@@ -373,7 +373,14 @@
     var element = document.createElement('div');
     element.className = 'terminal-host hidden';
     element.setAttribute('data-terminal-id', id);
-    element.title = title || '';
+
+    // Заголовок кладётся в data-атрибут, а НЕ в title. Атрибут title на элементе, который
+    // занимает всю область терминала, Chromium показывает как всплывающую подсказку при
+    // каждом движении мыши — она закрывает вывод и мешает работать. Заголовок вкладки
+    // пользователю показывает полоса вкладок в окне, странице он нужен только чтобы узел
+    // можно было опознать.
+    element.setAttribute('data-terminal-title', title || '');
+
     host.appendChild(element);
 
     var term = new Terminal({
