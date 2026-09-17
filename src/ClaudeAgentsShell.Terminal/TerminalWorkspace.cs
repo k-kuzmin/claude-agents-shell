@@ -86,14 +86,6 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     /// </summary>
     public event EventHandler<TerminalExitedEventArgs>? TerminalExited;
 
-    /// <summary>
-    /// Путь к файлу настроек с хуками, подготовленному для запускаемых сессий, — тот самый,
-    /// который должен уйти в команду запуска аргументом <c>--settings</c>.
-    /// <c>null</c> — файл создать не удалось, сессии живут без маркера состояния
-    /// (допустимая деградация раздела 5.3 ТЗ). Заполняется при открытии первой вкладки.
-    /// </summary>
-    public string? HookSettingsPath { get; private set; }
-
     /// <inheritdoc />
     public IReadOnlyList<TerminalId> Terminals
     {
@@ -135,10 +127,11 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         var shell = _shells.Resolve(project.Shell);
 
         // Файл настроек с хуками готовится до сборки команды: его путь уходит в команду
-        // запуска аргументом --settings (раздел 5.3 ТЗ). Не вышло — запускаемся без хуков.
-        HookSettingsPath = await EnsureHookSettingsAsync().ConfigureAwait(false);
+        // запуска аргументом --settings (раздел 5.3 ТЗ). Не вышло — null, и построитель
+        // собирает команду без хуков: сессия работает, просто без маркера состояния.
+        string? hookSettings = await EnsureHookSettingsAsync().ConfigureAwait(false);
 
-        var startupInput = _commands.Build(project, launch);
+        var startupInput = _commands.Build(project, launch, hookSettings);
 
         var terminalId = TerminalId.New();
 
@@ -201,11 +194,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         await _bridge.ShowTerminalAsync(terminalId, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Находит вкладку по токену, пришедшему в <see cref="HookEvent.CorrelationToken"/>.
-    /// Неизвестный токен — не ошибка: хук мог прийти от сессии, запущенной мимо приложения,
-    /// или от вкладки, которую только что закрыли (раздел 5.3 ТЗ).
-    /// </summary>
+    /// <inheritdoc />
     public bool TryResolveTerminal(string? correlationToken, out TerminalId terminalId)
     {
         if (string.IsNullOrEmpty(correlationToken))

@@ -555,11 +555,12 @@ public sealed class TerminalWorkspaceTests
         var factory = new FakePtySessionFactory();
         var bridge = new FakeTerminalBridge();
         var hooks = new FakeHookSettingsProvider(failure: new IOException("каталог данных недоступен"));
+        var commands = new FakeSessionCommandBuilder("claude\r");
         await using var workspace = new TerminalWorkspace(
             bridge,
             factory,
             new FakeShellResolver(),
-            new FakeSessionCommandBuilder("claude\r"),
+            commands,
             hooks,
             new FakeHookListener(),
             TestOptions,
@@ -570,7 +571,8 @@ public sealed class TerminalWorkspaceTests
 
         var session = await WaitForSessionAsync(factory);
 
-        Assert.Null(workspace.HookSettingsPath);
+        // Команда собирается без пути: никакого --settings в запуске не будет.
+        Assert.Equal([null], commands.HookSettingsPaths);
         Assert.Equal([terminalId], workspace.Terminals);
 
         // Сессия живёт полноценно: команда запуска доезжает, токен в окружении остаётся —
@@ -589,21 +591,22 @@ public sealed class TerminalWorkspaceTests
 
     /// <summary>
     /// Каталог данных лежит в профиле пользователя, а в имени профиля бывают пробелы.
-    /// Путь обязан доехать до команды запуска целым — экранирование делает построитель
-    /// команды, но испортить путь по дороге нельзя.
+    /// Путь обязан доехать до построителя команды целым: экранирование под PowerShell —
+    /// его забота, но испортить путь по дороге нельзя.
     /// </summary>
     [Fact]
-    public async Task Путь_к_файлу_настроек_с_пробелами_доезжает_целым()
+    public async Task Путь_к_файлу_настроек_с_пробелами_доезжает_до_команды_целым()
     {
         const string Path = @"C:\Users\Имя Фамилия\AppData\Roaming\Claude Agents Shell\hooks.json";
 
         var factory = new FakePtySessionFactory();
         var bridge = new FakeTerminalBridge();
+        var commands = new FakeSessionCommandBuilder();
         await using var workspace = new TerminalWorkspace(
             bridge,
             factory,
             new FakeShellResolver(),
-            new FakeSessionCommandBuilder(),
+            commands,
             new FakeHookSettingsProvider(Path),
             new FakeHookListener(),
             TestOptions,
@@ -611,7 +614,7 @@ public sealed class TerminalWorkspaceTests
 
         await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
 
-        Assert.Equal(Path, workspace.HookSettingsPath);
+        Assert.Equal([Path], commands.HookSettingsPaths);
     }
 
     /// <summary>
@@ -778,7 +781,16 @@ public sealed class TerminalWorkspaceTests
 /// </summary>
 internal sealed class FakeSessionCommandBuilder(params string[] lines) : ISessionCommandBuilder
 {
-    public IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch) => lines;
+    private readonly List<string?> _hookSettingsPaths = [];
+
+    /// <summary>Пути к файлу настроек, с которыми собирали команду, — по одному на запуск.</summary>
+    public IReadOnlyList<string?> HookSettingsPaths => _hookSettingsPaths;
+
+    public IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch, string? hookSettingsPath)
+    {
+        _hookSettingsPaths.Add(hookSettingsPath);
+        return lines;
+    }
 }
 
 /// <summary>
