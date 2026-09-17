@@ -85,8 +85,39 @@
       || code === 'NumpadAdd' || code === 'NumpadSubtract' || code === 'Numpad0';
   }
 
+  // Оконные сочетания WPF: новая сессия, закрытие вкладки, переключение вкладок.
+  // Их обрабатывает окно (ShellShortcutMap), а не терминал, поэтому в xterm они не
+  // доставляются — иначе сочетание сработало бы дважды: как команда окна и как ввод.
+  //
+  // До WPF они доходят сами: обёртка WebView2 подписана на AcceleratorKeyPressed и заводит
+  // акселераторы в систему ввода WPF в процессе хоста, независимо от того, что с событием
+  // сделала страница. Поэтому preventDefault здесь безопасен, а stopPropagation не нужен
+  // и запрещён — он ничего не даёт WPF и отнимает событие у остальной страницы.
+  //
+  // Условия повторяют ShellShortcutMap один в один: без Alt и Win, обязательный Ctrl,
+  // Ctrl+Shift+T / Ctrl+Shift+W, Ctrl+Tab с любым Shift, Ctrl+цифра только без Shift.
+  // Голые Ctrl+T и Ctrl+W сюда не попадают намеренно — они уходят в оболочку.
+  function isWindowShortcut(event) {
+    if (!event.ctrlKey || event.altKey || event.metaKey) {
+      return false;
+    }
+
+    var code = codeOf(event);
+
+    if (code === 'Tab') {
+      return true;
+    }
+
+    if (event.shiftKey) {
+      return code === 'KeyT' || code === 'KeyW';
+    }
+
+    // Цифровой ряд и цифровая клавиатура — одна и та же физическая цифра.
+    return /^(Digit|Numpad)[1-9]$/.test(code);
+  }
+
   document.addEventListener('keydown', function (event) {
-    if (isDestructiveBrowserShortcut(event)) {
+    if (isDestructiveBrowserShortcut(event) || isWindowShortcut(event)) {
       event.preventDefault();
     }
   }, true);
@@ -276,6 +307,14 @@
     entry.term.attachCustomKeyEventHandler(function (event) {
       if (event.type !== 'keydown') {
         return true;
+      }
+
+      // Сочетание принадлежит окну — в терминал его не отдаём. preventDefault уже сделан
+      // общим обработчиком; здесь важен именно false: без него xterm отправил бы в PTY
+      // управляющий символ, и, например, Ctrl+Shift+W открыл бы вкладку и заодно послал
+      // ввод в оболочку.
+      if (isWindowShortcut(event)) {
+        return false;
       }
 
       // Shift+Enter → ESC CR. Обычный терминал не отличает эту комбинацию от Enter, поэтому
