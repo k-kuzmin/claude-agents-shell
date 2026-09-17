@@ -22,9 +22,29 @@ public interface IShellProvider
 public interface IShellResolver
 {
     /// <summary>Разрешает запрошенную оболочку или ближайшую доступную.</summary>
-    /// <exception cref="InvalidOperationException">Ни одна оболочка не найдена.</exception>
+    /// <exception cref="ShellNotFoundException">Ни одна оболочка не найдена.</exception>
     ShellStartCommand Resolve(ShellKind preferred);
 
     /// <summary>Оболочки, найденные в системе. Для диалога настроек проекта.</summary>
     IReadOnlyList<ShellKind> Available { get; }
+}
+
+/// <summary>
+/// В системе не найдено ни одной оболочки.
+/// Собственный тип, а не <see cref="InvalidOperationException"/>: обработчик, который ловит
+/// базовый тип, заодно проглатывает дефекты потоков WPF («The calling thread cannot access
+/// this object») и показывает их пользователю как «нет оболочки».
+/// </summary>
+public sealed class ShellNotFoundException : Exception
+{
+    /// <inheritdoc cref="ShellNotFoundException" />
+    public ShellNotFoundException(string message) : base(message)
+    {
+    }
+
+    /// <inheritdoc cref="ShellNotFoundException" />
+    public ShellNotFoundException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }
