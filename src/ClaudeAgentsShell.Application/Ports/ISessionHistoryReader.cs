@@ -14,4 +14,11 @@ public interface ISessionHistoryReader
     /// Каталога нет — пустой список, это не ошибка.
     /// </summary>
     Task<IReadOnlyList<SessionSummary>> ReadAsync(string workingDirectory, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Сводка по одной известной сессии. Нужна, когда хук <c>SessionStart</c> уже принёс
+    /// <c>session_id</c> и вкладке требуется заголовок из первого сообщения пользователя.
+    /// Файла нет или разобрать не удалось — <c>null</c>, это не ошибка.
+    /// </summary>
+    Task<SessionSummary?> ReadOneAsync(string workingDirectory, string sessionId, CancellationToken cancellationToken);
 }
