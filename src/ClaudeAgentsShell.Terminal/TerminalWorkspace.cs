@@ -26,6 +26,12 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     private readonly object _orderSync = new();
     private readonly CancellationTokenSource _cts = new();
 
+    /// <summary>
+    /// Код выхода для вкладки, чья псевдоконсоль так и не поднялась. Настоящего кода нет —
+    /// процесса не было, — а ноль означал бы штатное завершение.
+    /// </summary>
+    private const int StartFailureExitCode = -1;
+
     private int _disposed;
 
     /// <inheritdoc cref="TerminalWorkspace" />
@@ -252,13 +258,23 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
             return;
         }
 
+        RaiseExited(terminalId, exitCode);
+    }
+
+    /// <summary>
+    /// Сообщает, что под вкладкой больше нет живой псевдоконсоли, — по выходу оболочки или
+    /// по несостоявшемуся подъёму. Вызов приходит с чужого потока (колбэк ОС о завершении
+    /// процесса либо обработчик сообщения страницы), поэтому подписчик уходит в свой сам.
+    /// </summary>
+    private void RaiseExited(TerminalId terminalId, int exitCode)
+    {
         try
         {
             TerminalExited?.Invoke(this, new TerminalExitedEventArgs(terminalId, exitCode));
         }
         catch (Exception exception)
         {
-            // Вызов пришёл с колбэка ОС о выходе процесса: исключение подписчика здесь
+            // На пути выхода вызов приходит с колбэка ОС: исключение подписчика здесь
             // никто не поймает и оно снесёт процесс целиком.
             System.Diagnostics.Trace.TraceError(
                 "Claude Agents Shell: обработчик TerminalExited бросил исключение: {0}",
@@ -303,12 +319,19 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     }
 
     /// <summary>
-    /// Освобождает лишнюю помпу, не трогая страницу: идентификатор принадлежит уже живущей
-    /// вкладке, и <c>close</c> уничтожил бы её терминал вместе с историей, оставив
-    /// работающую помпу писать в несуществующий узел.
+    /// Освобождает помпу, не трогая страницу: терминал на ней принадлежит либо уже живущей
+    /// вкладке, либо вкладке с пометкой о выходе, и <c>close</c> уничтожил бы его вместе
+    /// с историей. Освобождение учитывается, иначе закрытие окна могло бы его не дождаться.
     /// </summary>
-    private static async Task ReleaseDuplicateAsync(TerminalPump pump) =>
-        await pump.DisposeAsync().ConfigureAwait(false);
+    private void ReleasePump(TerminalPump pump, string what)
+    {
+        var release = ReleaseAsync(pump);
+        Track(release);
+        Observe(release, what);
+
+        static async Task ReleaseAsync(TerminalPump pump) =>
+            await pump.DisposeAsync().ConfigureAwait(false);
+    }
 
     /// <summary>Заголовок терминала на странице — как в примере раздела 3.2 ТЗ: проект и его каталог.</summary>
     private static string Title(ProjectDefinition project) => $"{project.Name} · {project.Path}";
@@ -331,19 +354,26 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
             {
                 // Вкладка с таким идентификатором уже жива: освобождаем лишнюю помпу целиком
                 // и через общий путь закрытия, чтобы не осталось ни псевдоконсоли, ни учёта.
-                Observe(ReleaseDuplicateAsync(pump), "освобождение лишней помпы");
+                ReleasePump(pump, "освобождение лишней помпы");
                 return;
             }
 
             // Пока поднималась псевдоконсоль (а это CreateProcess), вкладку могли закрыть
-            // или закрыться могло всё окно. Тогда искать эту помпу уже некому — освобождаем
-            // сами, иначе останется открытая псевдоконсоль без вкладки.
-            if ((Volatile.Read(ref _disposed) == 1 || !Contains(args.TerminalId))
-                && _pumps.TryRemove(args.TerminalId.Value, out var orphan))
+            // или закрыться могло всё окно.
+            //
+            // Решение о выходе принимается по учёту вкладок, а НЕ по тому, досталась ли нам
+            // помпа обратно. Закрытие снимает вкладку с учёта и забирает помпу из словаря
+            // двумя отдельными действиями, и между ними мы могли успеть её добавить: тогда
+            // помпу заберёт закрытие, а сюда вернётся пусто. Условие «и удалось забрать»
+            // на этом порядке проваливалось бы дальше — к pump.Start() на помпе, которую
+            // в этот момент освобождают, то есть к циклу на уже освобождённом токене.
+            if (Volatile.Read(ref _disposed) == 1 || !Contains(args.TerminalId))
             {
-                var release = ReleaseDuplicateAsync(orphan);
-                Track(release);
-                Observe(release, "освобождение помпы закрытой вкладки");
+                if (_pumps.TryRemove(args.TerminalId.Value, out var orphan))
+                {
+                    ReleasePump(orphan, "освобождение помпы закрытой вкладки");
+                }
+
                 return;
             }
 
@@ -370,6 +400,12 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
             // Оболочку поднять не удалось — пользователь должен увидеть причину прямо в терминале,
             // а не в молчаливо закрытой вкладке (раздел 8 ТЗ).
             ReportToTerminal(args.TerminalId, exception.Message);
+
+            // И тем же событием, что и обычный выход: вкладка осталась на странице, но
+            // псевдоконсоли под ней нет — без сигнала прикладной код считал бы её живой
+            // и работающей навсегда. Наружу сбой подъёма не уходит: OpenAsync к этому
+            // моменту давно вернулась, поднимать стало бы некому.
+            RaiseExited(args.TerminalId, StartFailureExitCode);
         }
     }
 

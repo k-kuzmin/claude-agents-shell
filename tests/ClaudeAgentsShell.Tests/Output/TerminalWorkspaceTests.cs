@@ -467,6 +467,44 @@ public sealed class TerminalWorkspaceTests
     }
 
     /// <summary>
+    /// Псевдоконсоль поднимается уже после возврата из <c>OpenAsync</c>, поэтому её сбой
+    /// наружу не бросить. Пользователь видит причину прямо во вкладке (раздел 8 ТЗ), а
+    /// прикладной код узнаёт о нежилой вкладке единственным доступным ему способом —
+    /// событием выхода. Без события вкладка навсегда осталась бы «работающей» без PTY.
+    /// </summary>
+    [Fact]
+    public async Task Несостоявшийся_подъём_виден_во_вкладке_и_приходит_событием()
+    {
+        var bridge = new FakeTerminalBridge();
+        await using var workspace = new TerminalWorkspace(
+            bridge,
+            new ThrowingPtySessionFactory("pwsh.exe не запускается"),
+            new FakeShellResolver(),
+            new FakeSessionCommandBuilder(),
+            TestOptions,
+            TimeProvider.System);
+
+        var exits = new List<TerminalExitedEventArgs>();
+        workspace.TerminalExited += (_, args) => exits.Add(args);
+
+        var terminalId = await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+        bridge.RaiseReady(terminalId);
+
+        await WaitUntilAsync(() => exits.Count == 1);
+
+        Assert.Equal(terminalId, exits[0].TerminalId);
+        Assert.NotEqual(0, exits[0].ExitCode);
+
+        // Причина — в самой вкладке, а не в молчаливо закрытом терминале.
+        string shown = Encoding.UTF8.GetString(bridge.BytesFor(terminalId));
+        Assert.Contains("pwsh.exe не запускается", shown, StringComparison.Ordinal);
+
+        // Вкладка остаётся на странице: пользователь должен прочитать ошибку и закрыть её сам.
+        Assert.Equal([terminalId], workspace.Terminals);
+        Assert.Empty(bridge.ClosedTerminals);
+    }
+
+    /// <summary>
     /// Сценарий раздела 3.5 ТЗ: двадцать вкладок открыть и закрыть подряд. Со стороны C#
     /// проверяемое свойство — ни одной пережившей закрытие псевдоконсоли и ни одного
     /// идентификатора, оставшегося в учёте.
@@ -611,6 +649,12 @@ internal sealed class GatedPtySessionFactory(FakePtySessionFactory inner) : IPty
 
     /// <summary>Отпускает подъём псевдоконсоли.</summary>
     public void Release() => _release.Release();
+}
+
+/// <summary>Фабрика, у которой подъём псевдоконсоли не удаётся, — процесс оболочки не стартовал.</summary>
+internal sealed class ThrowingPtySessionFactory(string message) : IPtySessionFactory
+{
+    public IPtySession Create(PtyStartInfo startInfo) => throw new PtyStartException(message);
 }
 
 /// <summary>Резолвер, который ничего не находит: так выглядит система без единой оболочки.</summary>

@@ -92,6 +92,14 @@ public sealed class TerminalPump : IAsyncDisposable
     {
         lock (_sync)
         {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                // Помпу уже освободили. Запуск после этого — гонка «страница отчиталась
+                // о готовности, а вкладку в это время закрывали»: маршрутизация от неё
+                // защищается сама, но цикл встал бы на токене, которого больше нет.
+                return;
+            }
+
             _loop ??= Task.Run(() => RunAsync(_cts.Token));
         }
     }
