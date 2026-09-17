@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <RootNamespace>ClaudeAgentsShell.App</RootNamespace>
+    <AssemblyName>ClaudeAgentsShell</AssemblyName>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeAgentsShell.Domain\ClaudeAgentsShell.Domain.csproj" />
+    <ProjectReference Include="..\ClaudeAgentsShell.Application\ClaudeAgentsShell.Application.csproj" />
+    <ProjectReference Include="..\ClaudeAgentsShell.Terminal\ClaudeAgentsShell.Terminal.csproj" />
+    <ProjectReference Include="..\ClaudeAgentsShell.Sessions\ClaudeAgentsShell.Sessions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Web.WebView2" />
+  </ItemGroup>
+
+  <!-- Страница терминалов и локальные ассеты xterm.js отдаются WebView2 через
+       SetVirtualHostNameToFolderMapping из каталога сборки. CDN не используется. -->
+  <ItemGroup>
+    <WebAsset Include="..\..\web\**\*" Exclude="..\..\web\node_modules\**\*;..\..\web\package.json;..\..\web\package-lock.json" />
+    <None Include="@(WebAsset)" Link="web\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
