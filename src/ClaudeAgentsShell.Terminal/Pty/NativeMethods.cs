@@ -18,6 +18,13 @@ internal static class NativeMethods
     /// <summary>Блок окружения передаётся в UTF-16.</summary>
     internal const uint CreateUnicodeEnvironment = 0x00000400;
 
+    /// <summary>
+    /// В <c>STARTUPINFO</c> заданы стандартные хэндлы. Без этого флага <c>CreateProcess</c>
+    /// протаскивает в параметры дочернего процесса стандартные хэндлы <b>родителя</b>,
+    /// и оболочка пишет туда, а не в свою псевдоконсоль.
+    /// </summary>
+    internal const int StartfUseStdHandles = 0x00000100;
+
     /// <summary>Процесс ещё жив (значение <c>GetExitCodeProcess</c>).</summary>
     internal const uint StillActive = 259;
 

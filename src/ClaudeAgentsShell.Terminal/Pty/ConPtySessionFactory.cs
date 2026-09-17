@@ -62,6 +62,12 @@ public sealed class ConPtySessionFactory : IPtySessionFactory
             startupInfo.StartupInfo.cb = Marshal.SizeOf<NativeMethods.StartupInfoEx>();
             startupInfo.lpAttributeList = attributes.Handle;
 
+            // Обязательно: без STARTF_USESTDHANDLES дочерний процесс получает стандартные
+            // хэндлы родителя и пишет в чужую консоль, а в наш пайп приходит только преамбула
+            // ConPTY. Сами hStdInput/hStdOutput/hStdError остаются нулевыми — их подставит
+            // псевдоконсоль. Так же сделано в ConptyConnection Windows Terminal.
+            startupInfo.StartupInfo.dwFlags = NativeMethods.StartfUseStdHandles;
+
             char[] commandLine = BuildCommandLine(startInfo.Shell);
             char[] environment = BuildEnvironmentBlock(startInfo.Environment);
             string workingDirectory = ResolveWorkingDirectory(startInfo.WorkingDirectory);
