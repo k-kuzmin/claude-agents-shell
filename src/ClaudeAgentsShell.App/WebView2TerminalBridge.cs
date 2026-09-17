@@ -55,10 +55,12 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     private volatile bool _acknowledgementsStopped;
 
     /// <summary>
-    /// Страница загружена. После этого любая навигация запрещена: перезагрузка обнулила бы
+    /// Первая навигация уже начата. Всё, что после неё, запрещено: перезагрузка обнулила бы
     /// карту терминалов, а C# об этом не узнал бы — вкладки остались бы мёртвыми навсегда.
+    /// Флаг взводится в начале навигации, а не по её завершении: иначе F5, нажатый пока
+    /// страница ещё грузится, проходил бы беспрепятственно.
     /// </summary>
-    private volatile bool _pageLoaded;
+    private bool _initialNavigationStarted;
 
     /// <inheritdoc cref="WebView2TerminalBridge" />
     public WebView2TerminalBridge(IBridgeMessageWriter writer, IBridgeMessageParser parser, TerminalOptions options)
@@ -130,7 +132,6 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
 
             if (args.IsSuccess)
             {
-                _pageLoaded = true;
                 navigated.TrySetResult();
             }
             else
@@ -262,11 +263,12 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     /// </summary>
     private static void ApplySettings(CoreWebView2Settings settings)
     {
-        // Акселераторы браузера включены намеренно: их общее отключение уносило с собой
-        // работу с буфером обмена. От разрушительных клавиш защищают два других рубежа —
-        // запрет навигации ниже (жёсткий, не зависит от клавиш) и точечный preventDefault
-        // на странице.
-        settings.AreBrowserAcceleratorKeysEnabled = true;
+        // Акселераторы браузера выключены. Работу с буфером обмена это не задевает:
+        // страница читает и пишет буфер через navigator.clipboard, а не через команды
+        // браузера. Зато выключение глушит класс reserved-акселераторов Chromium —
+        // Ctrl+W, Ctrl+N, Ctrl+T, — которые иначе до страницы не доходят вовсе и не
+        // поддаются preventDefault, а оболочке нужны: Ctrl+W это kill-word.
+        settings.AreBrowserAcceleratorKeysEnabled = false;
         settings.AreDefaultContextMenusEnabled = false;
         settings.AreDevToolsEnabled = false;
         settings.IsStatusBarEnabled = false;
@@ -386,10 +388,14 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     /// </summary>
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
     {
-        if (_pageLoaded)
+        // Событие приходит только на потоке диспетчера, поэтому флага без блокировки достаточно.
+        if (_initialNavigationStarted)
         {
             args.Cancel = true;
+            return;
         }
+
+        _initialNavigationStarted = true;
     }
 
     /// <summary>
@@ -400,7 +406,12 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     private void OnPermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs args)
     {
         bool clipboard = args.PermissionKind is CoreWebView2PermissionKind.ClipboardRead;
-        bool ownPage = args.Uri.StartsWith($"https://{VirtualHost}/", StringComparison.OrdinalIgnoreCase);
+
+        // Сравнение по хосту, а не по префиксу строки: WebView2 вправе прислать источник
+        // без завершающего слэша, и тогда проверка префикса молча не сработала бы —
+        // пользователь получил бы браузерный диалог вместо разрешения.
+        bool ownPage = Uri.TryCreate(args.Uri, UriKind.Absolute, out var origin)
+            && string.Equals(origin.Host, VirtualHost, StringComparison.OrdinalIgnoreCase);
 
         if (clipboard && ownPage)
         {

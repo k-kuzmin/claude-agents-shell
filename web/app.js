@@ -43,6 +43,14 @@
   // обязаны дойти до xterm.js. stopPropagation здесь отнял бы их у терминала.
   //
   // Клавиши буфера обмена (Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A) в список не входят намеренно.
+  // Буквы и цифры сравниваются по event.code — физической клавише. event.key отражает
+  // раскладку: на ЙЦУКЕН та же клавиша даёт 'м' вместо 'v' и 'к' вместо 'r', и сравнение
+  // по key делает все эти ветки мёртвыми для русской раскладки.
+  // Enter, F5 и стрелки от раскладки не зависят, их имена в key корректны.
+  function codeOf(event) {
+    return typeof event.code === 'string' ? event.code : '';
+  }
+
   function isDestructiveBrowserShortcut(event) {
     if (event.key === 'F5') {
       return true;
@@ -56,12 +64,13 @@
       return false;
     }
 
-    var key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
-    if (key === 'r' || key === 'f' || key === 'p' || key === 'g') {
+    var code = codeOf(event);
+    if (code === 'KeyR' || code === 'KeyF' || code === 'KeyP' || code === 'KeyG') {
       return true;
     }
 
-    return key === '+' || key === '-' || key === '=' || key === '0';
+    return code === 'Minus' || code === 'Equal' || code === 'Digit0'
+      || code === 'NumpadAdd' || code === 'NumpadSubtract' || code === 'Numpad0';
   }
 
   document.addEventListener('keydown', function (event) {
@@ -200,21 +209,32 @@
         return false;
       }
 
-      var key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+      var code = codeOf(event);
 
-      // Ctrl+Shift+V — классическая терминальная вставка, мимо акселераторов браузера.
-      if (event.ctrlKey && event.shiftKey && !event.altKey && key === 'v') {
-        // Без preventDefault браузер вставил бы текст ещё и сам, в скрытую textarea xterm.js,
-        // и вставка задвоилась бы.
+      // Ctrl+V и Ctrl+Shift+V — вставка.
+      //
+      // Сам xterm.js вставку по Ctrl+V не делает: он отображает эту комбинацию в управляющий
+      // символ 0x16 и отменяет событие, из-за чего Chromium не выполняет команду Paste и
+      // обработчик вставки на скрытой textarea не вызывается никогда. Поэтому вставку
+      // выполняем сами, из буфера обмена.
+      //
+      // preventDefault здесь обязателен: возврат false лишь говорит xterm.js не обрабатывать
+      // клавишу, но обработчик вызывается из обычного addEventListener, и на действие
+      // браузера его возвращаемое значение не влияет.
+      //
+      // Цена решения: 0x16 (quoted-insert в readline) через Ctrl+V больше не ввести.
+      if (event.ctrlKey && !event.altKey && code === 'KeyV') {
         event.preventDefault();
         pasteFromClipboard(entry.term);
         return false;
       }
 
       // Ctrl+C: есть выделение — копируем, нет — пусть уходит SIGINT в оболочку.
-      if (event.ctrlKey && !event.shiftKey && !event.altKey && key === 'c' && entry.term.hasSelection()) {
-        // Выделение xterm.js рисует сам, в DOM его нет. Копирование браузера отработало бы
-        // по пустому выделению и успело бы затереть буфер раньше нашей асинхронной записи.
+      // Оговорка: случайное выделение мышью превращает попытку прервать агента в копирование.
+      // Так же ведёт себя Windows Terminal, поведение выбрано осознанно.
+      if (event.ctrlKey && !event.shiftKey && !event.altKey && code === 'KeyC' && entry.term.hasSelection()) {
+        // preventDefault убирает гонку: на команду Copy у xterm.js есть собственный обработчик,
+        // и он записал бы выделение в буфер синхронно, наперегонки с нашей асинхронной записью.
         event.preventDefault();
         copySelection(entry.term);
         entry.term.clearSelection();
