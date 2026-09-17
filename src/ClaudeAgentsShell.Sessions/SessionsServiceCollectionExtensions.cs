@@ -10,7 +10,10 @@ namespace ClaudeAgentsShell.Sessions;
 /// <summary>Регистрация слоя сессий: список проектов, ветка git, команды запуска.</summary>
 public static class SessionsServiceCollectionExtensions
 {
-    /// <summary>Регистрирует пути приложения, хранилище проектов, чтение и слежение за веткой.</summary>
+    /// <summary>
+    /// Регистрирует пути приложения, хранилище проектов, проверку каталогов,
+    /// чтение и слежение за веткой, сборку команд запуска.
+    /// </summary>
     public static IServiceCollection AddSessionsLayer(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -20,6 +23,7 @@ public static class SessionsServiceCollectionExtensions
 
         services.TryAddSingleton<IAppDataPaths>(static _ => AppDataPaths.ForCurrentUser());
         services.TryAddSingleton<IProjectStore, ProjectStore>();
+        services.TryAddSingleton<IDirectoryProbe, DirectoryProbe>();
 
         services.TryAddSingleton<IGitBranchReader, GitBranchReader>();
         services.TryAddSingleton<IGitBranchWatcher, GitBranchWatcher>();

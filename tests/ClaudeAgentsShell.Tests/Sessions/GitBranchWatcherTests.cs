@@ -145,6 +145,50 @@ public sealed class GitBranchWatcherTests
         Assert.Equal(0, Volatile.Read(ref raised));
     }
 
+    [Fact]
+    public async Task Исчезновение_каталога_git_снимает_слежение_и_даёт_поднять_его_заново()
+    {
+        using var temp = new TempDirectory();
+        var repository = CreateRepository(temp, "repo", "ref: refs/heads/main\n");
+        var gitDirectory = Path.Combine(repository, ".git");
+
+        await using var watcher = new GitBranchWatcher(new GitBranchReader(), Options, TimeProvider.System);
+        var branches = new List<string?>();
+        var gone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        watcher.BranchChanged += (_, args) =>
+        {
+            lock (branches)
+            {
+                branches.Add(args.Branch);
+            }
+
+            if (args.Branch is null)
+            {
+                gone.TrySetResult();
+            }
+            else if (args.Branch == "восстановлена-2")
+            {
+                restored.TrySetResult();
+            }
+        };
+
+        await watcher.WatchAsync(repository, CancellationToken.None);
+
+        // Каталог git исчез — наблюдателю больше неоткуда брать события.
+        Directory.Delete(gitDirectory, recursive: true);
+        await gone.Task.WaitAsync(Timeout, CancellationToken.None);
+
+        // Репозиторий вернулся: повторный WatchAsync обязан поднять слежение, а не упереться
+        // в мёртвую запись словаря.
+        Directory.CreateDirectory(gitDirectory);
+        await File.WriteAllTextAsync(Path.Combine(gitDirectory, "HEAD"), "ref: refs/heads/восстановлена\n", CancellationToken.None);
+        await watcher.WatchAsync(repository, CancellationToken.None);
+        await WriteHeadAsync(Path.Combine(gitDirectory, "HEAD"), "ref: refs/heads/восстановлена-2\n");
+
+        await restored.Task.WaitAsync(Timeout, CancellationToken.None);
+    }
+
     private static Task<GitBranchChangedEventArgs> NextBranch(IGitBranchWatcher watcher)
     {
         var completion = new TaskCompletionSource<GitBranchChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);

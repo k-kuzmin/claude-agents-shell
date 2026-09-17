@@ -9,6 +9,8 @@ namespace ClaudeAgentsShell.Sessions.Storage;
 /// Чтение никогда не бросает: нет файла, битый JSON, чужая версия — пустой список
 /// (раздел 8 ТЗ, приложение не падает). Запись атомарная: временный файл рядом плюс замена,
 /// поэтому сбой посреди записи оставляет на месте прежний файл целиком.
+/// Файл, который прочитать не удалось, перед перезаписью копируется в <c>projects.json.bak</c>:
+/// чужую версию формата нельзя затирать молча.
 /// </summary>
 public sealed class ProjectStore : IProjectStore, IDisposable
 {
@@ -16,6 +18,10 @@ public sealed class ProjectStore : IProjectStore, IDisposable
     public const int CurrentVersion = 1;
 
     private const string TempSuffix = ".tmp";
+
+    /// <summary>Суффикс копии файла, который прочитать не удалось: <c>projects.json.bak</c>.</summary>
+    public const string BackupSuffix = ".bak";
+
     private const int StreamBufferBytes = 4096;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
@@ -117,6 +123,8 @@ public sealed class ProjectStore : IProjectStore, IDisposable
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            await BackupUnreadableFileAsync(file, cancellationToken).ConfigureAwait(false);
+
             await using (var stream = new FileStream(
                 temporary,
                 FileMode.Create,
@@ -145,6 +153,62 @@ public sealed class ProjectStore : IProjectStore, IDisposable
         finally
         {
             _writeGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Если на диске лежит файл, который мы прочитать не смогли — чужой версии или битый, —
+    /// он копируется рядом перед перезаписью. Такой файл написан не нами: молча затирать
+    /// чужие данные нельзя, а показать их пользователю в этом слое нечем.
+    /// Сбой копирования не глушится: запись тогда не происходит и прежний файл остаётся цел.
+    /// </summary>
+    private static async Task BackupUnreadableFileAsync(string file, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(file) || !await IsUnreadableAsync(file, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        var backup = file + BackupSuffix;
+        if (File.Exists(backup))
+        {
+            // Прежнюю копию не затираем: первая обычно и есть самая ценная.
+            backup = $"{file}.{DateTime.UtcNow:yyyyMMdd-HHmmss}{BackupSuffix}";
+        }
+
+        File.Copy(file, backup, overwrite: false);
+    }
+
+    /// <summary>Файл существует, но <see cref="LoadAsync" /> прочитал бы его как «данных нет».</summary>
+    private static async Task<bool> IsUnreadableAsync(string file, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = new FileStream(
+                file,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                StreamBufferBytes,
+                useAsync: true);
+
+            if (stream.Length == 0)
+            {
+                return false;
+            }
+
+            using var document = await JsonDocument
+                .ParseAsync(stream, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            return document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("version", out var version)
+                || !version.TryGetInt32(out var value)
+                || value != CurrentVersion;
+        }
+        catch (JsonException)
+        {
+            return true;
         }
     }
 

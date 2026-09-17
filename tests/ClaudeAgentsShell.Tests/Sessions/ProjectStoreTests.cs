@@ -186,6 +186,45 @@ public sealed class ProjectStoreTests
         }
     }
 
+    [Fact]
+    public async Task Файл_чужой_версии_копируется_рядом_перед_перезаписью()
+    {
+        using var temp = new TempDirectory();
+        using var store = CreateStore(temp, out var paths);
+        const string foreign = """
+            { "version": 2, "projects": [ { "id": "9f2c0f4e-0a1b-4c2d-8e3f-0a1b2c3d4e5f", "name": "из будущего", "path": "D:/src/future", "workspace": "чего мы ещё не знаем" } ] }
+            """;
+        await File.WriteAllTextAsync(paths.ProjectsFile, foreign, CancellationToken.None);
+
+        await store.SaveAsync([Project("новый")], CancellationToken.None);
+
+        var backup = paths.ProjectsFile + ".bak";
+        Assert.True(File.Exists(backup), "копия файла чужой версии не создана");
+        Assert.Equal(foreign, await File.ReadAllTextAsync(backup, CancellationToken.None));
+
+        var loaded = await store.LoadAsync(CancellationToken.None);
+        Assert.Equal("новый", Assert.Single(loaded).Name);
+    }
+
+    [Fact]
+    public async Task Битый_файл_тоже_копируется_а_свой_нет()
+    {
+        using var temp = new TempDirectory();
+        using var store = CreateStore(temp, out var paths);
+        await File.WriteAllTextAsync(paths.ProjectsFile, "{ это не json", CancellationToken.None);
+
+        await store.SaveAsync([Project("первый")], CancellationToken.None);
+
+        var backup = paths.ProjectsFile + ".bak";
+        Assert.Equal("{ это не json", await File.ReadAllTextAsync(backup, CancellationToken.None));
+
+        // Файл своей версии копией не обрастает: перезапись собственных данных — штатная работа.
+        await store.SaveAsync([Project("второй")], CancellationToken.None);
+
+        Assert.Equal("{ это не json", await File.ReadAllTextAsync(backup, CancellationToken.None));
+        Assert.Single(Directory.GetFiles(Path.GetDirectoryName(paths.ProjectsFile)!, "*.bak"));
+    }
+
     /// <summary>
     /// Сравнение по полям, а не через равенство записи: ProjectDefinition.ExtraArgs — это
     /// IReadOnlyList, и равенство записи сравнило бы списки по ссылке.
