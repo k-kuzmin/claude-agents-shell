@@ -43,6 +43,11 @@ public partial class MainWindow : Window
         // Дескриптор уже есть — можно спросить рабочую область именно того монитора,
         // на котором оказалось окно, и вписаться в неё вместе с масштабом этого монитора.
         WorkAreaPlacement.FitIntoWorkArea(this);
+
+        // Своё обрамление означает своё поведение при разворачивании: без этого окно
+        // без системной рамки растягивается на весь экран и накрывает панель задач —
+        // ровно тот дефект, который нашёлся на приёмке M1.
+        WorkAreaPlacement.KeepMaximizedWithinWorkArea(this);
     }
 
     /// <inheritdoc />
@@ -93,6 +98,21 @@ public partial class MainWindow : Window
 
         base.OnClosing(e);
     }
+
+    // Кнопки своего обрамления ходят теми же системными командами, что и штатные:
+    // «закрыть» доходит до OnClosing обычным WM_CLOSE, а не зовёт Close() в обход
+    // логики гашения.
+    private void OnMinimizeWindow(object sender, ExecutedRoutedEventArgs e) =>
+        SystemCommands.MinimizeWindow(this);
+
+    private void OnMaximizeWindow(object sender, ExecutedRoutedEventArgs e) =>
+        SystemCommands.MaximizeWindow(this);
+
+    private void OnRestoreWindow(object sender, ExecutedRoutedEventArgs e) =>
+        SystemCommands.RestoreWindow(this);
+
+    private void OnCloseWindow(object sender, ExecutedRoutedEventArgs e) =>
+        SystemCommands.CloseWindow(this);
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {

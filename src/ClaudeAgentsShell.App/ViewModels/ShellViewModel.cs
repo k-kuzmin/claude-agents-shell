@@ -16,6 +16,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
     private readonly IUserPrompt _prompt;
     private readonly IUiDispatcher _dispatcher;
 
+    private bool _terminalPageReady;
     private bool _disposed;
 
     /// <inheritdoc cref="ShellViewModel" />
@@ -50,8 +51,10 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
                 : Task.CompletedTask,
             onError: ReportError);
 
-        // Окно истории сессий — этап M3. Кнопка на строке проекта есть, но пока отключена.
+        // Окно истории сессий — этап M3, окно настроек — M5. Кнопки на своих местах,
+        // но пока отключены.
         ShowHistoryCommand = new RelayCommand(static _ => { }, static _ => false);
+        ShowSettingsCommand = new RelayCommand(static _ => { }, static _ => false);
 
         NewSessionCommand = new AsyncRelayCommand(
             _ => OpenSessionInActiveProjectAsync(CancellationToken.None),
@@ -89,6 +92,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
     /// <summary>История сессий проекта. Отключена до этапа M3.</summary>
     public ICommand ShowHistoryCommand { get; }
 
+    /// <summary>Настройки приложения. Отключены до этапа M5.</summary>
+    public ICommand ShowSettingsCommand { get; }
+
     /// <summary>Новая сессия в активном проекте (кнопка «плюс» в полосе вкладок).</summary>
     public ICommand NewSessionCommand { get; }
 
@@ -99,20 +105,48 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
     public ICommand CloseTabCommand { get; }
 
     /// <summary>
-    /// Проект, в котором откроется новая сессия: проект активной вкладки, а пока вкладок нет —
-    /// строка, выбранная пользователем. Без второго варианта на холодном старте новую сессию
-    /// негде было бы открыть, кроме как кнопкой на строке проекта.
+    /// Выбранный проект: его вкладки показаны в полосе и в нём откроется новая сессия.
+    /// Выбор всегда явный — клик по строке, открытие вкладки или переход на вкладку.
+    /// <c>null</c> только на холодном старте, пока пользователь ничего не выбрал.
     /// </summary>
-    public ProjectRowViewModel? ActiveProjectRow =>
-        Tabs.ActiveTab is { } tab
-            ? Projects.Rows.FirstOrDefault(row => row.Id == tab.ProjectId)
-            : Projects.SelectedRow;
+    public ProjectRowViewModel? ActiveProjectRow => Projects.SelectedRow;
+
+    /// <summary>
+    /// В области терминала показан терминал, а не заглушка. Ровно один WebView2 на окно
+    /// прячется целиком: показывать терминал чужого проекта, когда у выбранного вкладок нет,
+    /// значило бы обманывать пользователя.
+    /// <para>
+    /// Пока страница терминалов не поднялась, область остаётся показанной, даже если
+    /// показывать ещё нечего: WebView2 — дочерний HWND, и он создаётся, когда впервые
+    /// получает место в разметке. Спрятав его до первого показа, мы рисковали бы
+    /// не дождаться готовности страницы вообще.
+    /// </para>
+    /// </summary>
+    public bool IsTerminalVisible => !_terminalPageReady || Tabs.ActiveTab is not null;
+
+    /// <summary>Подсказка на месте терминала, когда показывать нечего.</summary>
+    public string TerminalPlaceholderText => ActiveProjectRow switch
+    {
+        null => "Выберите проект слева или добавьте новый.",
+        { IsAvailable: false } row => $"Каталог проекта «{row.Name}» недоступен: {row.Path}",
+        { } row => $"В проекте «{row.Name}» нет открытых сессий.\n"
+            + "Нажмите + в полосе вкладок или Ctrl+Shift+T.",
+    };
 
     /// <summary>Поднимает страницу терминалов и читает список проектов.</summary>
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await _workspace.StartAsync(cancellationToken).ConfigureAwait(true);
+
+        // Страница поднялась, её HWND создан — теперь область терминала можно прятать
+        // под заглушку, не рискуя готовностью самой страницы.
+        _terminalPageReady = true;
+
         await Projects.LoadAsync(cancellationToken).ConfigureAwait(true);
+
+        // Список строк перечитан: полоса вкладок не должна остаться на проекте,
+        // строки которого в новом списке может уже не быть.
+        SelectProject(null);
         RefreshSessionCounts();
     }
 
@@ -122,8 +156,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         var row = await Projects.AddProjectAsync(cancellationToken).ConfigureAwait(true);
         if (row is not null)
         {
-            // Сразу после добавления «+» в полосе вкладок должен работать.
-            Projects.Select(row);
+            // Сразу после добавления «+» в полосе вкладок должен работать, а полоса —
+            // показывать вкладки нового проекта, то есть быть пустой.
+            SelectProject(row);
             RefreshSessionCounts();
         }
     }
@@ -142,6 +177,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
             _prompt.ShowError(
                 "Каталог недоступен",
                 $"Каталог проекта «{row.Name}» недоступен: {row.Path}");
+            RefreshCurrentProject();
             return null;
         }
 
@@ -163,7 +199,10 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         }
 
         var tab = new TabViewModel(terminalId, row.Id, row.Name);
-        Projects.Select(row);
+
+        // Проект выбирается до добавления вкладки: иначе новая вкладка легла бы в полосу
+        // чужого проекта и тут же из неё исчезла.
+        SelectProject(row);
         Tabs.Add(tab);
 
         // Открытую вкладку страница показывает сама внутри OpenAsync — второй показ
@@ -181,24 +220,21 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    /// Клик по строке проекта: переключает на активную вкладку проекта.
-    /// Открытых вкладок нет — не делает ничего.
+    /// Клик по строке проекта: полоса переключается на вкладки этого проекта, а видимой
+    /// становится та из них, на которой пользователь был последней. Вкладок нет — полоса
+    /// пуста, на месте терминала заглушка. Вкладки других проектов при этом продолжают жить.
     /// </summary>
     public async Task ActivateProjectAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(row);
 
-        Projects.Select(row);
+        var tab = Tabs.ActiveTabFor(row.Id);
+        SelectProject(row);
 
-        if (Tabs.ActiveTabFor(row.Id) is { } tab)
+        if (tab is not null)
         {
             await ActivateTabAsync(tab, cancellationToken).ConfigureAwait(true);
-            return;
         }
-
-        // Вкладок у проекта нет: переключать нечего, но выбор строки теперь виден
-        // и в подсветке, и в кнопке новой сессии.
-        RefreshCurrentProject();
     }
 
     /// <summary>Делает вкладку видимой: на странице меняется видимость контейнера, не более.</summary>
@@ -212,8 +248,11 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         }
 
         await _workspace.ActivateAsync(tab.TerminalId, cancellationToken).ConfigureAwait(true);
+
+        // Переход на вкладку выбирает её проект: полоса обязана показывать ту вкладку,
+        // которая видна в области терминала.
+        SelectProject(Projects.Rows.FirstOrDefault(row => row.Id == tab.ProjectId));
         Tabs.SetActive(tab);
-        Projects.Select(Projects.Rows.FirstOrDefault(row => row.Id == tab.ProjectId));
         RefreshCurrentProject();
     }
 
@@ -225,7 +264,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(tab);
 
-        if (!Tabs.Tabs.Contains(tab))
+        // Проверка идёт по всем открытым вкладкам, а не по видимой полосе: иначе вкладка
+        // невыбранного проекта считалась бы уже закрытой.
+        if (!Tabs.Contains(tab))
         {
             // Вкладку уже закрыли: повторный вызов приходит от удержанного Ctrl+Shift+W,
             // пока на экране висело подтверждение предыдущего.
@@ -329,6 +370,18 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         RefreshCurrentProject();
     }
 
+    /// <summary>
+    /// Единственное место, где меняется выбранный проект: выбор строки и содержимое полосы
+    /// вкладок обязаны меняться вместе, иначе полоса покажет вкладки одного проекта,
+    /// а подсветка — другой.
+    /// </summary>
+    private void SelectProject(ProjectRowViewModel? row)
+    {
+        Projects.Select(row);
+        Tabs.ShowProject(row?.Id);
+        RefreshCurrentProject();
+    }
+
     private void RefreshCurrentProject()
     {
         var target = ActiveProjectRow;
@@ -338,6 +391,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         }
 
         Raise(nameof(ActiveProjectRow));
+        Raise(nameof(IsTerminalVisible));
+        Raise(nameof(TerminalPlaceholderText));
     }
 
     private void OnTerminalExited(object? sender, TerminalExitedEventArgs e)
