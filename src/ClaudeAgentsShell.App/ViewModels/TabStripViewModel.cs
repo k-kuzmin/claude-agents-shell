@@ -73,7 +73,10 @@ public sealed class TabStripViewModel : ObservableObject
         get => _awaitingInputCount;
         private set
         {
-            if (SetProperty(ref _awaitingInputCount, value))
+            // HasAwaitingInput — булев, и поднимать его на каждое изменение счётчика значит
+            // звать лишний реквери команд окна на переходах вида 1 → 2. Поднимаем на грани.
+            bool had = _awaitingInputCount > 0;
+            if (SetProperty(ref _awaitingInputCount, value) && had != value > 0)
             {
                 Raise(nameof(HasAwaitingInput));
             }
@@ -332,7 +335,9 @@ public sealed class TabStripViewModel : ObservableObject
 
     private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(TabViewModel.State) or nameof(TabViewModel.IsAwaitingInput))
+        // Только State: его сеттер поднимает и IsAwaitingInput, поэтому реакция на оба
+        // свойства давала бы два одинаковых прохода по списку на одно логическое изменение.
+        if (e.PropertyName is nameof(TabViewModel.State))
         {
             RecalculateAwaitingInput();
         }
