@@ -52,11 +52,25 @@ internal static class HookPayload
         }
     }
 
+    /// <summary>
+    /// Имя хука из полезной нагрузки в <see cref="HookKind"/>. Незнакомое имя —
+    /// <see cref="HookKind.Unknown"/>, то есть не событие.
+    /// </summary>
+    /// <remarks>
+    /// Поля, которые хуки приносят сверх <c>session_id</c> и <c>cwd</c>, не разбираются:
+    /// <c>agent_id</c> и <c>agent_type</c> у сабагентов, <c>user_input</c> у промпта.
+    /// Состояние вкладки от них не зависит — счётчик сабагентов приложение ведёт само,
+    /// а текст промпта ему не нужен вовсе, — и расширять ради них <see cref="HookEvent"/>,
+    /// зафиксированный контрактом этапа, не за чем.
+    /// </remarks>
     private static HookKind ParseKind(string? name) => name switch
     {
         "SessionStart" => HookKind.SessionStart,
         "Stop" => HookKind.Stop,
         "SessionEnd" => HookKind.SessionEnd,
+        "UserPromptSubmit" => HookKind.UserPromptSubmit,
+        "SubagentStart" => HookKind.SubagentStart,
+        "SubagentStop" => HookKind.SubagentStop,
         _ => HookKind.Unknown,
     };
 

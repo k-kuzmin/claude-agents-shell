@@ -129,8 +129,6 @@ internal sealed class FakeTerminalWorkspace : ITerminalWorkspace
 
     public event EventHandler<TerminalExitedEventArgs>? TerminalExited;
 
-    public event EventHandler<TerminalInputEventArgs>? UserInputReceived;
-
     public IReadOnlyList<TerminalId> Terminals => _terminals;
 
     /// <summary>Каталоги, в которых запрашивался запуск, по порядку.</summary>
@@ -217,10 +215,6 @@ internal sealed class FakeTerminalWorkspace : ITerminalWorkspace
     /// <summary>Сообщает, что процесс вкладки завершился.</summary>
     public void RaiseExited(TerminalId terminalId, int exitCode) =>
         TerminalExited?.Invoke(this, new TerminalExitedEventArgs(terminalId, exitCode));
-
-    /// <summary>Сообщает, что пользователь ввёл что-то во вкладку.</summary>
-    public void RaiseUserInput(TerminalId terminalId, ReadOnlyMemory<byte> data = default) =>
-        UserInputReceived?.Invoke(this, new TerminalInputEventArgs(terminalId, data));
 
     public ValueTask DisposeAsync()
     {
