@@ -8,10 +8,16 @@ namespace ClaudeAgentsShell.Terminal.Protocol;
 /// </summary>
 public abstract record InboundBridgeMessage(TerminalId TerminalId)
 {
-    /// <summary>Ввод пользователя: <c>{"type":"in","id":"t1","b64":"…"}</c>.</summary>
+    /// <summary>Ввод со страницы: <c>{"type":"in","id":"t1","b64":"…","user":true}</c>.</summary>
     /// <param name="TerminalId">Вкладка-источник.</param>
     /// <param name="Data">Сырые байты, раскодированные из base64.</param>
-    public sealed record Input(TerminalId TerminalId, ReadOnlyMemory<byte> Data) : InboundBridgeMessage(TerminalId);
+    /// <param name="FromUser">
+    /// Байты набраны или вставлены человеком. Поле <c>user</c> необязательное: его отсутствие
+    /// читается как <c>false</c>, то есть «это терминал ответил программе, а не человек работает».
+    /// Зачем различать — см. <see cref="Application.Ports.TerminalInputEventArgs.FromUser"/>.
+    /// </param>
+    public sealed record Input(TerminalId TerminalId, ReadOnlyMemory<byte> Data, bool FromUser)
+        : InboundBridgeMessage(TerminalId);
 
     /// <summary>Новый размер: <c>{"type":"resize","id":"t1","cols":120,"rows":34}</c>.</summary>
     /// <param name="TerminalId">Вкладка, которой касается размер.</param>

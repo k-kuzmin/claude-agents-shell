@@ -2,14 +2,36 @@ using ClaudeAgentsShell.Domain;
 
 namespace ClaudeAgentsShell.Application.Ports;
 
-/// <summary>Пользовательский ввод со страницы: сырые байты, готовые для stdin.</summary>
-public sealed class TerminalInputEventArgs(TerminalId terminalId, ReadOnlyMemory<byte> data) : EventArgs
+/// <summary>Ввод со страницы: сырые байты, готовые для stdin.</summary>
+/// <param name="terminalId">Вкладка, из которой пришёл ввод.</param>
+/// <param name="data">Сырые байты ввода.</param>
+/// <param name="fromUser">Байты набраны или вставлены человеком, а не сгенерированы терминалом.</param>
+public sealed class TerminalInputEventArgs(TerminalId terminalId, ReadOnlyMemory<byte> data, bool fromUser)
+    : EventArgs
 {
     /// <summary>Вкладка, из которой пришёл ввод.</summary>
     public TerminalId TerminalId { get; } = terminalId;
 
     /// <summary>Сырые байты ввода.</summary>
     public ReadOnlyMemory<byte> Data { get; } = data;
+
+    /// <summary>
+    /// Байты пришли от человека — нажатие клавиши или вставка, — а не от самого терминала.
+    /// </summary>
+    /// <remarks>
+    /// Различать обязательно. В stdin уходит и то и другое, но «пользователь работает»
+    /// означает только первое. Страница отдаёт одним каналом с нажатиями ещё и ответы
+    /// терминала на запросы программы: отчёт о получении и потере фокуса (<c>ESC [ I</c>,
+    /// <c>ESC [ O</c>), ответ на запрос Device Attributes (<c>ESC [ ?1;2c</c>), ответ
+    /// на запрос цвета и отчёты о размере окна и знакоместа. По содержимому байтов их
+    /// не отфильтровать надёжно, поэтому признак ставит страница, где источник события известен.
+    /// <para>
+    /// Замечено живьём: показ вкладки зовёт <c>term.focus()</c>, терминал отвечает
+    /// <c>ESC [ I</c>, и переключение вкладок выглядело как ввод — точка состояния сбрасывалась
+    /// в «работает», а счётчик «N ждёт ввода» обнулял сам себя по клику.
+    /// </para>
+    /// </remarks>
+    public bool FromUser { get; } = fromUser;
 }
 
 /// <summary>Страница пересчитала размер терминала после <c>fit()</c>.</summary>
