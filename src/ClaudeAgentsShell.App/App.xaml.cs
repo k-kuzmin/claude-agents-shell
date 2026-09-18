@@ -64,13 +64,14 @@ public partial class App : System.Windows.Application
         services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
         services.AddSingleton<IUserPrompt, MessageBoxUserPrompt>();
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
+        services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
         // IDirectoryProbe регистрирует слой Sessions: Directory.* — файловая система,
         // а не WPF-специфика, и сборке оболочки не место её трогать.
 
         // Захватывает Dispatcher.CurrentDispatcher, поэтому контейнер строится в потоке UI.
         services.AddSingleton<IUiDispatcher, WpfUiDispatcher>();
 
-        // Источник состояния вкладок: хуки Claude Code и ввод пользователя (раздел 5.3 ТЗ).
+        // Единственный источник состояния вкладок — хуки Claude Code (раздел 5.3 ТЗ).
         services.AddSingleton<SessionStateCoordinator>();
 
         services.AddSingleton<ProjectListViewModel>();
