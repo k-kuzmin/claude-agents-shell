@@ -15,6 +15,9 @@ public sealed class SessionStateCoordinatorTests
     private const string HookPath = @"D:\src\alpha-from-hook";
     private const string SessionId = "11111111-2222-3333-4444-555555555555";
 
+    /// <summary>Повторяет <c>SessionStateCoordinator.MaxTitleAttempts</c>: там он закрытый.</summary>
+    private const int MaxTitleAttempts = 4;
+
     [Fact]
     public async Task SessionStart_переводит_вкладку_в_простаивает()
     {
@@ -100,6 +103,7 @@ public sealed class SessionStateCoordinatorTests
 
         harness.Hooks.Raise(HookKind.SessionStart, "tok-чужой", SessionId, ProjectPath);
         harness.Hooks.Raise(HookKind.Stop, null, SessionId, ProjectPath);
+        harness.Pump();
 
         Assert.Empty(harness.Sink.StateLog);
         Assert.Empty(harness.History.Requested);
@@ -120,16 +124,16 @@ public sealed class SessionStateCoordinatorTests
     public async Task Хук_доходит_до_вкладки_только_через_диспетчер()
     {
         // HttpListener поднимает событие в потоке пула: трогать полосу вкладок оттуда нельзя.
-        var dispatcher = new QueuedUiDispatcher();
-        using var harness = new Harness(dispatcher);
+        using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
-        harness.RaiseHook(HookKind.SessionStart, tab);
+        // Намеренно без Pump: до прокрутки очереди событие не должно доходить до вкладки.
+        harness.Hooks.Raise(HookKind.SessionStart, harness.Workspace.TokenFor(tab), SessionId, ProjectPath);
 
         Assert.Empty(harness.Sink.StateLog);
-        Assert.Equal(1, dispatcher.PostCount);
+        Assert.Equal(1, harness.Dispatcher.PostCount);
 
-        dispatcher.Drain();
+        harness.Pump();
 
         Assert.Equal(TabState.Idle, harness.Sink.States[tab]);
     }
@@ -139,14 +143,13 @@ public sealed class SessionStateCoordinatorTests
     {
         // Горячий путь ввода: событие уже поднято в потоке интерфейса, и лишнее замыкание
         // с очередью диспетчера на каждое нажатие клавиши здесь недопустимо.
-        var dispatcher = new QueuedUiDispatcher();
-        using var harness = new Harness(dispatcher);
+        using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.Workspace.RaiseUserInput(tab);
 
         Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
-        Assert.Equal(0, dispatcher.PostCount);
+        Assert.Equal(0, harness.Dispatcher.PostCount);
     }
 
     [Fact]
@@ -361,42 +364,95 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Прочитанный_транскрипт_без_заголовка_повтор_закрывает()
+    public async Task Заголовок_появившийся_не_с_первого_хода_всё_равно_доезжает()
     {
-        // Сводка без заголовка — это ответ «искали и не нашли»: на корпусе пользователя
-        // таких файлов 2,7 %, и перечитывать их на каждый ответ агента нельзя.
-        using var harness = new Harness();
-        var tab = await harness.StartWithTabAsync();
-        harness.History.Seed(SessionId, title: null);
-
-        harness.RaiseHook(HookKind.Stop, tab);
-        await harness.SettleAsync();
-
-        harness.RaiseHook(HookKind.Stop, tab);
-        harness.RaiseHook(HookKind.Stop, tab);
-        await harness.SettleAsync();
-
-        Assert.Single(harness.History.Requested);
-        Assert.Empty(harness.Sink.ShortTitles);
-    }
-
-    [Fact]
-    public async Task Пустой_результат_на_SessionStart_повтор_не_закрывает()
-    {
-        // На SessionStart транскрипт ещё дописывается, и отсутствие заголовка там ничего
-        // не доказывает — попытка по Stop обязана остаться.
+        // Первым ходом бывает слэш-команда (/init, /review, промпт MCP): её строка обёрнута
+        // в <command-name> и заголовком не становится. Настоящий запрос приходит следующим
+        // сообщением, и вкладка обязана получить имя, а не остаться «новой сессией» навсегда.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
         harness.History.Seed(SessionId, title: null);
 
         harness.RaiseHook(HookKind.SessionStart, tab);
         await harness.SettleAsync();
-        Assert.Single(harness.History.Requested);
 
         harness.RaiseHook(HookKind.Stop, tab);
         await harness.SettleAsync();
+        Assert.Empty(harness.Sink.ShortTitles);
 
-        Assert.Equal(2, harness.History.Requested.Count);
+        // Пользователь наконец написал настоящий запрос.
+        harness.History.Seed(SessionId, "почини сборку");
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        Assert.Equal("почини сборку", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Число_чтений_за_сессию_ограничено()
+    {
+        // Повтор висит на Stop, то есть на каждом ответе агента: без потолка транскрипт
+        // перечитывался бы весь сеанс.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, title: null);
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+
+        for (var i = 0; i < 10; i++)
+        {
+            harness.RaiseHook(HookKind.Stop, tab);
+            await harness.SettleAsync();
+        }
+
+        Assert.Equal(MaxTitleAttempts, harness.History.Requested.Count);
+        Assert.Empty(harness.Sink.ShortTitles);
+    }
+
+    [Fact]
+    public async Task Исчерпанный_бюджет_у_новой_сессии_начинается_заново()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, title: null);
+
+        for (var i = 0; i < MaxTitleAttempts + 2; i++)
+        {
+            harness.RaiseHook(HookKind.Stop, tab);
+            await harness.SettleAsync();
+        }
+
+        Assert.Equal(MaxTitleAttempts, harness.History.Requested.Count);
+
+        const string other = "99999999-8888-7777-6666-555555555555";
+        harness.History.Seed(other, "вторая сессия");
+        harness.RaiseHook(HookKind.SessionStart, tab, sessionId: other);
+        await harness.SettleAsync();
+
+        Assert.Equal("вторая сессия", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Stop_с_новым_идентификатором_чтение_ставит_даже_после_Resolved()
+    {
+        // SessionStart мог не дойти: curl не достучался или пришёл без session_id. Тогда первым
+        // хуком новой сессии окажется Stop, и стадия поиска от прежней сессии не должна его
+        // блокировать — иначе на экране навсегда останется имя закончившейся.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "первая сессия");
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+        Assert.Equal("первая сессия", harness.Sink.ShortTitles[tab]);
+
+        const string other = "99999999-8888-7777-6666-555555555555";
+        harness.History.Seed(other, "вторая сессия");
+        harness.RaiseHook(HookKind.Stop, tab, sessionId: other);
+        await harness.SettleAsync();
+
+        Assert.Equal("вторая сессия", harness.Sink.ShortTitles[tab]);
     }
 
     [Fact]
@@ -591,17 +647,23 @@ public sealed class SessionStateCoordinatorTests
             () => harness.Coordinator.StartAsync(harness.Sink, CancellationToken.None));
     }
 
+    /// <remarks>
+    /// Диспетчер всегда с очередью, а не встроенный: чтение транскрипта уходит в поток пула,
+    /// и встроенный исполнял бы колбэк «только для потока интерфейса» прямо там. Тогда словарь
+    /// сессий внутри координатора трогали бы два потока сразу — гонка, которая проявляется
+    /// не всегда. С очередью колбэки исполняет только поток теста, в <see cref="Harness.Pump"/>.
+    /// </remarks>
     private sealed class Harness : IDisposable
     {
-        private readonly QueuedUiDispatcher? _queued;
         private int _counter;
 
-        public Harness(QueuedUiDispatcher? dispatcher = null)
+        public Harness()
         {
-            _queued = dispatcher;
-            Coordinator = new SessionStateCoordinator(
-                Hooks, Workspace, History, (IUiDispatcher?)dispatcher ?? new InlineUiDispatcher());
+            Dispatcher = new QueuedUiDispatcher();
+            Coordinator = new SessionStateCoordinator(Hooks, Workspace, History, Dispatcher);
         }
+
+        public QueuedUiDispatcher Dispatcher { get; }
 
         public FakeHookListener Hooks { get; } = new();
 
@@ -635,22 +697,30 @@ public sealed class SessionStateCoordinatorTests
             return tab;
         }
 
-        /// <summary>Отправляет хук от имени конкретной вкладки.</summary>
+        /// <summary>Отправляет хук от имени конкретной вкладки и сразу прокручивает диспетчер.</summary>
         public void RaiseHook(
             HookKind kind,
             TerminalId tab,
             string? sessionId = SessionId,
-            string? workingDirectory = ProjectPath) =>
+            string? workingDirectory = ProjectPath)
+        {
             Hooks.Raise(kind, Workspace.TokenFor(tab), sessionId, workingDirectory);
+            Pump();
+        }
+
+        /// <summary>Прокручивает очередь диспетчера — аналог кадра потока интерфейса.</summary>
+        public void Pump() => Dispatcher.Drain();
 
         /// <summary>
         /// Ждёт, пока догонит фоновое чтение транскрипта, и прокручивает очередь диспетчера.
         /// </summary>
         public async Task SettleAsync()
         {
-            _queued?.Drain();
+            // Пока очередь не прокручена, чтение могло и не начаться: его ставит ApplyHook,
+            // а он сам приходит через диспетчер.
+            Pump();
             await Coordinator.PendingTitleWork;
-            _queued?.Drain();
+            Pump();
         }
 
         public void Dispose() => Coordinator.Dispose();

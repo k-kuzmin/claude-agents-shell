@@ -109,6 +109,13 @@ internal sealed class FakeUserPrompt : IUserPrompt
 }
 
 /// <summary>Поток интерфейса в тестах — текущий поток.</summary>
+/// <remarks>
+/// Годится только там, где отправитель уже находится в «потоке интерфейса»: колбэк исполняется
+/// прямо на вызывающем потоке, и если отправить его из пула, обещание «только из потока
+/// интерфейса» окажется нарушенным. Для кода, у которого работа уходит в пул, берите
+/// <see cref="QueuedUiDispatcher"/>: он копит колбэки, а исполняет их тот поток, который зовёт
+/// <see cref="QueuedUiDispatcher.Drain"/>.
+/// </remarks>
 internal sealed class InlineUiDispatcher : IUiDispatcher
 {
     public void Post(Action action) => action();
@@ -365,25 +372,62 @@ internal sealed class FakeTabStateSink : ITabStateSink
 internal sealed class QueuedUiDispatcher : IUiDispatcher
 {
     private readonly Queue<Action> _pending = new();
+    private int _postCount;
 
     /// <summary>Сколько работы было отправлено в поток интерфейса.</summary>
-    public int PostCount { get; private set; }
+    public int PostCount
+    {
+        get
+        {
+            lock (_pending)
+            {
+                return _postCount;
+            }
+        }
+    }
 
     /// <summary>Есть ли неисполненная работа.</summary>
-    public bool HasPending => _pending.Count > 0;
+    public bool HasPending
+    {
+        get
+        {
+            lock (_pending)
+            {
+                return _pending.Count > 0;
+            }
+        }
+    }
 
+    /// <remarks>
+    /// Отправлять могут и потоки пула — настоящий диспетчер WPF тем и занят, — поэтому очередь
+    /// под замком. Сами колбэки исполняет только <see cref="Drain"/>, то есть ровно один поток.
+    /// </remarks>
     public void Post(Action action)
     {
-        PostCount++;
-        _pending.Enqueue(action);
+        lock (_pending)
+        {
+            _postCount++;
+            _pending.Enqueue(action);
+        }
     }
 
     /// <summary>Выполняет накопленную работу — аналог прокрутки очереди диспетчера WPF.</summary>
     public void Drain()
     {
-        while (_pending.Count > 0)
+        while (true)
         {
-            _pending.Dequeue()();
+            Action action;
+            lock (_pending)
+            {
+                if (_pending.Count == 0)
+                {
+                    return;
+                }
+
+                action = _pending.Dequeue();
+            }
+
+            action();
         }
     }
 }
