@@ -236,7 +236,11 @@ public sealed class SessionStateCoordinator : IDisposable
     private void RequestTitle(ITabStateSink sink, TerminalId terminalId, HookEvent hookEvent)
     {
         _sessions.TryGetValue(terminalId, out var probe);
-        if (probe is { TitleResolved: true })
+
+        // Имя уже есть, его заведомо не будет, или чтение идёт прямо сейчас — за тот же
+        // транскрипт второй раз не беремся. Без этого каждый Stop, то есть каждый ответ агента,
+        // запускал бы новый проход по растущему файлу, и проходы бы ещё и накладывались.
+        if (probe is { Lookup: not TitleLookup.Pending })
         {
             return;
         }
@@ -264,45 +268,83 @@ public sealed class SessionStateCoordinator : IDisposable
             return;
         }
 
-        _sessions[terminalId] = new SessionProbe(sessionId, workingDirectory, TitleResolved: false);
+        _sessions[terminalId] = new SessionProbe(sessionId, workingDirectory, TitleLookup.InFlight);
 
-        var load = LoadTitleAsync(sink, terminalId, sessionId, workingDirectory);
+        // «Искали и не нашли» доказывает, что заголовка не будет, только по Stop: агент уже
+        // ответил, значит первое сообщение пользователя в транскрипте записано. На SessionStart
+        // файл ещё дописывается, и пустой результат там ничего не значит.
+        var conclusive = hookEvent.Kind == HookKind.Stop;
+
+        var load = LoadTitleAsync(sink, terminalId, sessionId, workingDirectory, conclusive);
         PendingTitleWork = PendingTitleWork.IsCompleted ? load : Task.WhenAll(PendingTitleWork, load);
     }
 
     /// <summary>
     /// Читает транскрипт и, если из первого сообщения вышло короткое имя, отдаёт его вкладке.
     /// </summary>
+    /// <param name="sink">Полоса вкладок на момент запроса.</param>
+    /// <param name="terminalId">Вкладка, которой нужен заголовок.</param>
+    /// <param name="sessionId">Сессия, чей транскрипт читается.</param>
+    /// <param name="workingDirectory">Каталог, в котором лежит транскрипт.</param>
+    /// <param name="conclusive">
+    /// Пустой результат означает «заголовка не будет» и снимает вкладку с дальнейших попыток.
+    /// </param>
     /// <remarks>
-    /// Чтение уходит с потока интерфейса через <c>ConfigureAwait(false)</c> и не задерживает
-    /// ни отрисовку, ни приём следующих хуков. Метод не бросает: заголовок вкладки — не повод
-    /// ронять приложение, а формат <c>.jsonl</c> считается нестабильным (раздел 7 CLAUDE.md).
+    /// Метод не бросает: заголовок вкладки — не повод ронять приложение, а формат <c>.jsonl</c>
+    /// считается нестабильным (раздел 7 CLAUDE.md).
     /// </remarks>
     private async Task LoadTitleAsync(
         ITabStateSink sink,
         TerminalId terminalId,
         string sessionId,
-        string workingDirectory)
+        string workingDirectory,
+        bool conclusive)
     {
+        // Уступаем поток интерфейса прежде, чем трогать порт: заголовок не стоит ни кадра
+        // вывода терминала.
+        await Task.Yield();
+
         SessionSummary? summary;
         try
         {
-            summary = await _history.ReadOneAsync(workingDirectory, sessionId, _lifetimeToken).ConfigureAwait(false);
+            // Task.Run, а не голый await: до первого настоящего await порт успевает сделать
+            // FileInfo.Exists и открыть FileStream, а открытие файла синхронно даже
+            // с useAsync: true. Под антивирусом CreateFile блокируется на десятки миллисекунд,
+            // и держать их в потоке интерфейса нельзя — хуки идут с приоритетом Normal, то есть
+            // впереди очереди кадров вывода терминала. Одного Task.Yield тут мало: при
+            // установленном SynchronizationContext он возвращает продолжение в тот же поток.
+            summary = await Task.Run(
+                () => _history.ReadOneAsync(workingDirectory, sessionId, _lifetimeToken),
+                _lifetimeToken).ConfigureAwait(false);
         }
         catch (Exception)
         {
             // Окно закрылось посреди чтения, файл исчез, разбор сорвался — заголовок просто
-            // не обновится, и это не ошибка.
+            // не обновится, и это не ошибка. Вкладка остаётся открытой для следующей попытки.
+            PostLookupResult(sink, terminalId, sessionId, TitleLookup.Pending, shortTitle: null);
             return;
         }
 
-        // Транскрипта ещё нет либо первое сообщение не разобралось — тоже не ошибка:
-        // следующая попытка будет по Stop.
-        if (SessionShortTitle.Shorten(summary?.Title) is not { } shortTitle)
-        {
-            return;
-        }
+        // null — транскрипта ещё нет, спросить позже осмысленно. Сводка без заголовка — файл
+        // прочитан, и по Stop это окончательный ответ: больше не спрашиваем.
+        var shortTitle = SessionShortTitle.Shorten(summary?.Title);
+        var lookup = shortTitle is not null
+            ? TitleLookup.Resolved
+            : summary is not null && conclusive
+                ? TitleLookup.Unavailable
+                : TitleLookup.Pending;
 
+        PostLookupResult(sink, terminalId, sessionId, lookup, shortTitle);
+    }
+
+    /// <summary>Возвращает исход поиска заголовка в поток интерфейса.</summary>
+    private void PostLookupResult(
+        ITabStateSink sink,
+        TerminalId terminalId,
+        string sessionId,
+        TitleLookup lookup,
+        string? shortTitle)
+    {
         _dispatcher.Post(() =>
         {
             if (_disposed || !ReferenceEquals(_sink, sink))
@@ -310,10 +352,16 @@ public sealed class SessionStateCoordinator : IDisposable
                 return;
             }
 
-            // Пока читали, вкладка могла начать другую сессию — тогда заголовок уже чужой.
-            if (_sessions.TryGetValue(terminalId, out var probe) && probe.SessionId == sessionId)
+            // Пока читали, вкладка могла начать другую сессию — тогда результат уже чужой.
+            if (!_sessions.TryGetValue(terminalId, out var probe) || probe.SessionId != sessionId)
             {
-                _sessions[terminalId] = probe with { TitleResolved = true };
+                return;
+            }
+
+            _sessions[terminalId] = probe with { Lookup = lookup };
+
+            if (shortTitle is not null)
+            {
                 sink.SetShortTitle(terminalId, shortTitle);
             }
         });
@@ -338,6 +386,26 @@ public sealed class SessionStateCoordinator : IDisposable
     /// </remarks>
     /// <param name="SessionId">Идентификатор сессии Claude Code из хука.</param>
     /// <param name="WorkingDirectory">Каталог, в котором искать транскрипт.</param>
-    /// <param name="TitleResolved">Короткое имя уже выставлено — перечитывать транскрипт незачем.</param>
-    private sealed record SessionProbe(string SessionId, string WorkingDirectory, bool TitleResolved);
+    /// <param name="Lookup">На какой стадии поиск короткого имени.</param>
+    private sealed record SessionProbe(string SessionId, string WorkingDirectory, TitleLookup Lookup);
+
+    /// <summary>Стадия поиска короткого имени сессии.</summary>
+    /// <remarks>
+    /// Новое чтение ставится только из <see cref="Pending"/>. Так транскрипт читается не чаще
+    /// двух раз за сессию — по <c>SessionStart</c> и по <c>Stop</c>, — а не на каждый ответ агента.
+    /// </remarks>
+    private enum TitleLookup
+    {
+        /// <summary>Заголовка нет, но попытка ещё осмысленна.</summary>
+        Pending = 0,
+
+        /// <summary>Транскрипт читается прямо сейчас — второе чтение не ставим.</summary>
+        InFlight = 1,
+
+        /// <summary>Короткое имя выставлено.</summary>
+        Resolved = 2,
+
+        /// <summary>Транскрипт прочитан, заголовка в нём нет — больше не ищем.</summary>
+        Unavailable = 3,
+    }
 }
