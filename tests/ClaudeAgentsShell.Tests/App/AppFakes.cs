@@ -182,6 +182,13 @@ internal sealed class FakeTerminalWorkspace : ITerminalWorkspace
     /// <summary>Исключение, которым отвечает следующий запуск.</summary>
     public Exception? OpenFailure { get; set; }
 
+    /// <summary>
+    /// Вкладка, закрытие которой не удаётся, и исключение, которым оно отвечает. Ответ —
+    /// сорванная задача, а не бросок на месте: настоящее закрытие тоже сначала стартует,
+    /// и синхронный бросок не дал бы начаться закрытию остальных вкладок.
+    /// </summary>
+    public (TerminalId Terminal, Exception Failure)? CloseFailure { get; set; }
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         Started = true;
@@ -237,7 +244,16 @@ internal sealed class FakeTerminalWorkspace : ITerminalWorkspace
 
     public Task CloseAsync(TerminalId terminalId, CancellationToken cancellationToken)
     {
+        // Попытка закрытия учитывается и на сбое: по этому списку видно, что закрытие
+        // дошло до каждой вкладки, а не оборвалось на первой сорвавшейся.
         Closed.Add(terminalId);
+
+        if (CloseFailure is { } failure && failure.Terminal == terminalId)
+        {
+            CloseFailure = null;
+            return Task.FromException(failure.Failure);
+        }
+
         _terminals.Remove(terminalId);
         if (VisibleTerminal == terminalId)
         {

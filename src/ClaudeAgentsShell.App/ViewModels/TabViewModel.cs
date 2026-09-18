@@ -12,6 +12,7 @@ public sealed class TabViewModel : ObservableObject
     /// <summary>Короткое имя сессии до первого сообщения пользователя (раздел 6.3 ТЗ).</summary>
     public const string NewSessionTitle = "новая сессия";
 
+    private string _projectName;
     private string _shortTitle = NewSessionTitle;
     private TabState _state = TabState.Unknown;
     private bool _isActive;
@@ -22,13 +23,16 @@ public sealed class TabViewModel : ObservableObject
     /// <param name="terminalId">Идентификатор вкладки в протоколе моста.</param>
     /// <param name="projectId">Проект, в котором открыта сессия.</param>
     /// <param name="projectName">Имя проекта для заголовка.</param>
-    public TabViewModel(TerminalId terminalId, Guid projectId, string projectName)
+    /// <param name="workingDirectory">Каталог, в котором запущена сессия вкладки.</param>
+    public TabViewModel(TerminalId terminalId, Guid projectId, string projectName, string workingDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
 
         TerminalId = terminalId;
         ProjectId = projectId;
-        ProjectName = projectName;
+        _projectName = projectName;
+        WorkingDirectory = workingDirectory;
     }
 
     /// <summary>Идентификатор терминала на странице.</summary>
@@ -37,8 +41,36 @@ public sealed class TabViewModel : ObservableObject
     /// <summary>Проект вкладки.</summary>
     public Guid ProjectId { get; }
 
-    /// <summary>Имя проекта.</summary>
-    public string ProjectName { get; }
+    /// <summary>
+    /// Имя проекта в заголовке вкладки. Меняется вместе с именем проекта: имя — вещь
+    /// отображаемая, и после переименования на экране не должно оказаться двух имён
+    /// одного проекта — нового в панели и старого на вкладках (раздел 6.3 ТЗ).
+    /// Пустое имя игнорируется: заголовок без проекта — сломанный контракт.
+    /// </summary>
+    public string ProjectName
+    {
+        get => _projectName;
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            if (SetProperty(ref _projectName, value))
+            {
+                Raise(nameof(Title));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Каталог, в котором запущена сессия вкладки. Снимается при открытии и дальше
+    /// <b>не меняется</b> — в том числе при переносе проекта в другой каталог: псевдоконсоль
+    /// работает там, где её запустили, и транскрипт сессии лежит в slug'е именно этого
+    /// каталога. Отдать вместо него новый путь проекта значило бы искать транскрипт не там.
+    /// </summary>
+    public string WorkingDirectory { get; }
 
     /// <summary>
     /// Короткое имя сессии. До первого сообщения пользователя — «новая сессия»; дальше его

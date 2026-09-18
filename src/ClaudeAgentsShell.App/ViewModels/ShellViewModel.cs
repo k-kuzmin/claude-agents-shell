@@ -60,14 +60,22 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // Окно истории сессий — этап M3. Кнопка на месте, но пока отключена.
         ShowHistoryCommand = new RelayCommand(static _ => { }, static _ => false);
 
-        // Пункты меню доступны всегда: параметр приезжает привязкой к PlacementTarget,
-        // и проверять его в CanExecute значило бы гасить пункт на первом открытии меню,
-        // пока привязка ещё не разрешилась. Не строка — команда просто ничего не делает.
+        // У пунктов контекстного меню проверки доступности нет: параметр приезжает
+        // привязкой к PlacementTarget и на первом вычислении может быть ещё не разрешён,
+        // а проверка самого параметра погасила бы пункт на первом открытии меню.
+        // Не строка — команда просто ничего не делает.
         OpenProjectFolderCommand = new AsyncRelayCommand(
             parameter => parameter is ProjectRowViewModel row
                 ? OpenProjectFolderAsync(row, CancellationToken.None)
                 : Task.CompletedTask,
             onError: ReportError);
+
+        // Настройкам проверка доступности по карману: проверяется не параметр, а RowOf —
+        // неразрешённая привязка оставляет выбранную строку, и пункт меню не гаснет.
+        // Выключен он ровно тогда, когда до команды не доехала ни одна строка: проектов нет
+        // вовсе либо холодный старт, где ни один ещё не выбран, а привязка не разрешилась.
+        // В обоих случаях настраивать нечего ни в меню, ни кнопкой в заголовке окна,
+        // которая параметра не передаёт.
         ShowSettingsCommand = new AsyncRelayCommand(
             parameter => RowOf(parameter) is { } row
                 ? ShowProjectSettingsAsync(row, CancellationToken.None)
@@ -242,6 +250,10 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             return null;
         }
 
+        // Каталог запоминается до запуска: вкладка обязана помнить каталог, в котором её
+        // сессия действительно стартовала, а не тот, который окажется у проекта потом.
+        var workingDirectory = row.Path;
+
         TerminalId terminalId;
         try
         {
@@ -259,7 +271,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             return null;
         }
 
-        var tab = new TabViewModel(terminalId, row.Id, row.Name);
+        var tab = new TabViewModel(terminalId, row.Id, row.Name, workingDirectory);
 
         // Проект выбирается до добавления вкладки: иначе новая вкладка легла бы в полосу
         // чужого проекта и тут же из неё исчезла.
@@ -290,14 +302,33 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     }
 
     /// <summary>
-    /// Показывает настройки проекта и, если пользователь их сохранил, обновляет строку.
+    /// Показывает настройки проекта и, если пользователь их сохранил, обновляет строку
+    /// и заголовки уже открытых вкладок этого проекта.
     /// </summary>
+    /// <remarks>
+    /// Имя и путь ведут себя по-разному, потому что это разные вещи. Имя — отображаемое:
+    /// оно доезжает до вкладок сразу, иначе панель показывала бы новое имя проекта, а его же
+    /// вкладки — старое (раздел 6.3 ТЗ). Путь — рабочий: перенести работающую псевдоконсоль
+    /// в другой каталог нельзя, поэтому открытые вкладки остаются в том каталоге, в котором
+    /// стартовали (см. <see cref="TabViewModel.WorkingDirectory" />), а новый путь достаётся
+    /// только сессиям, открытым после переноса.
+    /// </remarks>
     public async Task ShowProjectSettingsAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(row);
 
         if (await Projects.EditProjectAsync(row, cancellationToken).ConfigureAwait(true))
         {
+            // Имя проекта живёт и в заголовке вкладки: без этого прохода вкладка до конца
+            // своей жизни показывала бы имя, которого у проекта уже нет.
+            foreach (var tab in Tabs.AllTabs)
+            {
+                if (tab.ProjectId == row.Id)
+                {
+                    tab.ProjectName = row.Name;
+                }
+            }
+
             // Имя, путь и доступность могли измениться: заглушка на месте терминала и
             // подсветка строки читают их у выбранного проекта.
             RefreshCurrentProject();
@@ -349,20 +380,46 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             return false;
         }
 
-        foreach (var tab in live)
+        // Закрытие идёт разом по всем вкладкам, а не по одной: у каждой свой бюджет ожидания
+        // выхода процесса, и последовательный проход умножал бы его на число вкладок — строка
+        // проекта уже исчезла, а её вкладки гасли бы по одной ещё десятки секунд.
+        try
         {
-            await _workspace.CloseAsync(tab.TerminalId, cancellationToken).ConfigureAwait(true);
-            Tabs.Remove(tab);
+            var closing = live
+                .Select(tab => _workspace.CloseAsync(tab.TerminalId, cancellationToken))
+                .ToList();
+
+            await Task.WhenAll(closing).ConfigureAwait(true);
+        }
+        finally
+        {
+            // Полоса приводится в порядок при любом исходе. Сорвавшееся закрытие — не повод
+            // оставить вкладку на экране: строки её проекта в списке уже нет, выбрать эту
+            // вкладку стало нечем, а это ровно то недостижимое состояние, от которого
+            // закрытие вкладок вместе со строкой и должно уберечь.
+            foreach (var tab in live)
+            {
+                Tabs.Remove(tab);
+            }
+
+            // Активная вкладка могла быть среди закрытых, а удержать выбор не на чем:
+            // соседней вкладки в убранном проекте не осталось. Вкладку другого проекта
+            // проверка не трогает — она в наборе, и выбор с неё не снимается.
+            if (Tabs.ActiveTab is { } active && !Tabs.Contains(active))
+            {
+                Tabs.SetActive(null);
+            }
+
+            if (wasSelected)
+            {
+                // Выбранной строки больше нет: полоса остаётся ни на чём, на месте терминала —
+                // заглушка. Вкладки других проектов при этом продолжают жить.
+                SelectProject(null);
+            }
+
+            RefreshSessionCounts();
         }
 
-        if (wasSelected)
-        {
-            // Выбранной строки больше нет: полоса остаётся ни на чём, на месте терминала —
-            // заглушка. Вкладки других проектов при этом продолжают жить.
-            SelectProject(null);
-        }
-
-        RefreshSessionCounts();
         return true;
     }
 
@@ -585,23 +642,20 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Отдаётся каталог самой вкладки, а не текущий путь её проекта: проект могли перенести,
+    /// а сессия осталась работать там, где стартовала. Новый путь увёл бы координатор за
+    /// транскриптом в чужой slug, и вкладка молча осталась бы «новой сессией» навсегда.
+    /// </remarks>
     bool ITabStateSink.TryGetWorkingDirectory(TerminalId terminalId, out string workingDirectory)
     {
+        if (Tabs.Find(terminalId) is { } tab)
+        {
+            workingDirectory = tab.WorkingDirectory;
+            return true;
+        }
+
         workingDirectory = string.Empty;
-        if (Tabs.Find(terminalId) is not { } tab)
-        {
-            return false;
-        }
-
-        foreach (var row in Projects.Rows)
-        {
-            if (row.Id == tab.ProjectId)
-            {
-                workingDirectory = row.Path;
-                return true;
-            }
-        }
-
         return false;
     }
 
