@@ -1,4 +1,5 @@
 using ClaudeAgentsShell.App.Services;
+using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
 
@@ -277,9 +278,88 @@ internal sealed class FakeSessionHistoryReader : ISessionHistoryReader
     public Task<IReadOnlyList<SessionSummary>> ReadAsync(string workingDirectory, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<SessionSummary>>(_byId.Values.ToArray());
 
+    /// <summary>Исключение, которым отвечает следующее чтение одной сессии.</summary>
+    public Exception? ReadFailure { get; set; }
+
     public Task<SessionSummary?> ReadOneAsync(string workingDirectory, string sessionId, CancellationToken cancellationToken)
     {
         Requested.Add((workingDirectory, sessionId));
+
+        if (ReadFailure is { } failure)
+        {
+            ReadFailure = null;
+            return Task.FromException<SessionSummary?>(failure);
+        }
+
         return Task.FromResult(_byId.TryGetValue(sessionId, out var summary) ? summary : null);
+    }
+}
+
+/// <summary>Полоса вкладок в памяти: запоминает всё, что ей выставил координатор состояний.</summary>
+internal sealed class FakeTabStateSink : ITabStateSink
+{
+    private readonly Dictionary<TerminalId, string> _directories = [];
+
+    /// <summary>Последнее выставленное состояние каждой вкладки.</summary>
+    public Dictionary<TerminalId, TabState> States { get; } = [];
+
+    /// <summary>Последнее выставленное короткое имя каждой вкладки.</summary>
+    public Dictionary<TerminalId, string> ShortTitles { get; } = [];
+
+    /// <summary>Все выставленные состояния по порядку — для проверки переходов.</summary>
+    public List<(TerminalId Terminal, TabState State)> StateLog { get; } = [];
+
+    /// <summary>Рабочий каталог вкладки; не заданный означает закрытую вкладку.</summary>
+    public void SetWorkingDirectory(TerminalId terminalId, string workingDirectory) =>
+        _directories[terminalId] = workingDirectory;
+
+    public void SetState(TerminalId terminalId, TabState state)
+    {
+        States[terminalId] = state;
+        StateLog.Add((terminalId, state));
+    }
+
+    public void SetShortTitle(TerminalId terminalId, string shortTitle) => ShortTitles[terminalId] = shortTitle;
+
+    public bool TryGetWorkingDirectory(TerminalId terminalId, out string workingDirectory)
+    {
+        if (_directories.TryGetValue(terminalId, out var directory))
+        {
+            workingDirectory = directory;
+            return true;
+        }
+
+        workingDirectory = string.Empty;
+        return false;
+    }
+}
+
+/// <summary>
+/// Диспетчер, который копит работу вместо немедленного выполнения: так видно, что событие
+/// действительно ушло в поток интерфейса, а не было обработано в потоке приёмника хуков.
+/// </summary>
+internal sealed class QueuedUiDispatcher : IUiDispatcher
+{
+    private readonly Queue<Action> _pending = new();
+
+    /// <summary>Сколько работы было отправлено в поток интерфейса.</summary>
+    public int PostCount { get; private set; }
+
+    /// <summary>Есть ли неисполненная работа.</summary>
+    public bool HasPending => _pending.Count > 0;
+
+    public void Post(Action action)
+    {
+        PostCount++;
+        _pending.Enqueue(action);
+    }
+
+    /// <summary>Выполняет накопленную работу — аналог прокрутки очереди диспетчера WPF.</summary>
+    public void Drain()
+    {
+        while (_pending.Count > 0)
+        {
+            _pending.Dequeue()();
+        }
     }
 }
