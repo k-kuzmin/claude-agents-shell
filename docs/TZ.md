@@ -63,7 +63,7 @@ WPF-процесс
 
 ```json
 { "type": "out",    "id": "t1", "b64": "<сырые байты из PTY в base64>" }
-{ "type": "create", "id": "t1", "title": "Домовой · sensor repo" }
+{ "type": "create", "id": "t1", "title": "core-api · orders repo" }
 { "type": "show",   "id": "t1" }
 { "type": "close",  "id": "t1" }
 { "type": "exited", "id": "t1", "code": 0 }
@@ -114,8 +114,8 @@ WPF-процесс
   "projects": [
     {
       "id": "9f2c…",
-      "name": "Домовой",
-      "path": "D:\\src\\domovoy",
+      "name": "core-api",
+      "path": "D:\\src\\core-api",
       "shell": "pwsh",
       "preLaunch": "git fetch --prune",
       "extraArgs": [],
