@@ -18,6 +18,21 @@ namespace ClaudeAgentsShell.App.State;
 /// </remarks>
 public sealed class SessionStateCoordinator : IDisposable
 {
+    /// <summary>
+    /// Сколько раз за сессию читается транскрипт в поисках короткого имени, считая попытку
+    /// по <c>SessionStart</c>. Исчерпан бюджет — вкладка до конца сессии остаётся
+    /// с «новая сессия».
+    /// </summary>
+    /// <remarks>
+    /// Верхняя граница нужна потому, что повтор висит на <c>Stop</c>, то есть на каждом ответе
+    /// агента, а транскрипт растёт весь сеанс. Нижняя — потому что заголовок может появиться
+    /// не с первого хода: если пользователь начал со слэш-команды, её строка обёрнута
+    /// в <c>&lt;command-name&gt;</c> и заголовком не становится, а настоящий запрос приходит
+    /// следующим сообщением. Четырёх попыток хватает на такое начало с запасом, и стоят они
+    /// не больше четырёх чтений в потоке пула за всю сессию.
+    /// </remarks>
+    private const int MaxTitleAttempts = 4;
+
     private readonly IHookListener _hooks;
     private readonly ITerminalWorkspace _workspace;
     private readonly ISessionHistoryReader _history;
@@ -179,10 +194,10 @@ public sealed class SessionStateCoordinator : IDisposable
             case HookKind.Stop:
                 sink.SetState(terminalId, TabState.AwaitingInput);
 
-                // Вторая попытка достать заголовок. В момент SessionStart транскрипта могло
-                // ещё не быть — файл создаётся не мгновенно; к Stop агент уже ответил, значит
-                // первое сообщение пользователя в файле точно есть. Это событие, а не таймер:
-                // периодического опроса здесь нет и быть не может (запрет раздела 7 CLAUDE.md).
+                // Ещё одна попытка достать заголовок. Ответ агента — единственный момент, когда
+                // транскрипт заведомо подрос, поэтому повтор привязан к нему. Это событие,
+                // а не таймер: периодического опроса здесь нет и быть не может (запрет раздела 7
+                // CLAUDE.md), а число попыток ограничено (см. MaxTitleAttempts).
                 RequestTitle(sink, terminalId, hookEvent);
                 break;
 
@@ -237,19 +252,22 @@ public sealed class SessionStateCoordinator : IDisposable
     {
         _sessions.TryGetValue(terminalId, out var probe);
 
-        // Имя уже есть, его заведомо не будет, или чтение идёт прямо сейчас — за тот же
-        // транскрипт второй раз не беремся. Без этого каждый Stop, то есть каждый ответ агента,
-        // запускал бы новый проход по растущему файлу, и проходы бы ещё и накладывались.
-        if (probe is { Lookup: not TitleLookup.Pending })
-        {
-            return;
-        }
-
         // Значение самого события важнее запомненного: после --resume у вкладки другая сессия.
         var sessionId = FirstFilled(hookEvent.SessionId, probe?.SessionId);
         if (sessionId is null)
         {
             // Без session_id транскрипт не найти. Заголовок остаётся «новая сессия».
+            return;
+        }
+
+        // Стадия поиска относится к конкретной сессии, поэтому сверяется вместе с ней. Иначе
+        // вкладка, у которой SessionStart потерялся или пришёл без session_id, так и осталась бы
+        // с Resolved от закончившейся сессии — и чтение для новой не поставилось бы вовсе.
+        var sameSession = probe is not null && probe.SessionId == sessionId;
+        if (sameSession && probe!.Lookup is not TitleLookup.Pending)
+        {
+            // Имя уже есть, попытки исчерпаны или чтение идёт прямо сейчас. Без этой проверки
+            // каждый Stop запускал бы новый проход по растущему файлу, и проходы накладывались бы.
             return;
         }
 
@@ -268,14 +286,11 @@ public sealed class SessionStateCoordinator : IDisposable
             return;
         }
 
-        _sessions[terminalId] = new SessionProbe(sessionId, workingDirectory, TitleLookup.InFlight);
+        // Счётчик попыток принадлежит сессии: у новой он начинается заново.
+        var attempts = sameSession ? probe!.Attempts : 0;
+        _sessions[terminalId] = new SessionProbe(sessionId, workingDirectory, TitleLookup.InFlight, attempts);
 
-        // «Искали и не нашли» доказывает, что заголовка не будет, только по Stop: агент уже
-        // ответил, значит первое сообщение пользователя в транскрипте записано. На SessionStart
-        // файл ещё дописывается, и пустой результат там ничего не значит.
-        var conclusive = hookEvent.Kind == HookKind.Stop;
-
-        var load = LoadTitleAsync(sink, terminalId, sessionId, workingDirectory, conclusive);
+        var load = LoadTitleAsync(sink, terminalId, sessionId, workingDirectory);
         PendingTitleWork = PendingTitleWork.IsCompleted ? load : Task.WhenAll(PendingTitleWork, load);
     }
 
@@ -286,9 +301,6 @@ public sealed class SessionStateCoordinator : IDisposable
     /// <param name="terminalId">Вкладка, которой нужен заголовок.</param>
     /// <param name="sessionId">Сессия, чей транскрипт читается.</param>
     /// <param name="workingDirectory">Каталог, в котором лежит транскрипт.</param>
-    /// <param name="conclusive">
-    /// Пустой результат означает «заголовка не будет» и снимает вкладку с дальнейших попыток.
-    /// </param>
     /// <remarks>
     /// Метод не бросает: заголовок вкладки — не повод ронять приложение, а формат <c>.jsonl</c>
     /// считается нестабильным (раздел 7 CLAUDE.md).
@@ -297,8 +309,7 @@ public sealed class SessionStateCoordinator : IDisposable
         ITabStateSink sink,
         TerminalId terminalId,
         string sessionId,
-        string workingDirectory,
-        bool conclusive)
+        string workingDirectory)
     {
         // Уступаем поток интерфейса прежде, чем трогать порт: заголовок не стоит ни кадра
         // вывода терминала.
@@ -321,29 +332,17 @@ public sealed class SessionStateCoordinator : IDisposable
         {
             // Окно закрылось посреди чтения, файл исчез, разбор сорвался — заголовок просто
             // не обновится, и это не ошибка. Вкладка остаётся открытой для следующей попытки.
-            PostLookupResult(sink, terminalId, sessionId, TitleLookup.Pending, shortTitle: null);
+            PostLookupResult(sink, terminalId, sessionId, shortTitle: null);
             return;
         }
 
-        // null — транскрипта ещё нет, спросить позже осмысленно. Сводка без заголовка — файл
-        // прочитан, и по Stop это окончательный ответ: больше не спрашиваем.
-        var shortTitle = SessionShortTitle.Shorten(summary?.Title);
-        var lookup = shortTitle is not null
-            ? TitleLookup.Resolved
-            : summary is not null && conclusive
-                ? TitleLookup.Unavailable
-                : TitleLookup.Pending;
-
-        PostLookupResult(sink, terminalId, sessionId, lookup, shortTitle);
+        PostLookupResult(sink, terminalId, sessionId, SessionShortTitle.Shorten(summary?.Title));
     }
 
-    /// <summary>Возвращает исход поиска заголовка в поток интерфейса.</summary>
-    private void PostLookupResult(
-        ITabStateSink sink,
-        TerminalId terminalId,
-        string sessionId,
-        TitleLookup lookup,
-        string? shortTitle)
+    /// <summary>
+    /// Возвращает исход поиска заголовка в поток интерфейса и решает, будет ли ещё попытка.
+    /// </summary>
+    private void PostLookupResult(ITabStateSink sink, TerminalId terminalId, string sessionId, string? shortTitle)
     {
         _dispatcher.Post(() =>
         {
@@ -358,7 +357,20 @@ public sealed class SessionStateCoordinator : IDisposable
                 return;
             }
 
-            _sessions[terminalId] = probe with { Lookup = lookup };
+            var attempts = probe.Attempts + 1;
+
+            // Отсутствие заголовка не доказывает, что его не будет: первым ходом пользователя
+            // бывает слэш-команда (/init, /review, промпт MCP), а её строка приходит обёрткой
+            // <command-name>, которую очистка отбрасывает. Настоящий запрос ляжет в транскрипт
+            // следующим сообщением, и заголовок появится. Поэтому попытки не обрываются на первом
+            // пустом ответе, а просто считаются: бюджет исчерпан — перестаём спрашивать.
+            var lookup = shortTitle is not null
+                ? TitleLookup.Resolved
+                : attempts >= MaxTitleAttempts
+                    ? TitleLookup.Unavailable
+                    : TitleLookup.Pending;
+
+            _sessions[terminalId] = probe with { Lookup = lookup, Attempts = attempts };
 
             if (shortTitle is not null)
             {
@@ -387,12 +399,17 @@ public sealed class SessionStateCoordinator : IDisposable
     /// <param name="SessionId">Идентификатор сессии Claude Code из хука.</param>
     /// <param name="WorkingDirectory">Каталог, в котором искать транскрипт.</param>
     /// <param name="Lookup">На какой стадии поиск короткого имени.</param>
-    private sealed record SessionProbe(string SessionId, string WorkingDirectory, TitleLookup Lookup);
+    /// <param name="Attempts">Сколько чтений транскрипта этой сессии уже завершилось.</param>
+    private sealed record SessionProbe(
+        string SessionId,
+        string WorkingDirectory,
+        TitleLookup Lookup,
+        int Attempts);
 
     /// <summary>Стадия поиска короткого имени сессии.</summary>
     /// <remarks>
     /// Новое чтение ставится только из <see cref="Pending"/>. Так транскрипт читается не чаще
-    /// двух раз за сессию — по <c>SessionStart</c> и по <c>Stop</c>, — а не на каждый ответ агента.
+    /// <see cref="MaxTitleAttempts"/> раз за сессию, а не на каждый ответ агента.
     /// </remarks>
     private enum TitleLookup
     {
@@ -405,7 +422,7 @@ public sealed class SessionStateCoordinator : IDisposable
         /// <summary>Короткое имя выставлено.</summary>
         Resolved = 2,
 
-        /// <summary>Транскрипт прочитан, заголовка в нём нет — больше не ищем.</summary>
+        /// <summary>Бюджет попыток исчерпан — больше не ищем.</summary>
         Unavailable = 3,
     }
 }
