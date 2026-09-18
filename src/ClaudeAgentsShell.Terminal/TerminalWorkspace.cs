@@ -86,12 +86,6 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     /// </summary>
     public event EventHandler<TerminalExitedEventArgs>? TerminalExited;
 
-    /// <summary>
-    /// Пользователь ввёл что-то в живую вкладку. Событие приходит из потока страницы
-    /// и поднимается до записи в stdin — см. <see cref="ITerminalWorkspace.UserInputReceived"/>.
-    /// </summary>
-    public event EventHandler<TerminalInputEventArgs>? UserInputReceived;
-
     /// <inheritdoc />
     public IReadOnlyList<TerminalId> Terminals
     {
@@ -579,16 +573,22 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         }
     }
 
+    /// <summary>
+    /// Страница отдала ввод — он безусловно уходит в stdin псевдоконсоли и больше никуда.
+    /// </summary>
+    /// <remarks>
+    /// Состояние вкладки отсюда не выводится: в этот же канал страница отдаёт ответы терминала
+    /// на запросы программы — отчёт о фокусе, Device Attributes, цвет, размер, — и переключение
+    /// вкладок выглядело бы вводом пользователя. Источник состояния — только хуки
+    /// (раздел 7 CLAUDE.md).
+    /// </remarks>
     private async void OnInputReceived(object? sender, TerminalInputEventArgs args)
     {
+        // У мёртвой вкладки помпы нет — писать некуда.
         if (!_pumps.TryGetValue(args.TerminalId.Value, out var pump))
         {
             return;
         }
-
-        // До первого await, то есть синхронно в потоке страницы: маркер состояния вкладки
-        // не должен ждать записи в stdin. У мёртвой вкладки помпы нет, и сюда мы не дойдём.
-        UserInputReceived?.Invoke(this, args);
 
         try
         {

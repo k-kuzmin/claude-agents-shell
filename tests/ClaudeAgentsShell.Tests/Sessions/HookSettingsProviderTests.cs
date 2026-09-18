@@ -27,7 +27,7 @@ public sealed class HookSettingsProviderTests
     }
 
     [Fact]
-    public async Task Зарегистрированы_все_три_хука_и_каждый_зовёт_командный_файл()
+    public async Task Зарегистрированы_все_шесть_хуков_и_каждый_зовёт_командный_файл()
     {
         using var temp = new TempDirectory();
         var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
@@ -37,7 +37,20 @@ public sealed class HookSettingsProviderTests
         using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, CancellationToken.None));
         var hooks = document.RootElement.GetProperty("hooks");
 
-        foreach (var name in new[] { "SessionStart", "Stop", "SessionEnd" })
+        // Шесть хуков — весь источник состояния вкладки (раздел 7 CLAUDE.md).
+        string[] expected =
+        [
+            "SessionStart",
+            "UserPromptSubmit",
+            "Stop",
+            "SubagentStart",
+            "SubagentStop",
+            "SessionEnd",
+        ];
+
+        Assert.Equal(expected.Length, hooks.EnumerateObject().Count());
+
+        foreach (var name in expected)
         {
             var command = hooks.GetProperty(name)[0].GetProperty("hooks")[0];
 

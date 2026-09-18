@@ -37,6 +37,38 @@ public sealed class HookListenerTests
         Assert.NotEqual(default, hook.ReceivedUtc);
     }
 
+    [Theory]
+    [InlineData("UserPromptSubmit", HookKind.UserPromptSubmit)]
+    [InlineData("SubagentStart", HookKind.SubagentStart)]
+    [InlineData("SubagentStop", HookKind.SubagentStop)]
+    public async Task Хуки_промпта_и_сабагентов_разбираются(string name, HookKind expected)
+    {
+        // Имена точные, проверены по бинарнику claude.exe: опечатка означала бы вкладку,
+        // которая молча не переключает состояние.
+        await using var listener = new HookListener(TimeProvider.System);
+        var received = NextEvent(listener);
+        await listener.StartAsync(CancellationToken.None);
+
+        using var client = new HttpClient();
+
+        // Полезная нагрузка сабагентов несёт agent_id и agent_type, промпта — user_input.
+        // Эти поля не разбираются: состояние вкладки от них не зависит.
+        await Send(client, listener.Endpoint, "tab-1", $$"""
+            {
+              "hook_event_name": "{{name}}",
+              "session_id": "9f2c0f4e",
+              "agent_id": "a-17",
+              "agent_type": "reviewer",
+              "user_input": "почини сборку"
+            }
+            """);
+
+        var hook = await received.WaitAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(expected, hook.Kind);
+        Assert.Equal("9f2c0f4e", hook.SessionId);
+    }
+
     [Fact]
     public async Task Слушает_только_loopback()
     {

@@ -98,10 +98,16 @@ public sealed class HookSettingsProvider : IHookSettingsProvider
         var matcher = new HookMatcherDto { Hooks = [command] };
         var document = new HookSettingsDto
         {
+            // Шесть хуков — весь источник состояния вкладки (раздел 7 CLAUDE.md): начало и конец
+            // сессии, отправка промпта, конец хода агента и пара хуков сабагентов. Имена точные:
+            // незнакомое имя Claude Code молча пропустит, и вкладка останется без маркера.
             Hooks = new Dictionary<string, List<HookMatcherDto>>(StringComparer.Ordinal)
             {
                 ["SessionStart"] = [matcher],
+                ["UserPromptSubmit"] = [matcher],
                 ["Stop"] = [matcher],
+                ["SubagentStart"] = [matcher],
+                ["SubagentStop"] = [matcher],
                 ["SessionEnd"] = [matcher],
             },
         };
