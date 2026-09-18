@@ -817,6 +817,40 @@ public sealed class SessionStateCoordinatorTests
     /// сессий внутри координатора трогали бы два потока сразу — гонка, которая проявляется
     /// не всегда. С очередью колбэки исполняет только поток теста, в <see cref="Harness.Pump"/>.
     /// </remarks>
+    [Fact]
+    public async Task Смерть_процесса_снимает_маркер_вкладки()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        // `SessionEnd` от убитой оболочки не придёт: маркер обязан сняться по выходу процесса.
+        harness.RaiseExited(tab);
+
+        Assert.Equal(TabState.Unknown, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Опоздавший_SubagentStop_не_оживляет_мёртвую_вкладку()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+
+        // Процесс убит в «фоновой работе», а `curl` сабагента был запущен раньше и доезжает
+        // уже после смерти вкладки.
+        harness.RaiseExited(tab);
+        harness.RaiseHook(HookKind.SubagentStop, tab);
+
+        Assert.Equal(TabState.Unknown, harness.Sink.States[tab]);
+    }
+
     private sealed class Harness : IDisposable
     {
         private int _counter;
@@ -869,6 +903,13 @@ public sealed class SessionStateCoordinatorTests
             string? workingDirectory = ProjectPath)
         {
             Hooks.Raise(kind, Workspace.TokenFor(tab), sessionId, workingDirectory);
+            Pump();
+        }
+
+        /// <summary>Сообщает о смерти процесса вкладки и сразу прокручивает диспетчер.</summary>
+        public void RaiseExited(TerminalId tab, int exitCode = 1)
+        {
+            Workspace.RaiseExited(tab, exitCode);
             Pump();
         }
 

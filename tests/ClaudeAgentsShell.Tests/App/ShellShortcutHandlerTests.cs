@@ -1,4 +1,4 @@
-using System.Windows.Input;
+﻿using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
@@ -21,7 +21,14 @@ public sealed class ShellShortcutHandlerTests
             Probe.Add(project.Path);
 
             var list = new ProjectListViewModel(
-                Store, new FakeGitBranchReader(), new FakeGitBranchWatcher(), Probe, new FakeFolderPicker(), new InlineUiDispatcher());
+                Store,
+                new FakeGitBranchReader(),
+                new FakeGitBranchWatcher(),
+                Probe,
+                new FakeFolderPicker(),
+                new FakeProjectSettingsDialog(),
+                new FakeShellLauncher(),
+                new InlineUiDispatcher());
             var sessionState = new SessionStateCoordinator(
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher(), sessionState);

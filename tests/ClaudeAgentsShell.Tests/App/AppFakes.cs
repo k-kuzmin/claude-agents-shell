@@ -90,6 +90,41 @@ internal sealed class FakeFolderPicker : IFolderPicker
     public string? PickFolder(string title) => NextFolder;
 }
 
+/// <summary>Диалог настроек проекта: правку задаёт тест, показанное запоминается.</summary>
+internal sealed class FakeProjectSettingsDialog : IProjectSettingsDialog
+{
+    /// <summary>
+    /// Что диалог делает с проектом. Не задана (по умолчанию) — пользователь отказался,
+    /// и диалог возвращает <c>null</c>.
+    /// </summary>
+    public Func<ProjectDefinition, ProjectDefinition?>? Edit { get; set; }
+
+    /// <summary>Проекты, с которыми диалог открывали, по порядку.</summary>
+    public List<ProjectDefinition> Shown { get; } = [];
+
+    public Task<ProjectDefinition?> ShowAsync(ProjectDefinition project, CancellationToken cancellationToken)
+    {
+        Shown.Add(project);
+        return Task.FromResult(Edit?.Invoke(project));
+    }
+}
+
+/// <summary>Проводник без Process.Start: запоминает каталоги и отвечает заданным исходом.</summary>
+internal sealed class FakeShellLauncher : IShellLauncher
+{
+    /// <summary>Каталоги, которые просили открыть, по порядку.</summary>
+    public List<string> Opened { get; } = [];
+
+    /// <summary>Исход открытия. <c>false</c> — каталога нет или проводник не отозвался.</summary>
+    public bool Result { get; set; } = true;
+
+    public Task<bool> OpenFolderAsync(string path, CancellationToken cancellationToken)
+    {
+        Opened.Add(path);
+        return Task.FromResult(Result);
+    }
+}
+
 /// <summary>Модальные окна: ответ задаётся тестом, показанное запоминается.</summary>
 internal sealed class FakeUserPrompt : IUserPrompt
 {

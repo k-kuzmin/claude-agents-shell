@@ -138,6 +138,11 @@ public sealed class SessionStateCoordinator : IDisposable
 
         // Подписка раньше подъёма приёмника: событие, пришедшее в тот же миг, не теряется.
         _hooks.HookReceived += OnHookReceived;
+
+        // Смерть процесса — второй источник, из которого координатор узнаёт, что состояние
+        // вкладки больше не действительно. Хуком она не приходит: у убитой оболочки
+        // `SessionEnd` выполнять уже некому.
+        _workspace.TerminalExited += OnTerminalExited;
         _subscribed = true;
 
         try
@@ -169,6 +174,7 @@ public sealed class SessionStateCoordinator : IDisposable
         if (_subscribed)
         {
             _hooks.HookReceived -= OnHookReceived;
+            _workspace.TerminalExited -= OnTerminalExited;
             _subscribed = false;
         }
 
@@ -185,6 +191,38 @@ public sealed class SessionStateCoordinator : IDisposable
     {
         var hookEvent = e.Event;
         _dispatcher.Post(() => ApplyHook(hookEvent));
+    }
+
+    /// <summary>
+    /// Процесс вкладки завершился. Событие приходит из фонового потока помпы — работа
+    /// переносится в поток интерфейса.
+    /// </summary>
+    private void OnTerminalExited(object? sender, TerminalExitedEventArgs e)
+    {
+        var terminalId = e.TerminalId;
+        _dispatcher.Post(() => ApplyExit(terminalId));
+    }
+
+    /// <summary>
+    /// Снимает маркер умершей вкладки и забывает о ней. Выполняется в потоке интерфейса.
+    /// </summary>
+    /// <remarks>
+    /// Вкладка остаётся на экране (раздел 5.1 ТЗ), но состояние её сессии больше не значит
+    /// ничего: <c>SessionEnd</c> от убитой оболочки не придёт, а нового хода не будет.
+    /// Забыть о вкладке обязательно, а не только показать <c>Unknown</c>: опоздавший
+    /// <c>SubagentStop</c> увидел бы запомненную «фоновую работу» и зажёг бы на мёртвой
+    /// вкладке точку «работает» до конца сеанса (разделы 5.3 и 8 ТЗ).
+    /// </remarks>
+    private void ApplyExit(TerminalId terminalId)
+    {
+        if (_disposed || _sink is not { } sink)
+        {
+            return;
+        }
+
+        SetState(sink, terminalId, TabState.Unknown);
+        _sessions.Remove(terminalId);
+        _activity.Remove(terminalId);
     }
 
     /// <summary>Раскладывает событие хука по состоянию вкладки. Выполняется в потоке интерфейса.</summary>
