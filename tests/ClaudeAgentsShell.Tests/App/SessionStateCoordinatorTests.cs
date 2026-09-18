@@ -265,6 +265,102 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
+    public async Task Первый_SessionStart_имя_не_сбрасывает()
+    {
+        // О прежней сессии вкладки ничего не известно — сбрасывать нечего.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+
+        Assert.Empty(harness.Sink.ResetTitles);
+    }
+
+    [Fact]
+    public async Task Смена_сессии_во_вкладке_сбрасывает_имя_сразу()
+    {
+        // Раздел 6.3 ТЗ: имя принадлежит сессии, и имя закончившейся висеть не должно —
+        // в том числе пока транскрипт новой ещё не разобрался.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "первая сессия");
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+        Assert.Equal("первая сессия", harness.Sink.ShortTitles[tab]);
+
+        const string other = "99999999-8888-7777-6666-555555555555";
+        harness.RaiseHook(HookKind.SessionStart, tab, sessionId: other);
+        await harness.SettleAsync();
+
+        Assert.Equal([tab], harness.Sink.ResetTitles);
+        Assert.Empty(harness.Sink.ShortTitles);
+    }
+
+    [Fact]
+    public async Task Тот_же_идентификатор_сессии_имя_не_трогает()
+    {
+        // SessionStart приходит и на сжатие контекста: безусловный сброс заставил бы
+        // заголовок мигать «новая сессия» и обратно на каждом сжатии.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "первая сессия");
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+
+        Assert.Empty(harness.Sink.ResetTitles);
+        Assert.Equal("первая сессия", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Пустой_идентификатор_сессии_имя_не_сбрасывает()
+    {
+        // Пустой session_id означает «неизвестно», а по незнанию имя не трогаем.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "первая сессия");
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab, sessionId: null);
+        await harness.SettleAsync();
+
+        Assert.Empty(harness.Sink.ResetTitles);
+        Assert.Equal("первая сессия", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Опоздавшее_чтение_прежней_сессии_имя_не_перебивает()
+    {
+        // Чтение транскрипта первой сессии доезжает уже после того, как во вкладке
+        // началась вторая: заголовок обязан остаться сброшенным.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "первая сессия");
+
+        var gate = new TaskCompletionSource();
+        harness.History.Gate = gate;
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        Assert.False(harness.Coordinator.PendingTitleWork.IsCompleted);
+
+        const string other = "99999999-8888-7777-6666-555555555555";
+        harness.RaiseHook(HookKind.SessionStart, tab, sessionId: other);
+
+        // Транскрипт первой сессии доехал только теперь — и он уже чужой.
+        gate.SetResult();
+        await harness.SettleAsync();
+
+        Assert.Empty(harness.Sink.ShortTitles);
+        Assert.Equal([tab], harness.Sink.ResetTitles);
+    }
+
+    [Fact]
     public async Task Готовое_имя_второй_раз_не_вычитывается()
     {
         using var harness = new Harness();
