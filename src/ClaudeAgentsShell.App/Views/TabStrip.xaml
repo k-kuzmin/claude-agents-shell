@@ -57,9 +57,9 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
 
-                                    <!-- Точка состояния. Источники — хуки Claude Code и ввод
-                                         пользователя. Хуки не подключились — вкладка остаётся
-                                         в TabState.Unknown, и точка просто не красится. -->
+                                    <!-- Точка состояния. Единственный источник — хуки Claude Code. Клавиатура
+                                         источником быть не может: страница шлёт тем же каналом
+                                         ответы терминала. Хуки не подключились — TabState.Unknown. -->
                                     <Ellipse x:Name="StateDot"
                                              Grid.Column="0"
                                              Width="6" Height="6"
@@ -105,6 +105,9 @@
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.AwaitingInput}">
                                     <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource AccentBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.BackgroundWork}">
+                                    <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource BackgroundWorkBrush}" />
                                 </DataTrigger>
                             </DataTemplate.Triggers>
                         </DataTemplate>

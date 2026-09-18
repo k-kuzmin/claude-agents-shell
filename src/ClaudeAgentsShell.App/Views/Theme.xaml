@@ -28,6 +28,9 @@
     <SolidColorBrush x:Key="AccentBrush" Color="#D97757" />
     <SolidColorBrush x:Key="CalmBrush" Color="#6FA8A0" />
     <SolidColorBrush x:Key="UnknownStateBrush" Color="#4A4640" />
+    <!-- Работа в фоне: сессия занята собственными сабагентами, от человека ничего не нужно.
+         Свой холодный тон, чтобы не путаться ни с «работает» (CalmBrush), ни с «ждёт ввода». -->
+    <SolidColorBrush x:Key="BackgroundWorkBrush" Color="#6E86B0" />
 
     <FontFamily x:Key="UiFontFamily">IBM Plex Sans, Segoe UI</FontFamily>
     <FontFamily x:Key="MonoFontFamily">JetBrains Mono, Cascadia Mono, Consolas</FontFamily>
