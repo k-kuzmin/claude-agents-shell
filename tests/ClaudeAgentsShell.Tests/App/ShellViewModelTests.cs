@@ -1157,4 +1157,139 @@ public sealed class ShellViewModelTests
         Assert.Same(tab, Assert.Single(harness.Shell.Tabs.AllTabs));
         Assert.Empty(harness.Workspace.Closed);
     }
+
+    [Fact]
+    public async Task A_shell_that_exited_normally_is_marked_with_a_zero_code()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        harness.Workspace.RaiseExited(tab!.TerminalId, exitCode: 0);
+
+        // Вкладка остаётся на экране с пометкой о коде (раздел 8 ТЗ), но это штатный выход
+        // из оболочки: падением он не считается и красным не красится.
+        Assert.Same(tab, Assert.Single(harness.Shell.Tabs.Tabs));
+        Assert.True(tab.HasExited);
+        Assert.False(tab.IsRunning);
+        Assert.Equal(0, tab.ExitCode);
+        Assert.False(tab.HasFailedExit);
+        Assert.Equal("код 0", tab.ExitBadgeText);
+    }
+
+    [Fact]
+    public async Task A_shell_that_crashed_is_marked_with_its_exit_code()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        var changed = new List<string?>();
+        tab!.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        // Оболочку сняли по Ctrl+C: код падения у Windows отрицательный, и пометка обязана
+        // показать его как есть, а не «упал».
+        harness.Workspace.RaiseExited(tab.TerminalId, exitCode: -1073741510);
+
+        Assert.True(tab.HasFailedExit);
+        Assert.Equal(-1073741510, tab.ExitCode);
+        Assert.Equal("код -1073741510", tab.ExitBadgeText);
+
+        // Без уведомления об этих свойствах пометка и кнопка не появились бы на живой полосе.
+        Assert.Contains(nameof(TabViewModel.HasExited), changed);
+        Assert.Contains(nameof(TabViewModel.ExitBadgeText), changed);
+        Assert.Contains(nameof(TabViewModel.HasFailedExit), changed);
+    }
+
+    [Fact]
+    public async Task A_live_tab_has_no_badge_and_no_restart()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.False(tab!.HasExited);
+        Assert.Null(tab.ExitCode);
+        Assert.Equal(string.Empty, tab.ExitBadgeText);
+        Assert.False(harness.Shell.RestartTabCommand.CanExecute(tab));
+
+        // Перезапускать живую сессию нечего: второй вкладки не появляется.
+        Assert.Null(await harness.Shell.RestartTabAsync(tab, CancellationToken.None));
+        Assert.Same(tab, Assert.Single(harness.Shell.Tabs.Tabs));
+    }
+
+    [Fact]
+    public async Task Restart_opens_a_working_session_next_to_the_dead_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        Assert.True(harness.Shell.RestartTabCommand.CanExecute(dead));
+        var restarted = await harness.Shell.RestartTabAsync(dead, CancellationToken.None);
+
+        // Мёртвая вкладка не заменяется: её вывод пользователь ещё не прочитал.
+        Assert.NotNull(restarted);
+        Assert.NotSame(dead, restarted);
+        Assert.Equal([dead, restarted], harness.Shell.Tabs.Tabs);
+        Assert.True(dead.HasExited);
+
+        // Новая сессия живая, видимая и в том же проекте.
+        Assert.True(restarted!.IsRunning);
+        Assert.Same(restarted, harness.Shell.Tabs.ActiveTab);
+        Assert.Equal(restarted.TerminalId, harness.Workspace.VisibleTerminal);
+        Assert.Equal(dead.ProjectId, restarted.ProjectId);
+        Assert.Equal([PathA, PathA], harness.Workspace.OpenedDirectories);
+        Assert.Equal(2, harness.Row(0).SessionCount);
+        Assert.Empty(harness.Prompt.Errors);
+    }
+
+    [Fact]
+    public async Task Restart_into_a_vanished_folder_is_blocked_and_keeps_the_dead_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        // Каталог исчез, пока вкладка лежала мёртвой (раздел 8 ТЗ).
+        harness.Probe.Remove(PathA);
+
+        var restarted = await harness.Shell.RestartTabAsync(dead, CancellationToken.None);
+
+        // Запуск заблокирован той же проверкой доступности, что и обычное открытие сессии:
+        // пользователь видит сообщение, а не исключение.
+        Assert.Null(restarted);
+        Assert.Contains(PathA, Assert.Single(harness.Prompt.Errors));
+        Assert.False(harness.Row(0).IsAvailable);
+        Assert.Same(dead, Assert.Single(harness.Shell.Tabs.Tabs));
+        Assert.Equal([PathA], harness.Workspace.OpenedDirectories);
+    }
+
+    [Fact]
+    public async Task Restart_of_a_tab_whose_project_is_gone_does_nothing()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        // Строку убрали из списка вместе с вкладкой: запускать не в чем, но и падать не за что.
+        await harness.Shell.RemoveProjectAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.Null(await harness.Shell.RestartTabAsync(dead, CancellationToken.None));
+        Assert.Empty(harness.Shell.Tabs.AllTabs);
+    }
+
+    [Fact]
+    public async Task Closing_a_dead_tab_works_as_usual()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var alive = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        Assert.True(await harness.Shell.CloseTabAsync(dead, CancellationToken.None));
+
+        // Ни вопроса (процесса под вкладкой уже нет), ни следов в полосе и на строке проекта.
+        Assert.Empty(harness.Prompt.Confirmations);
+        Assert.Equal(dead.TerminalId, Assert.Single(harness.Workspace.Closed));
+        Assert.Same(alive, Assert.Single(harness.Shell.Tabs.Tabs));
+        Assert.Equal(1, harness.Row(0).SessionCount);
+    }
 }

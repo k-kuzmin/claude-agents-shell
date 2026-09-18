@@ -94,6 +94,12 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 ? CloseTabAsync(tab, CancellationToken.None)
                 : Task.CompletedTask,
             onError: ReportError);
+        RestartTabCommand = new AsyncRelayCommand(
+            parameter => parameter is TabViewModel tab
+                ? RestartTabAsync(tab, CancellationToken.None)
+                : Task.CompletedTask,
+            parameter => parameter is TabViewModel { HasExited: true },
+            ReportError);
         ShowAwaitingTabCommand = new AsyncRelayCommand(
             _ => ShowAwaitingTabAsync(CancellationToken.None),
             _ => Tabs.HasAwaitingInput,
@@ -142,6 +148,12 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
 
     /// <summary>Закрыть вкладку.</summary>
     public ICommand CloseTabCommand { get; }
+
+    /// <summary>
+    /// Перезапустить упавшую сессию (раздел 8 ТЗ). Параметр — вкладка, процесс которой
+    /// завершился; на живой вкладке команда недоступна, а кнопки в разметке не видно.
+    /// </summary>
+    public ICommand RestartTabCommand { get; }
 
     /// <summary>
     /// Клик по счётчику «N ждёт ввода»: показать первую ждущую вкладку (раздел 6.3 ТЗ).
@@ -450,6 +462,42 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         return true;
     }
 
+    /// <summary>
+    /// Перезапускает упавшую сессию: открывает новую сессию в том же проекте (раздел 8 ТЗ).
+    /// Каталог проекта исчез — запуск заблокирован тем же способом, что и обычное открытие,
+    /// и мёртвая вкладка остаётся на месте.
+    /// </summary>
+    /// <param name="tab">Вкладка, процесс которой завершился.</param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    /// <returns>Вкладка новой сессии либо <c>null</c>, если запуск не состоялся.</returns>
+    /// <remarks>
+    /// Мёртвая вкладка **не заменяется**: на её экране остаётся вывод, ради которого она и
+    /// живёт после выхода процесса — в том числе сообщение об ошибке, которое пользователь
+    /// ещё не прочитал. Поэтому новая сессия открывается соседней вкладкой, а мёртвую
+    /// пользователь закрывает крестиком, когда прочтёт. Соседняя встаёт в конец полосы:
+    /// вставка рядом с мёртвой потребовала бы отдельной операции у набора вкладок, а порядок
+    /// полосы принадлежит пользователю (перетаскивание, раздел 6.3 ТЗ).
+    /// </remarks>
+    public async Task<TabViewModel?> RestartTabAsync(TabViewModel tab, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+
+        if (tab.IsRunning)
+        {
+            // Живую сессию перезапускать нечего: её процесс на месте.
+            return null;
+        }
+
+        var row = Projects.Rows.FirstOrDefault(candidate => candidate.Id == tab.ProjectId);
+        if (row is null)
+        {
+            // Строку проекта убрали из списка, пока вкладка лежала мёртвой: запускать не в чем.
+            return null;
+        }
+
+        return await OpenSessionAsync(row, cancellationToken).ConfigureAwait(true);
+    }
+
     /// <summary>Выполняет оконную команду, назначенную сочетанию клавиш.</summary>
     /// <param name="shortcut">Распознанная команда.</param>
     /// <param name="tabNumber">Номер вкладки для <see cref="ShellShortcut.SelectTab"/>.</param>
@@ -615,7 +663,15 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         {
             if (Tabs.Find(e.TerminalId) is { } tab)
             {
-                tab.IsRunning = false;
+                // Пометка о коде выхода (раздел 8 ТЗ): код приходит вместе с событием,
+                // разбирать ради него вывод вкладки не нужно и запрещено.
+                tab.MarkExited(e.ExitCode);
+
+                // Процесс умер без жеста пользователя, поэтому сам реквери не придёт, а кнопка
+                // «перезапустить» появилась бы на вкладке выключенной. Это та самая проверка
+                // доступности «изменилось не по нажатию», о которой говорит RelayCommand,
+                // и зовётся она только когда вкладка действительно нашлась и умерла.
+                CommandManager.InvalidateRequerySuggested();
             }
 
             // Маркер с умершей вкладки снимает координатор состояний: он подписан на то же

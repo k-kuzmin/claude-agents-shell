@@ -31,6 +31,11 @@
     <!-- Работа в фоне: сессия занята собственными сабагентами, от человека ничего не нужно.
          Свой холодный тон, чтобы не путаться ни с «работает» (CalmBrush), ни с «ждёт ввода». -->
     <SolidColorBrush x:Key="BackgroundWorkBrush" Color="#6E86B0" />
+    <!-- Пометка о ненулевом коде выхода: процесс сессии упал (раздел 8 ТЗ). Намеренно не
+         AccentBrush — тем же оранжевым горит точка «ждёт ввода», и на одной вкладке два
+         оранжевых знака читались бы как один. Приглушённый красный ни с чем не спорит.
+         Нулевой код — штатный выход, ему хватает FaintTextBrush, своей кисти он не требует. -->
+    <SolidColorBrush x:Key="ExitFailureBrush" Color="#C2564A" />
 
     <FontFamily x:Key="UiFontFamily">IBM Plex Sans, Segoe UI</FontFamily>
     <FontFamily x:Key="MonoFontFamily">JetBrains Mono, Cascadia Mono, Consolas</FontFamily>
