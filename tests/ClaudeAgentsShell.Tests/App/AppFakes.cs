@@ -268,6 +268,9 @@ internal sealed class FakeHookListener : IHookListener
     /// <summary>Приёмник был поднят.</summary>
     public bool Started { get; private set; }
 
+    /// <summary>Поднять приёмник пытались. Отличает «сбой» от «даже не позвали».</summary>
+    public bool StartAttempted { get; private set; }
+
     /// <summary>Приёмник был освобождён.</summary>
     public bool Disposed { get; private set; }
 
@@ -276,6 +279,7 @@ internal sealed class FakeHookListener : IHookListener
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        StartAttempted = true;
         if (StartFailure is { } failure)
         {
             return Task.FromException(failure);
@@ -286,10 +290,16 @@ internal sealed class FakeHookListener : IHookListener
     }
 
     /// <summary>Сообщает о пришедшем хуке.</summary>
-    public void Raise(HookKind kind, string? token, string? sessionId = null, string? workingDirectory = null) =>
+    public void Raise(
+        HookKind kind,
+        string? token,
+        string? sessionId = null,
+        string? workingDirectory = null,
+        string? source = null) =>
         HookReceived?.Invoke(
             this,
-            new HookEventArgs(new HookEvent(kind, sessionId, workingDirectory, token, DateTimeOffset.UnixEpoch)));
+            new HookEventArgs(
+                new HookEvent(kind, sessionId, workingDirectory, token, DateTimeOffset.UnixEpoch, source)));
 
     public ValueTask DisposeAsync()
     {

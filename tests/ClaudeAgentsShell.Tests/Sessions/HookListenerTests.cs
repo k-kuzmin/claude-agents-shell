@@ -35,13 +35,41 @@ public sealed class HookListenerTests
         Assert.Equal(@"D:\src\domovoy", hook.WorkingDirectory);
         Assert.Equal("tab-1", hook.CorrelationToken);
         Assert.NotEqual(default, hook.ReceivedUtc);
+
+        // Поля source в нагрузке не было — значит и в событии его нет. Отсутствие трактуется
+        // как обычная граница хода, то есть как поведение до появления поля.
+        Assert.Null(hook.Source);
+    }
+
+    [Theory]
+    [InlineData("SessionStart", "compact")]
+    [InlineData("SessionStart", "resume")]
+    [InlineData("UserPromptSubmit", "schedule_wakeup")]
+    public async Task Поле_source_доезжает_как_есть(string name, string source)
+    {
+        // Значения проверены по бинарнику claude.exe: у SessionStart это startup, resume,
+        // clear, compact и fork; у UserPromptSubmit — кто автор промпта. Приёмник их
+        // не интерпретирует и не фильтрует: решение принимает координатор состояний.
+        await using var listener = new HookListener(TimeProvider.System);
+        var received = NextEvent(listener);
+        await listener.StartAsync(CancellationToken.None);
+
+        using var client = new HttpClient();
+        await Send(client, listener.Endpoint, "tab-1", $$"""
+            { "hook_event_name": "{{name}}", "session_id": "9f2c0f4e", "source": "{{source}}" }
+            """);
+
+        var hook = await received.WaitAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(source, hook.Source);
     }
 
     [Theory]
     [InlineData("UserPromptSubmit", HookKind.UserPromptSubmit)]
     [InlineData("SubagentStart", HookKind.SubagentStart)]
     [InlineData("SubagentStop", HookKind.SubagentStop)]
-    public async Task Хуки_промпта_и_сабагентов_разбираются(string name, HookKind expected)
+    [InlineData("StopFailure", HookKind.StopFailure)]
+    public async Task Хуки_промпта_сабагентов_и_оборванного_хода_разбираются(string name, HookKind expected)
     {
         // Имена точные, проверены по бинарнику claude.exe: опечатка означала бы вкладку,
         // которая молча не переключает состояние.
@@ -51,15 +79,18 @@ public sealed class HookListenerTests
 
         using var client = new HttpClient();
 
-        // Полезная нагрузка сабагентов несёт agent_id и agent_type, промпта — user_input.
-        // Эти поля не разбираются: состояние вкладки от них не зависит.
+        // Полезная нагрузка сабагентов несёт agent_id и agent_type, промпта — prompt,
+        // StopFailure — error и error_details. Эти поля не разбираются: состояние вкладки
+        // от них не зависит.
         await Send(client, listener.Endpoint, "tab-1", $$"""
             {
               "hook_event_name": "{{name}}",
               "session_id": "9f2c0f4e",
               "agent_id": "a-17",
               "agent_type": "reviewer",
-              "user_input": "почини сборку"
+              "error": "api_error",
+              "error_details": "504",
+              "prompt": "почини сборку"
             }
             """);
 

@@ -16,8 +16,19 @@ public sealed class SessionStateCoordinatorTests
     private const string HookPath = @"D:\src\alpha-from-hook";
     private const string SessionId = "11111111-2222-3333-4444-555555555555";
 
-    /// <summary>Повторяет <c>SessionStateCoordinator.MaxTitleAttempts</c>: там он закрытый.</summary>
-    private const int MaxTitleAttempts = 4;
+    /// <summary>
+    /// Ожидаемый бюджет чтений транскрипта за сессию. Записан числом намеренно — это
+    /// утверждение о поведении, а не копия закрытой константы координатора: изменят бюджет —
+    /// тесты обязаны упасть, а не подстроиться.
+    /// </summary>
+    /// <remarks>
+    /// Три: одна попытка по <c>SessionStart</c> у свежей сессии почти всегда пустая (сообщения
+    /// пользователя в транскрипте ещё нет), остаются две содержательные. Меньше нельзя —
+    /// по замеру M5-0 на 785 транскриптах заголовок появляется позже первого <c>Stop</c>
+    /// в 2 случаях (81 до правки разбора слэш-команд), и причина остатка — задержка сброса
+    /// файла на диск, от которой спасает только повтор.
+    /// </remarks>
+    private const int MaxTitleAttempts = 3;
 
     [Fact]
     public async Task SessionStart_переводит_вкладку_в_простаивает()
@@ -204,10 +215,13 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Потерянный_SubagentStop_живёт_не_дольше_одного_хода()
+    public async Task Потерянный_SubagentStop_живёт_до_конца_сессии()
     {
-        // Хук идёт через curl и может не доехать. Без обнуления на границе хода вкладка залипла бы
-        // в «фоновой работе» навсегда, и пользователь перестал бы видеть, что она его ждёт.
+        // Хук идёт через curl и может не доехать. Снять дрейф на отправке промпта нельзя:
+        // промпт прилетает и посреди чужой фоновой работы, и обнуление стёрло бы живых
+        // сабагентов. Поэтому дрейф держится до границы сессии — вкладка показывает «занята
+        // своей работой». Это мягкий отказ: зайти и написать в неё человеку никто не мешает,
+        // а обратная ошибка — «ждёт ввода» на работающей вкладке — дороже.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
@@ -217,7 +231,13 @@ public sealed class SessionStateCoordinatorTests
 
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
 
-        // Следующий ход: SubagentStop так и не пришёл, но счётчик снят отправкой промпта.
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+
+        // А вот начало сессии его снимает: там достоверно известно, что сабагентов нет.
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "clear");
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
         harness.RaiseHook(HookKind.Stop, tab);
 
@@ -225,15 +245,137 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task SessionStart_снимает_счётчик_фоновой_работы()
+    public async Task Сжатие_контекста_не_гасит_работающую_вкладку()
     {
-        // --resume, /clear и сжатие контекста тоже начинают ход заново.
+        // Автосжатие срабатывает посреди хода и приходит тем же SessionStart, что и запуск.
+        // Выставить на нём «простаивает» значило бы зажечь серую точку, пока агент работает.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "compact");
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+        Assert.DoesNotContain(TabState.Idle, harness.Sink.StateLog.Select(entry => entry.State));
+    }
+
+    [Fact]
+    public async Task Сжатие_контекста_не_снимает_счётчик_сабагентов()
+    {
+        // Первая из трёх последовательностей, роняющих счётчик: сжатие посреди хода
+        // с работающим сабагентом. Обнуление дало бы на следующем Stop ложное «ждёт ввода».
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
         harness.RaiseHook(HookKind.SubagentStart, tab);
-        harness.RaiseHook(HookKind.SessionStart, tab);
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "compact");
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Theory]
+    [InlineData("schedule_wakeup")]
+    [InlineData("loop_wakeup")]
+    [InlineData("system")]
+    [InlineData("sdk")]
+    public async Task Машинный_промпт_не_снимает_счётчик_сабагентов(string source)
+    {
+        // Вторая последовательность: пробуждение по расписанию или по /loop приходит тем же
+        // UserPromptSubmit, но человека за ним нет и ход сабагентов не прерывает.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "user");
+        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: source);
+
+        // В «работает» переводят все источники: ход начинается в любом случае.
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Промпт_досланный_в_фоновую_работу_не_снимает_счётчик()
+    {
+        // Третья последовательность, и она про живого человека: «занята своей работой» ровно
+        // на то и намекает, что туда можно зайти и написать. Счётчик при этом остаётся живым.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "user");
+        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "user");
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+
+        // Сабагент закончил — вкладка возвращается к человеку.
+        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task StopFailure_заканчивает_ход_оборванный_ошибкой()
+    {
+        // Ход упал на ошибке API или был прерван — Stop тогда может не прийти вовсе,
+        // и без этого хука вкладка осталась бы в «работает» навсегда.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.StopFailure, tab);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task StopFailure_при_работающем_сабагенте_даёт_фоновую_работу()
+    {
+        // Правила те же, что у Stop: сабагент оборванного хода мог пережить сам ход.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.StopFailure, tab);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("startup")]
+    [InlineData("resume")]
+    [InlineData("clear")]
+    [InlineData("fork")]
+    public async Task SessionStart_настоящей_границей_хода_снимает_счётчик_фоновой_работы(string? source)
+    {
+        // Сессия поднялась заново (startup/resume/fork) или потеряла контекст (clear): живых
+        // сабагентов у неё нет. Отсутствующий source ведёт себя так же — формат нестабилен
+        // (раздел 7 CLAUDE.md), и по незнанию поведение остаётся прежним.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SessionStart, tab, source: source);
+
+        Assert.Equal(TabState.Idle, harness.Sink.States[tab]);
+
         harness.RaiseHook(HookKind.Stop, tab);
 
         Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
@@ -574,6 +716,44 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
+    public async Task Сжатие_контекста_бюджет_заголовка_не_тратит()
+    {
+        // Бюджет мал (см. MaxTitleAttempts), а автосжатие за длинную сессию срабатывает
+        // не раз: тратить на него чтения нельзя — транскрипт к этому моменту не подрос.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, title: null);
+
+        for (var i = 0; i < 5; i++)
+        {
+            harness.RaiseHook(HookKind.SessionStart, tab, source: "compact");
+            await harness.SettleAsync();
+        }
+
+        Assert.Empty(harness.History.Requested);
+    }
+
+    [Fact]
+    public async Task Оборванный_ход_тоже_даёт_попытку_заголовка()
+    {
+        // Если первый же ход упал на ошибке API, Stop не придёт, и без этой попытки вкладка
+        // осталась бы с «новая сессия» до следующего хода. Лишних чтений это не даёт:
+        // бюджет общий.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, title: null);
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+
+        harness.History.Seed(SessionId, "почини сборку");
+        harness.RaiseHook(HookKind.StopFailure, tab);
+        await harness.SettleAsync();
+
+        Assert.Equal("почини сборку", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
     public async Task Исчерпанный_бюджет_у_новой_сессии_начинается_заново()
     {
         using var harness = new Harness();
@@ -739,22 +919,40 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Сбой_подъёма_приёмника_не_роняет_запуск()
+    public async Task Сбой_подъёма_приёмника_не_роняет_запуск_и_не_снимает_подписку()
     {
         // Раздел 5.3 ТЗ: без хуков вкладки живут без маркеров, и это не повод показывать ошибку.
+        // Проверяется ровно то, что отличает сбойный запуск от удачного: приёмник позвали,
+        // он не поднялся, исключение наружу не вышло — а подписка осталась и работает.
+        // Снимет её только Dispose.
         using var harness = new Harness();
         harness.Hooks.StartFailure = new InvalidOperationException("порт занят");
 
         await harness.Coordinator.StartAsync(harness.Sink, CancellationToken.None);
 
+        Assert.True(harness.Hooks.StartAttempted);
         Assert.False(harness.Hooks.Started);
 
-        // Вкладка открывается как ни в чём не бывало, но состояние ей взять неоткуда:
-        // источник у него ровно один — хуки, а приёмник не поднялся.
         var tab = await harness.OpenTabAsync();
 
+        // Приёмник, который не поднялся, событий не родит — и вкладка живёт без маркера.
         Assert.False(harness.Sink.States.ContainsKey(tab));
-        Assert.Empty(harness.Sink.StateLog);
+
+        // Но подписка на месте: если событие всё-таки придёт, координатор его обработает.
+        // Без этого утверждения тест не отличал бы оставленную подписку от снятой.
+        harness.RaiseHook(HookKind.SessionStart, tab);
+
+        Assert.Equal(TabState.Idle, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public void Приёмник_без_запуска_не_трогается()
+    {
+        // Обратная сторона предыдущего теста: «не поднялся» и «не звали» — разные вещи.
+        using var harness = new Harness();
+
+        Assert.False(harness.Hooks.StartAttempted);
+        Assert.False(harness.Hooks.Started);
     }
 
     [Fact]
@@ -900,9 +1098,10 @@ public sealed class SessionStateCoordinatorTests
             HookKind kind,
             TerminalId tab,
             string? sessionId = SessionId,
-            string? workingDirectory = ProjectPath)
+            string? workingDirectory = ProjectPath,
+            string? source = null)
         {
-            Hooks.Raise(kind, Workspace.TokenFor(tab), sessionId, workingDirectory);
+            Hooks.Raise(kind, Workspace.TokenFor(tab), sessionId, workingDirectory, source);
             Pump();
         }
 
