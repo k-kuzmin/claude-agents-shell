@@ -58,7 +58,7 @@ public sealed class TabViewModel : ObservableObject
     public string Title => ProjectName + " · " + ShortTitle;
 
     /// <summary>
-    /// Состояние вкладки. Источники — хуки Claude Code и ввод пользователя; разбирать вывод
+    /// Состояние вкладки. Единственный источник — хуки Claude Code; разбирать вывод
     /// агента запрещено. Хуки не подключились — состояние остаётся <see cref="TabState.Unknown"/>,
     /// и это допустимая деградация, а не ошибка.
     /// </summary>
