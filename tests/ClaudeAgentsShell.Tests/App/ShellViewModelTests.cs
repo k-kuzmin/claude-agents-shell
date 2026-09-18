@@ -415,6 +415,7 @@ public sealed class ShellViewModelTests
         var harness = await StartedAsync();
         harness.Picker.NextFolder = @"D:\src\gamma";
         harness.Probe.Add(@"D:\src\gamma");
+        harness.Dialog.Edit = project => project;
         harness.Store.SaveFailure = new IOException("диск занят");
 
         await Assert.ThrowsAsync<IOException>(() => harness.Shell.AddProjectAsync(CancellationToken.None));
@@ -428,6 +429,7 @@ public sealed class ShellViewModelTests
         var harness = await StartedAsync();
         harness.Picker.NextFolder = @"D:\src\gamma";
         harness.Probe.Add(@"D:\src\gamma");
+        harness.Dialog.Edit = project => project;
 
         await harness.Shell.AddProjectAsync(CancellationToken.None);
         harness.Picker.NextFolder = @"D:\src\gamma";
@@ -484,6 +486,7 @@ public sealed class ShellViewModelTests
         harness.Picker.NextFolder = @"D:\src\gamma";
         harness.Probe.Add(@"D:\src\gamma");
         harness.BranchReader.Set(@"D:\src\gamma", "main");
+        harness.Dialog.Edit = project => project;
 
         await harness.Shell.AddProjectAsync(CancellationToken.None);
 

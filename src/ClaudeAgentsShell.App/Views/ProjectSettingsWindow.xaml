@@ -6,7 +6,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         d:DataContext="{d:DesignInstance Type=vm:ProjectSettingsViewModel}"
-        Title="Настройки проекта"
+        Title="{Binding WindowTitle}"
         Width="560"
         SizeToContent="Height"
         ResizeMode="NoResize"
@@ -251,7 +251,7 @@
                     BorderBrush="{StaticResource SeparatorBrush}"
                     BorderThickness="0,0,0,1">
                 <Grid>
-                    <TextBlock Text="Настройки проекта"
+                    <TextBlock Text="{Binding WindowTitle}"
                                Margin="16,0,0,0"
                                VerticalAlignment="Center"
                                FontSize="12.5"
@@ -341,6 +341,15 @@
                           DisplayMemberPath="Title"
                           AutomationProperties.Name="Оболочка" />
 
+                <!-- Что произойдёт при запуске, если выбранной оболочки в системе нет:
+                     раздел 8 ТЗ требует отражать откат здесь, в настройках проекта. -->
+                <TextBlock Text="{Binding ShellWarning}"
+                           Margin="0,6,0,0"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Foreground="{StaticResource AccentBrush}"
+                           Visibility="{Binding HasShellWarning, Converter={StaticResource BoolToVisibility}}" />
+
                 <!-- команда перед запуском -->
                 <TextBlock Text="Команда перед запуском" Style="{StaticResource FieldLabelStyle}" Margin="0,16,0,5" />
                 <TextBox Style="{StaticResource MonoFieldTextBoxStyle}"
@@ -385,7 +394,7 @@
                                 IsCancel="True"
                                 Style="{StaticResource DialogButtonStyle}" />
 
-                        <Button Content="Сохранить"
+                        <Button Content="{Binding CommitButtonText}"
                                 Margin="10,0,0,0"
                                 IsDefault="True"
                                 Style="{StaticResource DialogPrimaryButtonStyle}"

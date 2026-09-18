@@ -15,23 +15,28 @@ public sealed class ProjectSettingsWindowDialog : IProjectSettingsDialog
     private readonly IFolderPicker _folderPicker;
     private readonly IDirectoryProbe _directoryProbe;
     private readonly IFileProbe _fileProbe;
+    private readonly IShellAvailability _shellAvailability;
 
     /// <inheritdoc cref="ProjectSettingsWindowDialog" />
     /// <param name="folderPicker">Выбор каталога.</param>
     /// <param name="directoryProbe">Проверка существования каталога.</param>
     /// <param name="fileProbe">Наличие <c>CLAUDE.md</c> и <c>.mcp.json</c> — справочно.</param>
+    /// <param name="shellAvailability">Какие оболочки установлены в системе.</param>
     public ProjectSettingsWindowDialog(
         IFolderPicker folderPicker,
         IDirectoryProbe directoryProbe,
-        IFileProbe fileProbe)
+        IFileProbe fileProbe,
+        IShellAvailability shellAvailability)
     {
         ArgumentNullException.ThrowIfNull(folderPicker);
         ArgumentNullException.ThrowIfNull(directoryProbe);
         ArgumentNullException.ThrowIfNull(fileProbe);
+        ArgumentNullException.ThrowIfNull(shellAvailability);
 
         _folderPicker = folderPicker;
         _directoryProbe = directoryProbe;
         _fileProbe = fileProbe;
+        _shellAvailability = shellAvailability;
     }
 
     /// <inheritdoc />
@@ -41,12 +46,16 @@ public sealed class ProjectSettingsWindowDialog : IProjectSettingsDialog
     /// Асинхронная сигнатура — требование порта, а не обещание ухода в пул: звать метод
     /// можно только из потока интерфейса.
     /// </remarks>
-    public Task<ProjectDefinition?> ShowAsync(ProjectDefinition project, CancellationToken cancellationToken)
+    public Task<ProjectDefinition?> ShowAsync(
+        ProjectDefinition project,
+        ProjectSettingsPurpose purpose,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(project);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var viewModel = new ProjectSettingsViewModel(project, _folderPicker, _directoryProbe, _fileProbe);
+        var viewModel = new ProjectSettingsViewModel(
+            project, purpose, _folderPicker, _directoryProbe, _fileProbe, _shellAvailability);
         var window = new ProjectSettingsWindow(viewModel) { Owner = Owner() };
 
         // Окно ещё не показано: закрывать его до ShowDialog нельзя, иначе показ повиснет

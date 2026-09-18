@@ -1,9 +1,25 @@
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
 using Xunit;
 
 namespace ClaudeAgentsShell.Tests.App;
+
+/// <summary>Установленные оболочки задаёт тест; PATH не трогается.</summary>
+internal sealed class FakeShellAvailability : IShellAvailability
+{
+    /// <summary>Что вернёт проверка. Порядок значим: первый элемент — замена при откате.</summary>
+    public IReadOnlyList<ShellKind> Installed { get; set; } = Enum.GetValues<ShellKind>();
+
+    /// <summary>Чем ответит проверка вместо списка.</summary>
+    public Exception? Failure { get; set; }
+
+    public Task<IReadOnlyList<ShellKind>> GetInstalledAsync(CancellationToken cancellationToken) =>
+        Failure is { } failure
+            ? Task.FromException<IReadOnlyList<ShellKind>>(failure)
+            : Task.FromResult(Installed);
+}
 
 /// <summary>Наличие файлов задаётся тестом; диск не трогается.</summary>
 internal sealed class FakeFileProbe : IFileProbe
@@ -30,6 +46,7 @@ public sealed class ProjectSettingsViewModelTests
     private readonly FakeFolderPicker _folderPicker = new();
     private readonly FakeDirectoryProbe _directoryProbe = new();
     private readonly FakeFileProbe _fileProbe = new();
+    private readonly FakeShellAvailability _shells = new();
 
     [Fact]
     public void Constructor_FillsFieldsFromProject()
@@ -130,7 +147,7 @@ public sealed class ProjectSettingsViewModelTests
 
         viewModel.Name = "  Мой проект  ";
         viewModel.ProjectPath = "  D:\\work\\repo  ";
-        viewModel.Shell = ShellOptions.For(ShellKind.Cmd);
+        viewModel.Shell = viewModel.Shells.Single(option => option.Kind == ShellKind.Cmd);
         viewModel.PreLaunch = "  nvm use 20  ";
         viewModel.ExtraArgsText = "  --add-dir \"D:\\my repo\"   --verbose ";
         viewModel.Save();
@@ -290,6 +307,131 @@ public sealed class ProjectSettingsViewModelTests
         Assert.Equal("CLAUDE.md — не найден", viewModel.ClaudeMdHint);
     }
 
+    [Fact]
+    public void Purpose_ChangesOnlyTheLabels()
+    {
+        var edit = Create(Project());
+        var add = Create(Project(), ProjectSettingsPurpose.Add);
+
+        Assert.NotEqual(edit.WindowTitle, add.WindowTitle);
+        Assert.NotEqual(edit.CommitButtonText, add.CommitButtonText);
+        Assert.All(
+            new[] { edit.WindowTitle, add.WindowTitle, edit.CommitButtonText, add.CommitButtonText },
+            text => Assert.False(string.IsNullOrWhiteSpace(text)));
+    }
+
+    [Fact]
+    public void BeforeTheShellCheck_NothingIsMarkedAndNothingIsPromised()
+    {
+        var viewModel = Create(Project());
+
+        Assert.All(
+            viewModel.Shells,
+            option => Assert.DoesNotContain(ShellOptions.MissingMark, option.Title, StringComparison.Ordinal));
+        Assert.False(viewModel.HasShellWarning);
+    }
+
+    [Fact]
+    public async Task RefreshShellsAsync_MarksMissingShellAndNamesTheFallback()
+    {
+        // Ровно случай пользователя: pwsh не установлен, сессии уходят в powershell 5.1.
+        _shells.Installed = [ShellKind.WindowsPowerShell, ShellKind.Cmd];
+
+        var viewModel = Create(Project(shell: ShellKind.Pwsh));
+        await viewModel.RefreshShellsAsync(CancellationToken.None);
+
+        var pwsh = viewModel.Shells.Single(option => option.Kind == ShellKind.Pwsh);
+        Assert.EndsWith(ShellOptions.MissingMark, pwsh.Title, StringComparison.Ordinal);
+
+        Assert.True(viewModel.HasShellWarning);
+        Assert.Contains("не установлена", viewModel.ShellWarning, StringComparison.Ordinal);
+        Assert.Contains(ShellOptions.TitleFor(ShellKind.WindowsPowerShell), viewModel.ShellWarning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RefreshShellsAsync_KeepsTheSelectedShell()
+    {
+        // Список пересобирается целиком: выбор обязан это пережить, иначе оболочка проекта
+        // молча подменилась бы — то, что запрещает раздел 8 ТЗ.
+        _shells.Installed = [ShellKind.Cmd];
+
+        var viewModel = Create(Project(shell: ShellKind.Pwsh));
+        await viewModel.RefreshShellsAsync(CancellationToken.None);
+
+        Assert.Equal(ShellKind.Pwsh, viewModel.Shell.Kind);
+        Assert.Contains(viewModel.Shell, viewModel.Shells);
+
+        viewModel.Save();
+        Assert.Equal(ShellKind.Pwsh, Assert.IsType<ProjectDefinition>(viewModel.Result).Shell);
+    }
+
+    [Fact]
+    public async Task Shell_NullFromTheList_DoesNotReplaceTheChoice()
+    {
+        // WPF отдаёт null, когда меняется ItemsSource. Молчаливая подмена выбора запрещена.
+        var viewModel = Create(Project(shell: ShellKind.Cmd));
+        await viewModel.RefreshShellsAsync(CancellationToken.None);
+
+        viewModel.Shell = null!;
+
+        Assert.Equal(ShellKind.Cmd, viewModel.Shell.Kind);
+    }
+
+    [Fact]
+    public async Task RefreshShellsAsync_InstalledShell_SaysNothing()
+    {
+        _shells.Installed = [ShellKind.Pwsh, ShellKind.Cmd];
+
+        var viewModel = Create(Project(shell: ShellKind.Pwsh));
+        await viewModel.RefreshShellsAsync(CancellationToken.None);
+
+        Assert.False(viewModel.HasShellWarning);
+        Assert.Equal(string.Empty, viewModel.ShellWarning);
+    }
+
+    [Fact]
+    public async Task RefreshShellsAsync_NothingInstalled_SaysSessionsWillNotStart()
+    {
+        _shells.Installed = [];
+
+        var viewModel = Create(Project());
+        await viewModel.RefreshShellsAsync(CancellationToken.None);
+
+        Assert.True(viewModel.HasShellWarning);
+        Assert.Contains("ни одной оболочки", viewModel.ShellWarning, StringComparison.Ordinal);
+
+        // Раздел 8 ТЗ: отражаем состояние, но правку настроек не блокируем.
+        Assert.True(viewModel.IsValid);
+    }
+
+    [Fact]
+    public async Task RefreshShellsAsync_FailedCheck_DegradesWithoutMarks()
+    {
+        _shells.Failure = new IOException("диск занят");
+
+        var viewModel = Create(Project());
+        await viewModel.RefreshShellsAsync(CancellationToken.None);
+
+        Assert.All(
+            viewModel.Shells,
+            option => Assert.DoesNotContain(ShellOptions.MissingMark, option.Title, StringComparison.Ordinal));
+        Assert.Contains("не удалось", viewModel.ShellWarning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ChangingShell_RefreshesTheWarning()
+    {
+        _shells.Installed = [ShellKind.Cmd];
+
+        var viewModel = Create(Project(shell: ShellKind.Pwsh));
+        await viewModel.RefreshShellsAsync(CancellationToken.None);
+        Assert.True(viewModel.HasShellWarning);
+
+        viewModel.Shell = viewModel.Shells.Single(option => option.Kind == ShellKind.Cmd);
+
+        Assert.False(viewModel.HasShellWarning);
+    }
+
     private static ProjectDefinition Project(
         string name = "repo",
         string path = @"C:\repo",
@@ -299,6 +441,8 @@ public sealed class ProjectSettingsViewModelTests
         int order = 0) =>
         new(ProjectId, name, path, shell, preLaunch, extraArgs ?? [], order);
 
-    private ProjectSettingsViewModel Create(ProjectDefinition project) =>
-        new(project, _folderPicker, _directoryProbe, _fileProbe);
+    private ProjectSettingsViewModel Create(
+        ProjectDefinition project,
+        ProjectSettingsPurpose purpose = ProjectSettingsPurpose.Edit) =>
+        new(project, purpose, _folderPicker, _directoryProbe, _fileProbe, _shells);
 }

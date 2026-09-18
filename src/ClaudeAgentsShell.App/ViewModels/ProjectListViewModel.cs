@@ -94,12 +94,18 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Добавляет проект: диалог выбора папки, имя по умолчанию — имя папки. Остальные
-    /// настройки правятся потом, через <see cref="EditProjectAsync" />.
+    /// Добавляет проект в два шага (раздел 6.5 ТЗ): сначала выбор папки, затем диалог
+    /// настроек с подставленными умолчаниями — имя по папке, оболочка <c>pwsh</c>.
+    /// Отказ на любом из шагов не создаёт ничего.
     /// </summary>
+    /// <remarks>
+    /// Выбор папки идёт первым, а не полем внутри диалога: это привычный жест кнопки «плюс»,
+    /// и он позволяет узнать близнеца по каталогу до того, как пользователь потратит время
+    /// на настройки.
+    /// </remarks>
     /// <returns>
     /// Добавленная строка, уже имеющаяся строка того же каталога либо <c>null</c>,
-    /// если пользователь отказался от выбора.
+    /// если пользователь отказался.
     /// </returns>
     public async Task<ProjectRowViewModel?> AddProjectAsync(CancellationToken cancellationToken)
     {
@@ -111,12 +117,12 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
 
         // Тот же каталог второй строкой — почти наверняка промах в диалоге: показываем
         // пользователю уже существующую строку вместо близнеца, который путал бы счётчики.
-        if (_rows.FirstOrDefault(existing => ProjectNaming.SamePath(existing.Path, path)) is { } duplicate)
+        if (FindByPath(path) is { } duplicate)
         {
             return duplicate;
         }
 
-        var project = new ProjectDefinition(
+        var draft = new ProjectDefinition(
             Guid.NewGuid(),
             ProjectNaming.DefaultNameFor(path),
             path,
@@ -124,6 +130,23 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
             PreLaunch: null,
             ExtraArgs: [],
             Order: _rows.Count);
+
+        var confirmed = await _settingsDialog
+            .ShowAsync(draft, ProjectSettingsPurpose.Add, cancellationToken)
+            .ConfigureAwait(true);
+        if (confirmed is null)
+        {
+            return null;
+        }
+
+        // Путь мог измениться прямо в диалоге — проверяем близнеца ещё раз, уже по итоговому.
+        if (FindByPath(confirmed.Path) is { } twin)
+        {
+            return twin;
+        }
+
+        // Идентификатор и место в списке принадлежат списку, а не диалогу.
+        var project = confirmed with { Id = draft.Id, Order = _rows.Count };
 
         // Сначала запись, потом строка на экране: иначе сорвавшееся сохранение оставило бы
         // в списке проект, которого нет в файле.
@@ -161,7 +184,9 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     {
         ArgumentNullException.ThrowIfNull(row);
 
-        var edited = await _settingsDialog.ShowAsync(row.Project, cancellationToken).ConfigureAwait(true);
+        var edited = await _settingsDialog
+            .ShowAsync(row.Project, ProjectSettingsPurpose.Edit, cancellationToken)
+            .ConfigureAwait(true);
         if (edited is null)
         {
             return false;
@@ -269,6 +294,10 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     // Список для записи: порядок строк на экране и есть порядок в файле.
     private List<ProjectDefinition> Renumber(Func<ProjectRowViewModel, ProjectDefinition> select) =>
         _rows.Select((row, order) => select(row) with { Order = order }).ToList();
+
+    // Строка того же каталога, если она уже есть в списке.
+    private ProjectRowViewModel? FindByPath(string path) =>
+        _rows.FirstOrDefault(existing => ProjectNaming.SamePath(existing.Path, path));
 
     private void Unwatch(string path)
     {
