@@ -321,6 +321,15 @@ internal sealed class FakeTabStateSink : ITabStateSink
 
     public void SetShortTitle(TerminalId terminalId, string shortTitle) => ShortTitles[terminalId] = shortTitle;
 
+    public void ResetShortTitle(TerminalId terminalId)
+    {
+        ShortTitles.Remove(terminalId);
+        ResetTitles.Add(terminalId);
+    }
+
+    /// <summary>Вкладки, которым имя сбрасывали, по порядку — сброс обязан быть не безусловным.</summary>
+    public List<TerminalId> ResetTitles { get; } = [];
+
     public bool TryGetWorkingDirectory(TerminalId terminalId, out string workingDirectory)
     {
         if (_directories.TryGetValue(terminalId, out var directory))

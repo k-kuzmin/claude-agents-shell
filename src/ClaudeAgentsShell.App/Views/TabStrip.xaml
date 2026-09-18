@@ -57,8 +57,9 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
 
-                                    <!-- Точка состояния. Источник состояния — хуки (M4);
-                                         до тех пор все вкладки в TabState.Unknown. -->
+                                    <!-- Точка состояния. Источники — хуки Claude Code и ввод
+                                         пользователя. Хуки не подключились — вкладка остаётся
+                                         в TabState.Unknown, и точка просто не красится. -->
                                     <Ellipse x:Name="StateDot"
                                              Grid.Column="0"
                                              Width="6" Height="6"

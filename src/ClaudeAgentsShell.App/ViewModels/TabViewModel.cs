@@ -39,8 +39,8 @@ public sealed class TabViewModel : ObservableObject
     public string ProjectName { get; }
 
     /// <summary>
-    /// Короткое имя сессии. До первого сообщения пользователя — «новая сессия»;
-    /// настоящие заголовки приходят в M4.
+    /// Короткое имя сессии. До первого сообщения пользователя — «новая сессия»; дальше его
+    /// выставляет координатор состояний, вычитав первое сообщение из транскрипта.
     /// </summary>
     public string ShortTitle
     {
@@ -58,8 +58,9 @@ public sealed class TabViewModel : ObservableObject
     public string Title => ProjectName + " · " + ShortTitle;
 
     /// <summary>
-    /// Состояние вкладки. Источник — хуки Claude Code (M4); разбирать вывод агента запрещено,
-    /// поэтому до M4 состояние остаётся <see cref="TabState.Unknown"/>.
+    /// Состояние вкладки. Источники — хуки Claude Code и ввод пользователя; разбирать вывод
+    /// агента запрещено. Хуки не подключились — состояние остаётся <see cref="TabState.Unknown"/>,
+    /// и это допустимая деградация, а не ошибка.
     /// </summary>
     public TabState State
     {

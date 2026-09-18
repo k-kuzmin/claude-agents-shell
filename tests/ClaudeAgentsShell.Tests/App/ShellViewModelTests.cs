@@ -919,7 +919,7 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
-    public async Task Counter_leads_to_the_tab_that_has_been_waiting_longest()
+    public async Task Counter_leads_to_the_tab_that_was_opened_first_not_the_one_waiting_longest()
     {
         var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
         var first = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
@@ -934,5 +934,23 @@ public sealed class ShellViewModelTests
 
         Assert.Same(first, harness.Shell.Tabs.ActiveTab);
         Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+    }
+
+    [Fact]
+    public async Task Dead_tab_loses_its_marker_and_leaves_the_awaiting_counter()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        tab!.State = TabState.AwaitingInput;
+        Assert.Equal(1, harness.Shell.Tabs.AwaitingInputCount);
+
+        // Процесс оболочки убит извне: SessionEnd не придёт, и ввода у вкладки без помпы
+        // уже не будет — маркер обязан сняться здесь, иначе он останется до конца сеанса.
+        harness.Workspace.RaiseExited(tab.TerminalId, exitCode: 1);
+
+        Assert.False(tab.IsRunning);
+        Assert.Equal(TabState.Unknown, tab.State);
+        Assert.Equal(0, harness.Shell.Tabs.AwaitingInputCount);
+        Assert.False(harness.Shell.Tabs.HasAwaitingInput);
     }
 }

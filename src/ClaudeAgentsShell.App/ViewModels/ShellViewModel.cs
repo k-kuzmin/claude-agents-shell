@@ -407,6 +407,15 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     }
 
     /// <inheritdoc />
+    void ITabStateSink.ResetShortTitle(TerminalId terminalId)
+    {
+        if (Tabs.Find(terminalId) is { } tab)
+        {
+            tab.ShortTitle = TabViewModel.NewSessionTitle;
+        }
+    }
+
+    /// <inheritdoc />
     bool ITabStateSink.TryGetWorkingDirectory(TerminalId terminalId, out string workingDirectory)
     {
         workingDirectory = string.Empty;
@@ -481,6 +490,12 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             if (Tabs.Find(e.TerminalId) is { } tab)
             {
                 tab.IsRunning = false;
+
+                // Маркер снимается вместе с процессом. `SessionEnd` от убитой оболочки не придёт,
+                // а ввод у вкладки без помпы не рождается вовсе — значит вкладка, умершая
+                // в «ждёт ввода», осталась бы с оранжевой точкой и в счётчике до конца сеанса,
+                // и клик по счётчику вёл бы на мёртвый терминал (разделы 5.3 и 8 ТЗ).
+                tab.State = TabState.Unknown;
             }
         });
     }
