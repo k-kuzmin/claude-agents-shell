@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using ClaudeAgentsShell.Sessions;
 using ClaudeAgentsShell.Sessions.History;
 using ClaudeAgentsShell.Sessions.Storage;
@@ -54,19 +55,90 @@ public sealed class SessionHistoryReaderTests
     }
 
     [Fact]
-    public async Task Служебные_строки_заголовком_не_становятся()
+    public async Task Служебный_вывод_заголовком_не_становится()
     {
         using var temp = new TempDirectory();
         var reader = CreateReader(temp);
         WriteTranscript(temp, SessionId,
             """{"type":"user","isMeta":true,"message":{"role":"user","content":"служебное"}}""",
-            """{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"}}""",
+            """{"type":"user","message":{"role":"user","content":"<local-command-stdout>вывод команды</local-command-stdout>"}}""",
             """{"type":"user","isSidechain":true,"message":{"role":"user","content":"задание сабагенту"}}""",
             """{"type":"user","message":{"role":"user","content":"  настоящий\n  вопрос  "}}""");
 
         var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
 
         Assert.Equal("настоящий вопрос", summary?.Title);
+    }
+
+    [Fact]
+    public async Task Слэш_команда_становится_заголовком_вместе_с_аргументами()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteTranscript(temp, SessionId,
+            """{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"<command-message>work</command-message>\n<command-name>/work</command-name>\n<command-args>WO-15917 препрод</command-args>"}}""",
+            """{"type":"user","message":{"role":"user","content":"следующий вопрос"}}""");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("/work WO-15917 препрод", summary?.Title);
+    }
+
+    [Fact]
+    public async Task Слэш_команда_без_аргументов_даёт_заголовком_саму_команду()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteTranscript(temp, SessionId,
+            """{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"<command-name>/init</command-name>\n<command-message>init</command-message>\n<command-args></command-args>"}}""");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("/init", summary?.Title);
+    }
+
+    [Fact]
+    public async Task Команда_самой_оболочки_заголовком_не_становится()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+
+        // У /clear нет origin: агенту она не отправляется. Настоящее первое сообщение — следующее.
+        WriteTranscript(temp, SessionId,
+            """{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}}""",
+            """{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"настоящий вопрос"}}""");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("настоящий вопрос", summary?.Title);
+    }
+
+    [Theory]
+    // Незакрытый тег.
+    [InlineData("<command-name>/work")]
+    // Закрывающий тег без открывающего.
+    [InlineData("<command-args>WO-1</command-args>/work</command-name>")]
+    // Пустое содержимое команды.
+    [InlineData("<command-name></command-name><command-args>WO-1</command-args>")]
+    // Одни пробелы внутри.
+    [InlineData("<command-name>   </command-name>")]
+    // Вложенность: содержимое начинается не со слэша, значит это не имя команды.
+    [InlineData("<command-name><command-name>/work</command-name></command-name>")]
+    // Мусор вместо обёртки.
+    [InlineData("<<<>>><command-name")]
+    public async Task Битая_обёртка_команды_разбор_не_роняет(string content)
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var command = """{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"""
+            + JsonSerializer.Serialize(content) + "}}";
+        WriteTranscript(temp, SessionId,
+            command,
+            """{"type":"user","message":{"role":"user","content":"следующий вопрос"}}""");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("следующий вопрос", summary?.Title);
     }
 
     [Fact]
