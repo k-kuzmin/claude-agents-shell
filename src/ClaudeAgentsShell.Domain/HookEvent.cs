@@ -7,6 +7,11 @@ public enum HookKind
     Unknown = 0,
 
     /// <summary>Сессия стартовала: приносит <c>session_id</c>, по которому вкладка узнаёт себя.</summary>
+    /// <remarks>
+    /// Приходит не только на запуск: <c>source</c> различает <c>startup</c>, <c>resume</c>,
+    /// <c>clear</c>, <c>compact</c> и <c>fork</c>. Сжатие контекста происходит **посреди хода**,
+    /// поэтому границей хода этот хук является не всегда — см. <see cref="HookEvent.Source"/>.
+    /// </remarks>
     SessionStart = 1,
 
     /// <summary>Агент закончил ответ — вкладка переходит в «ждёт ввода».</summary>
@@ -28,6 +33,11 @@ public enum HookKind
     /// пока промпт набирается. Это точнее буквы раздела 5.3 ТЗ: пока не отправлено, агент
     /// действительно ждёт.
     /// </para>
+    /// <para>
+    /// Автором промпта бывает не человек: <c>source</c> различает <c>user</c>, <c>sdk</c>,
+    /// <c>system</c>, <c>loop_wakeup</c>, <c>schedule_wakeup</c>, <c>poll_event</c>. В «работает»
+    /// переводят все они — ход начинается в любом случае.
+    /// </para>
     /// </remarks>
     UserPromptSubmit = 4,
 
@@ -38,10 +48,24 @@ public enum HookKind
     /// <remarks>
     /// Ни <c>SubagentStart</c>, ни <c>SubagentStop</c> не сообщают, сколько сабагентов осталось,
     /// поэтому счётчик приложение ведёт само. Потерянный хук уводит счётчик в дрейф, и вкладка
-    /// залипла бы в <see cref="TabState.BackgroundWork"/> — значит счётчик обязан обнуляться
-    /// на границах хода, а не только вычитаться.
+    /// залипает в <see cref="TabState.BackgroundWork"/> — снимается это только на границе сессии
+    /// (<see cref="SessionStart"/> с настоящей сменой хода и <see cref="SessionEnd"/>), потому что
+    /// только там достоверно известно, что незавершённых сабагентов нет.
     /// </remarks>
     SubagentStop = 6,
+
+    /// <summary>
+    /// Ход агента оборвался ошибкой или отменой — вкладка переходит туда же, куда по
+    /// <see cref="Stop"/>.
+    /// </summary>
+    /// <remarks>
+    /// Отдельный хук, а не разновидность <see cref="Stop"/>: в Claude Code это самостоятельный
+    /// путь вызова (<c>executeStopFailureHooks</c>), и на оборванном ходе <see cref="Stop"/>
+    /// может не прийти вовсе. Без него вкладка, чей ход упал на ошибке API или был прерван
+    /// пользователем, осталась бы в «работает» навсегда: <c>UserPromptSubmit</c> уже был,
+    /// а конца хода нет.
+    /// </remarks>
+    StopFailure = 7,
 }
 
 /// <summary>Событие от хука, пришедшее на локальный endpoint приложения.</summary>
@@ -53,9 +77,21 @@ public enum HookKind
 /// Нужен, чтобы сопоставить событие с вкладкой, не полагаясь на совпадение каталогов.
 /// </param>
 /// <param name="ReceivedUtc">Время приёма события.</param>
+/// <param name="Source">
+/// Поле <c>source</c> полезной нагрузки: чем вызван хук. У <c>SessionStart</c> это
+/// <c>startup</c>, <c>resume</c>, <c>clear</c>, <c>compact</c> или <c>fork</c>;
+/// у <c>UserPromptSubmit</c> — кто автор промпта. Остальные хуки поля не приносят.
+/// </param>
+/// <remarks>
+/// <paramref name="Source" /> необязателен намеренно: формат полезной нагрузки Claude Code
+/// считается нестабильным (раздел 7 CLAUDE.md), и сам Claude Code помечает это поле как
+/// «payloads may omit it while the field rolls out». Отсутствие значения трактуется как
+/// обычная граница хода — то есть ровно как поведение до появления поля.
+/// </remarks>
 public sealed record HookEvent(
     HookKind Kind,
     string? SessionId,
     string? WorkingDirectory,
     string? CorrelationToken,
-    DateTimeOffset ReceivedUtc);
+    DateTimeOffset ReceivedUtc,
+    string? Source = null);
