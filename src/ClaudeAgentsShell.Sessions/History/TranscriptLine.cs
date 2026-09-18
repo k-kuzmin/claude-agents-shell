@@ -76,8 +76,37 @@ internal static class TranscriptLineParser
             _ => null,
         };
 
-        return Clean(text);
+        var trimmed = text.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+        {
+            return null;
+        }
+
+        // Всё в угловых скобках — служебная обёртка. Единственная, которая несёт имя вкладки, —
+        // слэш-команда: она и есть первое сообщение пользователя (раздел 6.3 ТЗ).
+        if (trimmed[0] != '<')
+        {
+            return Shorten(trimmed);
+        }
+
+        return IsHumanPrompt(root) ? Shorten(CommandWrapper.Title(trimmed)) : null;
     }
+
+    /// <summary>
+    /// Строка — запрос, отправленный пользователем агенту, а не команда самой оболочки
+    /// Claude Code (<c>/clear</c>, <c>/model</c>, <c>/mcp</c>).
+    /// </summary>
+    /// <remarks>
+    /// Обе разновидности приходят одной и той же обёрткой <c>&lt;command-name&gt;</c>, и различает
+    /// их только <c>origin</c>: у команды оболочки его нет — она никуда не отправляется. Замер по
+    /// транскриптам пользователя: без этой проверки 59 вкладок вместо первого сообщения назывались
+    /// бы <c>/clear</c>. Пропадёт поле из формата — заголовок из команды просто перестанет
+    /// извлекаться, как было до этой правки, и вкладка останется «новой сессией».
+    /// </remarks>
+    private static bool IsHumanPrompt(JsonElement root) =>
+        root.TryGetProperty("origin", out var origin)
+        && origin.ValueKind == JsonValueKind.Object
+        && string.Equals(ReadString(origin, "kind"), "human", StringComparison.Ordinal);
 
     private static string? FirstTextBlock(JsonElement content)
     {
@@ -94,19 +123,18 @@ internal static class TranscriptLineParser
         return null;
     }
 
-    /// <summary>
-    /// Схлопывает сообщение в одну строку и отбрасывает служебные обёртки вроде
-    /// <c>&lt;command-name&gt;</c>: в заголовке вкладки они выглядят как мусор.
-    /// </summary>
-    private static string? Clean(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return null;
-        }
+    /// <inheritdoc cref="Shorten(ReadOnlySpan{char})" />
+    private static string? Shorten(string? text) =>
+        text is null ? null : Shorten(text.AsSpan());
 
+    /// <summary>
+    /// Схлопывает сообщение в одну строку и обрезает до <see cref="TitleLimit"/>: в полосу вкладок
+    /// длиннее всё равно не влезает, а переводы строк в заголовке выглядят как мусор.
+    /// </summary>
+    private static string? Shorten(ReadOnlySpan<char> text)
+    {
         var trimmed = text.Trim();
-        if (trimmed.StartsWith('<'))
+        if (trimmed.IsEmpty)
         {
             return null;
         }
