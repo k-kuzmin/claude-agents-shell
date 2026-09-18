@@ -17,6 +17,7 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     private readonly IDirectoryProbe _directoryProbe;
     private readonly IFolderPicker _folderPicker;
     private readonly IProjectSettingsDialog _settingsDialog;
+    private readonly IUserPrompt _prompt;
     private readonly IShellLauncher _shellLauncher;
     private readonly IUiDispatcher _dispatcher;
     private readonly ObservableCollection<ProjectRowViewModel> _rows = [];
@@ -36,6 +37,7 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         IDirectoryProbe directoryProbe,
         IFolderPicker folderPicker,
         IProjectSettingsDialog settingsDialog,
+        IUserPrompt prompt,
         IShellLauncher shellLauncher,
         IUiDispatcher dispatcher)
     {
@@ -45,6 +47,7 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(directoryProbe);
         ArgumentNullException.ThrowIfNull(folderPicker);
         ArgumentNullException.ThrowIfNull(settingsDialog);
+        ArgumentNullException.ThrowIfNull(prompt);
         ArgumentNullException.ThrowIfNull(shellLauncher);
         ArgumentNullException.ThrowIfNull(dispatcher);
 
@@ -54,6 +57,7 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         _directoryProbe = directoryProbe;
         _folderPicker = folderPicker;
         _settingsDialog = settingsDialog;
+        _prompt = prompt;
         _shellLauncher = shellLauncher;
         _dispatcher = dispatcher;
 
@@ -142,6 +146,13 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         // Путь мог измениться прямо в диалоге — проверяем близнеца ещё раз, уже по итоговому.
         if (FindByPath(confirmed.Path) is { } twin)
         {
+            // Здесь, в отличие от проверки по выбранной папке, пользователь уже заполнил
+            // имя, оболочку и аргументы: молча выбросить их — то же, что не отработавшая
+            // кнопка. Называем проект, который занимает каталог, чтобы было куда смотреть.
+            _prompt.ShowError(
+                "Проект не добавлен",
+                $"Каталог «{twin.Path}» уже открыт проектом «{twin.Name}». "
+                + "Два проекта на один каталог развели бы счётчики сессий, поэтому второй не добавлен.");
             return twin;
         }
 
