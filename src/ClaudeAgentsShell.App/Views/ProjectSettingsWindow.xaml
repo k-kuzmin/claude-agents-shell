@@ -1,0 +1,398 @@
+<Window x:Class="ClaudeAgentsShell.App.Views.ProjectSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:ClaudeAgentsShell.App.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        d:DataContext="{d:DesignInstance Type=vm:ProjectSettingsViewModel}"
+        Title="Настройки проекта"
+        Width="560"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True"
+        WindowStyle="None">
+
+    <!--
+        Обрамление своё, как у главного окна: диалог должен читаться частью приложения,
+        а не системным окном. AllowsTransparency не включается — правило проекта.
+        ResizeBorderThickness нулевая: окно не тянется, ResizeMode="NoResize".
+    -->
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="40"
+                      ResizeBorderThickness="0"
+                      CornerRadius="0"
+                      GlassFrameThickness="0"
+                      UseAeroCaptionButtons="False"
+                      NonClientFrameEdges="None" />
+    </WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Theme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Подпись поля. -->
+            <Style x:Key="FieldLabelStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="11" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                <Setter Property="Margin" Value="0,0,0,5" />
+            </Style>
+
+            <!-- Пояснение под полем. -->
+            <Style x:Key="FieldHintStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="11" />
+                <Setter Property="Foreground" Value="{StaticResource FaintTextBrush}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Margin" Value="0,5,0,0" />
+            </Style>
+
+            <!-- Поля ввода: своя рамка вместо системной, фокус подсвечивается акцентом.
+                 Каретка и выделение задаются явно — на тёмном фоне системные не видны. -->
+            <Style x:Key="FieldTextBoxStyle" TargetType="TextBox">
+                <Setter Property="Height" Value="30" />
+                <Setter Property="FontSize" Value="12.5" />
+                <Setter Property="Padding" Value="9,0" />
+                <Setter Property="Background" Value="{StaticResource WorkAreaBackgroundBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource OutlineBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CaretBrush" Value="{StaticResource AccentBrush}" />
+                <Setter Property="SelectionBrush" Value="{StaticResource AccentBrush}" />
+                <Setter Property="SnapsToDevicePixels" Value="True" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TextBox">
+                            <Border x:Name="Root"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="6">
+                                <ScrollViewer x:Name="PART_ContentHost"
+                                              Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="Center"
+                                              Focusable="False"
+                                              HorizontalScrollBarVisibility="Hidden"
+                                              VerticalScrollBarVisibility="Hidden" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                    <Setter TargetName="Root" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Пути и аргументы моноширинным, как строка проекта в панели. -->
+            <Style x:Key="MonoFieldTextBoxStyle" TargetType="TextBox" BasedOn="{StaticResource FieldTextBoxStyle}">
+                <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
+                <Setter Property="FontSize" Value="11.5" />
+            </Style>
+
+            <Style x:Key="ShellItemStyle" TargetType="ComboBoxItem">
+                <Setter Property="Padding" Value="10,6" />
+                <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBoxItem">
+                            <Border x:Name="Root"
+                                    Background="{TemplateBinding Background}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter TargetName="Root" Property="Background" Value="{StaticResource RowHoverBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Список оболочек. Шаблон свой целиком: системный рисует белый выпадающий
+                 список, который в тёмном окне выглядит чужеродно. -->
+            <Style x:Key="ShellComboBoxStyle" TargetType="ComboBox">
+                <Setter Property="Height" Value="30" />
+                <Setter Property="FontSize" Value="12.5" />
+                <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                <Setter Property="SnapsToDevicePixels" Value="True" />
+                <Setter Property="ItemContainerStyle" Value="{StaticResource ShellItemStyle}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBox">
+                            <Grid x:Name="Root">
+                                <ToggleButton Focusable="False"
+                                              ClickMode="Press"
+                                              IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border x:Name="Chrome"
+                                                    Background="{StaticResource WorkAreaBackgroundBrush}"
+                                                    BorderBrush="{StaticResource OutlineBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="6" />
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Chrome" Property="Background" Value="{StaticResource RowHoverBrush}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                </ToggleButton>
+
+                                <ContentPresenter Margin="10,0,30,0"
+                                                  VerticalAlignment="Center"
+                                                  IsHitTestVisible="False"
+                                                  Content="{TemplateBinding SelectionBoxItem}"
+                                                  ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" />
+
+                                <Path Style="{StaticResource IconPathStyle}"
+                                      StrokeThickness="1.3"
+                                      Stroke="{StaticResource MutedTextBrush}"
+                                      Data="M0,0 L4,4 L8,0"
+                                      HorizontalAlignment="Right"
+                                      VerticalAlignment="Center"
+                                      Margin="0,0,11,0"
+                                      IsHitTestVisible="False" />
+
+                                <Popup x:Name="PART_Popup"
+                                       Placement="Bottom"
+                                       IsOpen="{TemplateBinding IsDropDownOpen}"
+                                       AllowsTransparency="True"
+                                       Focusable="False"
+                                       PopupAnimation="None">
+                                    <!-- Ширина берётся у корня шаблона по имени, а не
+                                         TemplateBinding: у всплывающего списка своё окно,
+                                         и привязка к ActualWidth владельца отдаёт ноль. -->
+                                    <Border Margin="0,3,0,0"
+                                            MinWidth="{Binding ActualWidth, ElementName=Root}"
+                                            Background="{StaticResource ChromeBackgroundBrush}"
+                                            BorderBrush="{StaticResource OutlineBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="6">
+                                        <ScrollViewer MaxHeight="220">
+                                            <ItemsPresenter />
+                                        </ScrollViewer>
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="HasItems" Value="False">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="DialogButtonStyle" TargetType="Button" BasedOn="{StaticResource OutlinedButtonStyle}">
+                <Setter Property="Height" Value="32" />
+                <Setter Property="MinWidth" Value="104" />
+                <Setter Property="FontSize" Value="12.5" />
+            </Style>
+
+            <!-- Главное действие диалога: заливка акцентом, как маркер приложения в заголовке. -->
+            <Style x:Key="DialogPrimaryButtonStyle" TargetType="Button">
+                <Setter Property="Height" Value="32" />
+                <Setter Property="MinWidth" Value="104" />
+                <Setter Property="FontSize" Value="12.5" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="Foreground" Value="{StaticResource WorkAreaBackgroundBrush}" />
+                <Setter Property="SnapsToDevicePixels" Value="True" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Root"
+                                    Background="{StaticResource AccentBrush}"
+                                    CornerRadius="6"
+                                    Padding="14,0">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Root" Property="Opacity" Value="0.88" />
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.35" />
+                                    <Setter Property="Cursor" Value="Arrow" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Border BorderBrush="{StaticResource SeparatorBrush}" BorderThickness="1">
+        <Grid TextElement.FontFamily="{StaticResource UiFontFamily}"
+              TextElement.Foreground="{StaticResource PrimaryTextBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- полоса заголовка диалога -->
+            <Border Grid.Row="0"
+                    Background="{StaticResource ChromeBackgroundBrush}"
+                    BorderBrush="{StaticResource SeparatorBrush}"
+                    BorderThickness="0,0,0,1">
+                <Grid>
+                    <TextBlock Text="Настройки проекта"
+                               Margin="16,0,0,0"
+                               VerticalAlignment="Center"
+                               FontSize="12.5"
+                               FontWeight="SemiBold" />
+
+                    <!-- Не IsCancel: эта роль занята кнопкой «Отмена» в подвале, а два
+                         элемента на одну клавишу Esc заставили бы их чередоваться. -->
+                    <Button HorizontalAlignment="Right"
+                            Margin="0,0,4,0"
+                            Style="{StaticResource CaptionButtonStyle}"
+                            Click="OnCloseClick"
+                            ToolTip="Закрыть"
+                            AutomationProperties.Name="Закрыть">
+                        <Path Style="{StaticResource IconPathStyle}"
+                              StrokeThickness="1.3"
+                              Stroke="{StaticResource MutedTextBrush}"
+                              Data="M2.5,2.5 L11.5,11.5 M11.5,2.5 L2.5,11.5" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <StackPanel Grid.Row="1" Margin="20,18,20,18">
+
+                <!-- каталог проекта -->
+                <TextBlock Text="Каталог проекта" Style="{StaticResource FieldLabelStyle}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- UpdateSourceTrigger=PropertyChanged: доступность «сохранить» обязана
+                         меняться по мере набора, а не после потери фокуса. Сама проверка
+                         каталога на диске висит на LostFocus — на каждое нажатие клавиши
+                         ходить в файловую систему незачем. -->
+                    <TextBox x:Name="PathBox"
+                             Grid.Column="0"
+                             Style="{StaticResource MonoFieldTextBoxStyle}"
+                             Text="{Binding ProjectPath, UpdateSourceTrigger=PropertyChanged}"
+                             LostFocus="OnPathLostFocus"
+                             AutomationProperties.Name="Каталог проекта" />
+
+                    <Button Grid.Column="1"
+                            Margin="8,0,0,0"
+                            Padding="12,0"
+                            MinWidth="88"
+                            Height="30"
+                            Content="Обзор…"
+                            FontSize="12"
+                            Style="{StaticResource DialogButtonStyle}"
+                            Command="{Binding BrowseCommand}" />
+                </Grid>
+
+                <!-- справка о файлах каталога: только наличие, содержимое не читается -->
+                <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                    <TextBlock Text="{Binding ClaudeMdHint}"
+                               FontSize="11"
+                               Foreground="{StaticResource FaintTextBrush}" />
+                    <TextBlock Text="·"
+                               Margin="8,0"
+                               FontSize="11"
+                               Foreground="{StaticResource DisabledTextBrush}" />
+                    <TextBlock Text="{Binding McpJsonHint}"
+                               FontSize="11"
+                               Foreground="{StaticResource FaintTextBrush}" />
+                </StackPanel>
+
+                <TextBlock Text="{Binding DirectoryWarning}"
+                           Margin="0,6,0,0"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Foreground="{StaticResource AccentBrush}"
+                           Visibility="{Binding IsDirectoryMissing, Converter={StaticResource BoolToVisibility}}" />
+
+                <!-- отображаемое имя -->
+                <TextBlock Text="Отображаемое имя" Style="{StaticResource FieldLabelStyle}" Margin="0,16,0,5" />
+                <TextBox x:Name="NameBox"
+                         Style="{StaticResource FieldTextBoxStyle}"
+                         Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="Отображаемое имя" />
+
+                <!-- оболочка -->
+                <TextBlock Text="Оболочка" Style="{StaticResource FieldLabelStyle}" Margin="0,16,0,5" />
+                <ComboBox Style="{StaticResource ShellComboBoxStyle}"
+                          ItemsSource="{Binding Shells}"
+                          SelectedItem="{Binding Shell}"
+                          DisplayMemberPath="Title"
+                          AutomationProperties.Name="Оболочка" />
+
+                <!-- команда перед запуском -->
+                <TextBlock Text="Команда перед запуском" Style="{StaticResource FieldLabelStyle}" Margin="0,16,0,5" />
+                <TextBox Style="{StaticResource MonoFieldTextBoxStyle}"
+                         Text="{Binding PreLaunch, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="Команда перед запуском" />
+                <TextBlock Text="Выполняется в терминале до запуска claude. Пусто — ничего не выполняется."
+                           Style="{StaticResource FieldHintStyle}" />
+
+                <!-- дополнительные аргументы -->
+                <TextBlock Text="Дополнительные аргументы claude" Style="{StaticResource FieldLabelStyle}" Margin="0,16,0,5" />
+                <TextBox Style="{StaticResource MonoFieldTextBoxStyle}"
+                         Text="{Binding ExtraArgsText, UpdateSourceTrigger=PropertyChanged}"
+                         AutomationProperties.Name="Дополнительные аргументы" />
+                <TextBlock Text="Разделяются пробелами. Аргумент с пробелом берите в кавычки; кавычка внутри кавычек удваивается."
+                           Style="{StaticResource FieldHintStyle}" />
+            </StackPanel>
+
+            <!-- подвал -->
+            <Border Grid.Row="2"
+                    Background="{StaticResource ChromeBackgroundBrush}"
+                    BorderBrush="{StaticResource SeparatorBrush}"
+                    BorderThickness="0,1,0,0"
+                    Padding="20,14">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding ValidationMessage}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,12,0"
+                               FontSize="11"
+                               TextWrapping="Wrap"
+                               Foreground="{StaticResource MutedTextBrush}" />
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <!-- IsCancel даёт Esc и закрытие без результата бесплатно:
+                             своя команда отмены здесь была бы лишним кодом. -->
+                        <Button Content="Отмена"
+                                IsCancel="True"
+                                Style="{StaticResource DialogButtonStyle}" />
+
+                        <Button Content="Сохранить"
+                                Margin="10,0,0,0"
+                                IsDefault="True"
+                                Style="{StaticResource DialogPrimaryButtonStyle}"
+                                Command="{Binding SaveCommand}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
