@@ -86,6 +86,12 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     /// </summary>
     public event EventHandler<TerminalExitedEventArgs>? TerminalExited;
 
+    /// <summary>
+    /// Пользователь ввёл что-то в живую вкладку. Событие приходит из потока страницы
+    /// и поднимается до записи в stdin — см. <see cref="ITerminalWorkspace.UserInputReceived"/>.
+    /// </summary>
+    public event EventHandler<TerminalInputEventArgs>? UserInputReceived;
+
     /// <inheritdoc />
     public IReadOnlyList<TerminalId> Terminals
     {
@@ -579,6 +585,10 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         {
             return;
         }
+
+        // До первого await, то есть синхронно в потоке страницы: маркер состояния вкладки
+        // не должен ждать записи в stdin. У мёртвой вкладки помпы нет, и сюда мы не дойдём.
+        UserInputReceived?.Invoke(this, args);
 
         try
         {

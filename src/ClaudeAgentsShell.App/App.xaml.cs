@@ -1,6 +1,7 @@
 using System.Windows;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.Services;
+using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Sessions;
@@ -67,6 +68,9 @@ public partial class App : System.Windows.Application
 
         // Захватывает Dispatcher.CurrentDispatcher, поэтому контейнер строится в потоке UI.
         services.AddSingleton<IUiDispatcher, WpfUiDispatcher>();
+
+        // Источник состояния вкладок: хуки Claude Code и ввод пользователя (раздел 5.3 ТЗ).
+        services.AddSingleton<SessionStateCoordinator>();
 
         services.AddSingleton<ProjectListViewModel>();
         services.AddSingleton<ShellViewModel>();

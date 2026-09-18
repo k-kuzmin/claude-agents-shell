@@ -1,6 +1,7 @@
 using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.Services;
+using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
 
@@ -10,11 +11,12 @@ namespace ClaudeAgentsShell.App.ViewModels;
 /// Корневая ViewModel окна: связывает панель проектов и полосу вкладок с набором терминалов.
 /// Весь разговор с миром идёт через порты — ни файлов, ни процессов, ни WebView2 здесь нет.
 /// </summary>
-public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
+public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabStateSink
 {
     private readonly ITerminalWorkspace _workspace;
     private readonly IUserPrompt _prompt;
     private readonly IUiDispatcher _dispatcher;
+    private readonly SessionStateCoordinator _sessionState;
 
     private bool _terminalPageReady;
     private bool _disposed;
@@ -24,16 +26,19 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         ITerminalWorkspace workspace,
         ProjectListViewModel projects,
         IUserPrompt prompt,
-        IUiDispatcher dispatcher)
+        IUiDispatcher dispatcher,
+        SessionStateCoordinator sessionState)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(projects);
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(sessionState);
 
         _workspace = workspace;
         _prompt = prompt;
         _dispatcher = dispatcher;
+        _sessionState = sessionState;
 
         Projects = projects;
         Tabs = new TabStripViewModel();
@@ -141,6 +146,10 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         // Страница поднялась, её HWND создан — теперь область терминала можно прятать
         // под заглушку, не рискуя готовностью самой страницы.
         _terminalPageReady = true;
+
+        // До первой вкладки: адрес приёмника хуков нужен файлу настроек, который уходит
+        // сессии через --settings. Позже — и первая сессия осталась бы без маркера состояния.
+        await _sessionState.StartAsync(this, cancellationToken).ConfigureAwait(true);
 
         await Projects.LoadAsync(cancellationToken).ConfigureAwait(true);
 
@@ -346,8 +355,51 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable
         _workspace.TerminalExited -= OnTerminalExited;
         Projects.Dispose();
 
+        // Координатор снимается раньше набора вкладок: он подписан на его события.
+        _sessionState.Dispose();
+
         // Набор вкладок освобождается раньше моста: помпам нужно дождаться подтверждений страницы.
         await _workspace.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>Состояние вкладки не трогает выбранный проект: маркеры живут во всех полосах.</remarks>
+    void ITabStateSink.SetState(TerminalId terminalId, TabState state)
+    {
+        if (Tabs.Find(terminalId) is { } tab)
+        {
+            tab.State = state;
+        }
+    }
+
+    /// <inheritdoc />
+    void ITabStateSink.SetShortTitle(TerminalId terminalId, string shortTitle)
+    {
+        if (!string.IsNullOrWhiteSpace(shortTitle) && Tabs.Find(terminalId) is { } tab)
+        {
+            tab.ShortTitle = shortTitle;
+        }
+    }
+
+    /// <inheritdoc />
+    bool ITabStateSink.TryGetWorkingDirectory(TerminalId terminalId, out string workingDirectory)
+    {
+        workingDirectory = string.Empty;
+        if (Tabs.Find(terminalId) is not { } tab)
+        {
+            return false;
+        }
+
+        foreach (var row in Projects.Rows)
+        {
+            if (row.Id == tab.ProjectId)
+            {
+                workingDirectory = row.Path;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task ActivateIfAnyAsync(TabViewModel? tab, CancellationToken cancellationToken)

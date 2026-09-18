@@ -1,4 +1,5 @@
 using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
@@ -29,10 +30,15 @@ public sealed class ShellViewModelTests
             }
 
             var list = new ProjectListViewModel(Store, BranchReader, Watcher, Probe, Picker, new InlineUiDispatcher());
-            Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher());
+            var sessionState = new SessionStateCoordinator(Hooks, Workspace, History, new InlineUiDispatcher());
+            Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher(), sessionState);
         }
 
         public FakeProjectStore Store { get; } = new();
+
+        public FakeHookListener Hooks { get; } = new();
+
+        public FakeSessionHistoryReader History { get; } = new();
 
         public FakeGitBranchReader BranchReader { get; } = new();
 

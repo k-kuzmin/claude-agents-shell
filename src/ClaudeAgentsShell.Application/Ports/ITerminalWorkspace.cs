@@ -28,6 +28,21 @@ public interface ITerminalWorkspace : IAsyncDisposable
     /// <summary>Процесс вкладки завершился.</summary>
     event EventHandler<TerminalExitedEventArgs>? TerminalExited;
 
+    /// <summary>
+    /// Пользователь что-то ввёл в живую вкладку.
+    /// </summary>
+    /// <remarks>
+    /// Переход «ждёт ввода → работает» (раздел 5.3 ТЗ) хуком не приходит и прийти не может:
+    /// это нажатие клавиши, а не событие агента. Единственное место, где оно видно, —
+    /// слой терминала, поэтому он о нём и сообщает.
+    /// <para>
+    /// Событие поднимается синхронно в том потоке, в котором страница отдала ввод
+    /// (для WebView2 это поток интерфейса), и до записи в псевдоконсоль: маркер состояния
+    /// не должен ждать stdin. Подписчик обязан быть дешёвым — это горячий путь ввода.
+    /// </para>
+    /// </remarks>
+    event EventHandler<TerminalInputEventArgs>? UserInputReceived;
+
     /// <summary>Открытые вкладки в порядке открытия.</summary>
     IReadOnlyList<TerminalId> Terminals { get; }
 

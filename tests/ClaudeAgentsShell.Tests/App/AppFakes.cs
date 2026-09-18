@@ -121,6 +121,8 @@ internal sealed class FakeTerminalWorkspace : ITerminalWorkspace
 
     public event EventHandler<TerminalExitedEventArgs>? TerminalExited;
 
+    public event EventHandler<TerminalInputEventArgs>? UserInputReceived;
+
     public IReadOnlyList<TerminalId> Terminals => _terminals;
 
     /// <summary>Каталоги, в которых запрашивался запуск, по порядку.</summary>
@@ -208,9 +210,76 @@ internal sealed class FakeTerminalWorkspace : ITerminalWorkspace
     public void RaiseExited(TerminalId terminalId, int exitCode) =>
         TerminalExited?.Invoke(this, new TerminalExitedEventArgs(terminalId, exitCode));
 
+    /// <summary>Сообщает, что пользователь ввёл что-то во вкладку.</summary>
+    public void RaiseUserInput(TerminalId terminalId, ReadOnlyMemory<byte> data = default) =>
+        UserInputReceived?.Invoke(this, new TerminalInputEventArgs(terminalId, data));
+
     public ValueTask DisposeAsync()
     {
         Disposed = true;
         return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>Приёмник хуков без HttpListener: событие поднимается вручную из теста.</summary>
+internal sealed class FakeHookListener : IHookListener
+{
+    public event EventHandler<HookEventArgs>? HookReceived;
+
+    public Uri Endpoint { get; } = new("http://127.0.0.1:52100/hook/");
+
+    /// <summary>Приёмник был поднят.</summary>
+    public bool Started { get; private set; }
+
+    /// <summary>Приёмник был освобождён.</summary>
+    public bool Disposed { get; private set; }
+
+    /// <summary>Поднять приёмник не удалось — проверка мягкой деградации раздела 5.3 ТЗ.</summary>
+    public Exception? StartFailure { get; set; }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (StartFailure is { } failure)
+        {
+            return Task.FromException(failure);
+        }
+
+        Started = true;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Сообщает о пришедшем хуке.</summary>
+    public void Raise(HookKind kind, string? token, string? sessionId = null, string? workingDirectory = null) =>
+        HookReceived?.Invoke(
+            this,
+            new HookEventArgs(new HookEvent(kind, sessionId, workingDirectory, token, DateTimeOffset.UnixEpoch)));
+
+    public ValueTask DisposeAsync()
+    {
+        Disposed = true;
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>История сессий без файловой системы.</summary>
+internal sealed class FakeSessionHistoryReader : ISessionHistoryReader
+{
+    private readonly Dictionary<string, SessionSummary> _byId = [];
+
+    /// <summary>Запрошенные пары «каталог, сессия» по порядку.</summary>
+    public List<(string Directory, string SessionId)> Requested { get; } = [];
+
+    /// <summary>Кладёт сводку, которую вернёт <see cref="ReadOneAsync" />.</summary>
+    public void Seed(string sessionId, string? title) =>
+        _byId[sessionId] = new SessionSummary(
+            sessionId, $@"C:\transcripts\{sessionId}.jsonl", DateTimeOffset.UnixEpoch, 0, title, null, null);
+
+    public Task<IReadOnlyList<SessionSummary>> ReadAsync(string workingDirectory, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<SessionSummary>>(_byId.Values.ToArray());
+
+    public Task<SessionSummary?> ReadOneAsync(string workingDirectory, string sessionId, CancellationToken cancellationToken)
+    {
+        Requested.Add((workingDirectory, sessionId));
+        return Task.FromResult(_byId.TryGetValue(sessionId, out var summary) ? summary : null);
     }
 }
