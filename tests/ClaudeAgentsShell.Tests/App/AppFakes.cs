@@ -102,9 +102,16 @@ internal sealed class FakeProjectSettingsDialog : IProjectSettingsDialog
     /// <summary>Проекты, с которыми диалог открывали, по порядку.</summary>
     public List<ProjectDefinition> Shown { get; } = [];
 
-    public Task<ProjectDefinition?> ShowAsync(ProjectDefinition project, CancellationToken cancellationToken)
+    /// <summary>С какой целью диалог открывали, по порядку.</summary>
+    public List<ProjectSettingsPurpose> Purposes { get; } = [];
+
+    public Task<ProjectDefinition?> ShowAsync(
+        ProjectDefinition project,
+        ProjectSettingsPurpose purpose,
+        CancellationToken cancellationToken)
     {
         Shown.Add(project);
+        Purposes.Add(purpose);
         return Task.FromResult(Edit?.Invoke(project));
     }
 }

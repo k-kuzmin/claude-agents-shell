@@ -4,7 +4,7 @@ using ClaudeAgentsShell.App.ViewModels;
 namespace ClaudeAgentsShell.App.Views;
 
 /// <summary>
-/// Модальное окно настроек проекта (раздел 6.5 ТЗ). Разметка и связь окна с ViewModel —
+/// Модальное окно добавления и настроек проекта (раздел 6.5 ТЗ). Разметка и связь с ViewModel —
 /// больше здесь ничего: правила полей живут в <see cref="ProjectSettingsViewModel"/>.
 /// </summary>
 public partial class ProjectSettingsWindow : Window
@@ -50,6 +50,9 @@ public partial class ProjectSettingsWindow : Window
         PathBox.Focus();
         PathBox.CaretIndex = PathBox.Text.Length;
 
+        // Оболочки — первыми: ответ обычно мгновенный (резолвер кэширует), а проверка
+        // каталога может уйти на сетевую шару и задержать пометки в списке.
+        await _viewModel.RefreshShellsAsync(CancellationToken.None);
         await _viewModel.RefreshAsync(CancellationToken.None);
     }
 

@@ -6,8 +6,8 @@ using ClaudeAgentsShell.Domain;
 namespace ClaudeAgentsShell.App.ViewModels;
 
 /// <summary>
-/// Диалог настроек проекта (раздел 6.5 ТЗ): путь, отображаемое имя, оболочка, команда перед
-/// запуском и дополнительные аргументы. Ничего не сохраняет — только собирает
+/// Диалог добавления и настроек проекта (раздел 6.5 ТЗ): путь, отображаемое имя, оболочка,
+/// команда перед запуском и дополнительные аргументы. Ничего не сохраняет — только собирает
 /// <see cref="ProjectDefinition"/>, который забирает вызывающий код.
 /// </summary>
 /// <remarks>
@@ -23,13 +23,16 @@ public sealed class ProjectSettingsViewModel : ObservableObject
     public const string McpJsonFileName = ".mcp.json";
 
     private readonly ProjectDefinition _original;
+    private readonly ProjectSettingsPurpose _purpose;
     private readonly IFolderPicker _folderPicker;
     private readonly IDirectoryProbe _directoryProbe;
     private readonly IFileProbe _fileProbe;
+    private readonly IShellAvailability _shellAvailability;
 
     private string _projectPath;
     private string _name;
-    private ShellOption _shell;
+    private ShellKind _selectedShell;
+    private IReadOnlyList<ShellOption> _shells;
     private string _preLaunch;
     private string _extraArgsText;
 
@@ -37,34 +40,46 @@ public sealed class ProjectSettingsViewModel : ObservableObject
     private ProbeResult _claudeMdProbeResult = ProbeResult.Unchecked;
     private ProbeResult _mcpJsonProbeResult = ProbeResult.Unchecked;
 
+    // Найденные в системе оболочки: null — проверка ещё не отвечала либо не удалась.
+    private IReadOnlyList<ShellKind>? _installedShells;
+    private bool _shellsProbed;
+
     // Поколение проверки: пользователь правит путь быстрее, чем отвечает сетевая шара,
     // и результат устаревшей проверки не должен перебить более свежую.
     private int _probeGeneration;
 
     /// <inheritdoc cref="ProjectSettingsViewModel" />
-    /// <param name="project">Что редактируем.</param>
+    /// <param name="project">Что редактируем либо заготовка нового проекта.</param>
+    /// <param name="purpose">Добавление или правка: меняет только подписи окна и кнопки.</param>
     /// <param name="folderPicker">Выбор каталога.</param>
     /// <param name="directoryProbe">Проверка существования каталога.</param>
     /// <param name="fileProbe">Проверка наличия <c>CLAUDE.md</c> и <c>.mcp.json</c>.</param>
+    /// <param name="shellAvailability">Какие оболочки установлены в системе.</param>
     public ProjectSettingsViewModel(
         ProjectDefinition project,
+        ProjectSettingsPurpose purpose,
         IFolderPicker folderPicker,
         IDirectoryProbe directoryProbe,
-        IFileProbe fileProbe)
+        IFileProbe fileProbe,
+        IShellAvailability shellAvailability)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(folderPicker);
         ArgumentNullException.ThrowIfNull(directoryProbe);
         ArgumentNullException.ThrowIfNull(fileProbe);
+        ArgumentNullException.ThrowIfNull(shellAvailability);
 
         _original = project;
+        _purpose = purpose;
         _folderPicker = folderPicker;
         _directoryProbe = directoryProbe;
         _fileProbe = fileProbe;
+        _shellAvailability = shellAvailability;
 
         _projectPath = project.Path ?? string.Empty;
         _name = project.Name ?? string.Empty;
-        _shell = ShellOptions.For(project.Shell);
+        _selectedShell = project.Shell;
+        _shells = ShellOptions.Build(project.Shell, installed: null);
         _preLaunch = project.PreLaunch ?? string.Empty;
         _extraArgsText = ExtraArgsSyntax.Format(project.ExtraArgs);
 
@@ -81,8 +96,19 @@ public sealed class ProjectSettingsViewModel : ObservableObject
     /// </summary>
     public ProjectDefinition? Result { get; private set; }
 
-    /// <summary>Оболочки, доступные для выбора.</summary>
-    public IReadOnlyList<ShellOption> Shells => ShellOptions.All;
+    /// <summary>Заголовок окна: добавление и правка — разные действия, и путать их незачем.</summary>
+    public string WindowTitle =>
+        _purpose == ProjectSettingsPurpose.Add ? "Новый проект" : "Настройки проекта";
+
+    /// <summary>Подпись главной кнопки.</summary>
+    public string CommitButtonText =>
+        _purpose == ProjectSettingsPurpose.Add ? "Добавить" : "Сохранить";
+
+    /// <summary>
+    /// Оболочки, доступные для выбора. Список пересобирается целиком, когда отвечает
+    /// проверка установленных оболочек, — вместе с пометками у ненайденных.
+    /// </summary>
+    public IReadOnlyList<ShellOption> Shells => _shells;
 
     /// <summary>Открывает системный выбор папки.</summary>
     public ICommand BrowseCommand { get; }
@@ -122,10 +148,27 @@ public sealed class ProjectSettingsViewModel : ObservableObject
     }
 
     /// <summary>Выбранная оболочка.</summary>
+    /// <remarks>
+    /// Хранится вид оболочки, а не строка списка: список пересобирается, когда отвечает
+    /// проверка, и выбор обязан это пережить.
+    /// </remarks>
     public ShellOption Shell
     {
-        get => _shell;
-        set => SetProperty(ref _shell, value ?? ShellOptions.For(ShellKind.Pwsh));
+        get => _shells.FirstOrDefault(option => option.Kind == _selectedShell) ?? _shells[0];
+        set
+        {
+            // При смене списка WPF на мгновение отдаёт сюда null. Это не выбор пользователя,
+            // и подменять им оболочку проекта нельзя: молчаливая подмена — ровно то, чего
+            // требует не допускать раздел 8 ТЗ.
+            if (value is null || value.Kind == _selectedShell)
+            {
+                return;
+            }
+
+            _selectedShell = value.Kind;
+            Raise();
+            RaiseShellWarning();
+        }
     }
 
     /// <summary>Команда, выполняемая в PTY до запуска <c>claude</c>.</summary>
@@ -145,7 +188,9 @@ public sealed class ProjectSettingsViewModel : ObservableObject
     /// <summary>
     /// Поля заполнены достаточно, чтобы сохранять. Существование каталога сюда не входит
     /// намеренно: по разделу 8 ТЗ исчезнувший каталог блокирует запуск сессии, а не правку
-    /// настроек — каталог может появиться позже.
+    /// настроек — каталог может появиться позже. По той же причине сохранению не мешает
+    /// и неустановленная оболочка: её можно поставить потом, а до тех пор запуск откатится
+    /// на доступную, о чём говорит <see cref="ShellWarning"/>.
     /// </summary>
     public bool IsValid => Name.Trim().Length > 0 && ProjectPath.Trim().Length > 0;
 
@@ -171,6 +216,44 @@ public sealed class ProjectSettingsViewModel : ObservableObject
         IsDirectoryMissing
             ? "Каталог не найден. Сохранить настройки можно — он может появиться позже, но запустить сессию не получится."
             : string.Empty;
+
+    /// <summary>Есть что сказать про выбранную оболочку.</summary>
+    public bool HasShellWarning => ShellWarning.Length > 0;
+
+    /// <summary>
+    /// Что произойдёт при запуске, если выбранной оболочки в системе нет (раздел 8 ТЗ).
+    /// Пусто, пока проверка не ответила и пока выбранная оболочка установлена.
+    /// </summary>
+    public string ShellWarning
+    {
+        get
+        {
+            if (!_shellsProbed)
+            {
+                return string.Empty;
+            }
+
+            if (_installedShells is not { } installed)
+            {
+                return "Проверить, какие оболочки установлены, не удалось. При запуске будет выбрана доступная.";
+            }
+
+            if (installed.Contains(_selectedShell))
+            {
+                return string.Empty;
+            }
+
+            if (installed.Count == 0)
+            {
+                return "В системе не найдено ни одной оболочки: запустить сессию не получится.";
+            }
+
+            // Первый элемент списка и есть замена: порядок в нём — порядок провайдеров,
+            // по которому резолвер откатывается с отсутствующей оболочки.
+            return $"«{ShellOptions.TitleFor(_selectedShell)}» не установлена. "
+                + $"Сессии этого проекта запустятся в «{ShellOptions.TitleFor(installed[0])}».";
+        }
+    }
 
     /// <summary>Справка о <c>CLAUDE.md</c> в каталоге проекта.</summary>
     public string ClaudeMdHint => DescribeFile(ClaudeMdFileName, _claudeMdProbeResult);
@@ -216,6 +299,33 @@ public sealed class ProjectSettingsViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Узнаёт, какие оболочки установлены, и помечает в списке ненайденные. Зовётся один раз,
+    /// уже после показа окна: поиск по <c>PATH</c> не должен задерживать открытие диалога.
+    /// </summary>
+    public async Task RefreshShellsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _installedShells = await _shellAvailability.GetInstalledAsync(cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
+        {
+            // Диск ответил отказом: пометок не будет, а предупреждение честно скажет, что
+            // проверить не удалось. Ронять окно из-за справки нельзя (раздел 8 ТЗ).
+            _installedShells = null;
+        }
+
+        _shellsProbed = true;
+        _shells = ShellOptions.Build(_selectedShell, _installedShells);
+
+        // Сначала список, потом выбранный элемент: иначе выпадающий список на мгновение
+        // остаётся с элементом, которого в нём уже нет.
+        Raise(nameof(Shells));
+        Raise(nameof(Shell));
+        RaiseShellWarning();
+    }
+
+    /// <summary>
     /// Спрашивает у пользователя каталог и подставляет его. Имя подставляется по папке,
     /// только если пользователь его не задавал сам, — иначе выбор папки затирал бы правку.
     /// </summary>
@@ -255,7 +365,7 @@ public sealed class ProjectSettingsViewModel : ObservableObject
         {
             Name = Name.Trim(),
             Path = ProjectPath.Trim(),
-            Shell = Shell.Kind,
+            Shell = _selectedShell,
             PreLaunch = preLaunch.Length == 0 ? null : preLaunch,
             ExtraArgs = ExtraArgsSyntax.Parse(ExtraArgsText),
         };
@@ -313,6 +423,12 @@ public sealed class ProjectSettingsViewModel : ObservableObject
         Raise(nameof(DirectoryWarning));
         Raise(nameof(ClaudeMdHint));
         Raise(nameof(McpJsonHint));
+    }
+
+    private void RaiseShellWarning()
+    {
+        Raise(nameof(ShellWarning));
+        Raise(nameof(HasShellWarning));
     }
 
     private void RaiseValidity()
