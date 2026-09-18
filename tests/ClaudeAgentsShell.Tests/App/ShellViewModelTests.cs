@@ -1059,6 +1059,120 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
+    public async Task Renaming_a_project_renames_the_titles_of_its_open_tabs()
+    {
+        var harness = await StartedAsync(
+            Project("alpha", PathA, 0),
+            Project("beta", PathB, 1));
+        var alpha = harness.Row(0);
+
+        var first = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        var stranger = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+        first!.ShortTitle = "почини сборку";
+
+        var titleChanges = 0;
+        first.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(TabViewModel.Title))
+            {
+                titleChanges++;
+            }
+        };
+
+        harness.Dialog.Edit = project => project with { Name = "omega" };
+        await harness.Shell.ShowProjectSettingsAsync(alpha, CancellationToken.None);
+
+        // Имя проекта — вещь отображаемая: на экране не должно остаться двух имён одного
+        // проекта — нового в панели и старого на вкладках (раздел 6.3 ТЗ).
+        Assert.Equal("omega", alpha.Name);
+        Assert.Equal("omega · почини сборку", first.Title);
+        Assert.Equal("omega · " + TabViewModel.NewSessionTitle, second!.Title);
+        Assert.Equal(1, titleChanges);
+
+        // Вкладка чужого проекта переименования не заметила.
+        Assert.Equal("beta · " + TabViewModel.NewSessionTitle, stranger!.Title);
+    }
+
+    [Fact]
+    public async Task Cancelled_settings_dialog_leaves_the_tab_titles_alone()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        // Edit не задан: диалог вернул null — менять заголовки не с чего.
+        await harness.Shell.ShowProjectSettingsAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.Equal("alpha · " + TabViewModel.NewSessionTitle, tab!.Title);
+    }
+
+    [Fact]
+    public async Task Moved_project_leaves_open_tabs_in_the_directory_they_started_in()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var opened = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+
+        harness.Probe.Add(PathB);
+        harness.Dialog.Edit = project => project with { Path = PathB };
+        await harness.Shell.ShowProjectSettingsAsync(row, CancellationToken.None);
+
+        ITabStateSink sink = harness.Shell;
+
+        // Псевдоконсоль работает там, где её запустили, и транскрипт сессии лежит в slug'е
+        // прежнего каталога. Отдай координатор новый путь — он не нашёл бы транскрипт,
+        // списал бы попытку из бюджета, и вкладка молча осталась бы «новой сессией».
+        Assert.True(sink.TryGetWorkingDirectory(opened!.TerminalId, out var directory));
+        Assert.Equal(PathA, directory);
+
+        // А сессия, открытая после переноса, стартует уже в новом каталоге.
+        var afterMove = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+        Assert.Equal(PathB, harness.Workspace.OpenedDirectories[^1]);
+        Assert.True(sink.TryGetWorkingDirectory(afterMove!.TerminalId, out var movedDirectory));
+        Assert.Equal(PathB, movedDirectory);
+    }
+
+    [Fact]
+    public async Task A_closed_tab_has_no_working_directory()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        await harness.Shell.CloseTabAsync(tab!, CancellationToken.None);
+
+        ITabStateSink sink = harness.Shell;
+        Assert.False(sink.TryGetWorkingDirectory(tab!.TerminalId, out var directory));
+        Assert.Equal(string.Empty, directory);
+    }
+
+    [Fact]
+    public void Project_settings_are_available_for_the_row_of_the_menu_even_with_nothing_selected()
+    {
+        var harness = new Harness(Project("alpha", PathA, 0));
+
+        // Параметр приезжает привязкой к PlacementTarget и на первом вычислении может быть
+        // ещё не разрешён. Проверяется не он, а строка: переданная либо выбранная.
+        Assert.Null(harness.Shell.ActiveProjectRow);
+        Assert.False(harness.Shell.ShowSettingsCommand.CanExecute(null));
+        Assert.True(harness.Shell.ShowSettingsCommand.CanExecute(new ProjectRowViewModel(
+            Project("alpha", PathA, 0))));
+    }
+
+    [Fact]
+    public async Task Project_settings_without_a_parameter_follow_the_selected_project()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+
+        // Кнопка в заголовке окна параметра не передаёт: без выбранной строки настраивать
+        // нечего и пункт выключен, с выбранной — доступен.
+        Assert.False(harness.Shell.ShowSettingsCommand.CanExecute(null));
+
+        await harness.Shell.ActivateProjectAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.True(harness.Shell.ShowSettingsCommand.CanExecute(null));
+    }
+
+    [Fact]
     public async Task Removing_a_project_drops_the_row_and_renumbers_the_rest()
     {
         var harness = await StartedAsync(
@@ -1156,6 +1270,60 @@ public sealed class ShellViewModelTests
         Assert.Same(row, Assert.Single(harness.Shell.Projects.Rows));
         Assert.Same(tab, Assert.Single(harness.Shell.Tabs.AllTabs));
         Assert.Empty(harness.Workspace.Closed);
+    }
+
+    [Fact]
+    public async Task A_tab_that_refused_to_close_does_not_strand_the_rest_of_the_project()
+    {
+        var harness = await StartedAsync(
+            Project("alpha", PathA, 0),
+            Project("beta", PathB, 1));
+        var alpha = harness.Row(0);
+        var beta = harness.Row(1);
+
+        var kept = await harness.Shell.OpenSessionAsync(beta, CancellationToken.None);
+        var first = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+
+        harness.Workspace.CloseFailure = (first!.TerminalId, new InvalidOperationException("страница ушла"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.Shell.RemoveProjectAsync(alpha, CancellationToken.None));
+
+        // Закрытие дошло до обеих вкладок: сбой на первой не отменяет закрытия второй.
+        Assert.Equal([first.TerminalId, second!.TerminalId], harness.Workspace.Closed);
+
+        // Строки проекта в списке уже нет, поэтому и вкладок его не осталось: иначе они
+        // жили бы с псевдоконсолями и без способа выбрать их проект.
+        Assert.Same(kept, Assert.Single(harness.Shell.Tabs.AllTabs));
+        Assert.Same(beta, Assert.Single(harness.Shell.Projects.Rows));
+        Assert.Null(harness.Shell.Tabs.ActiveTab);
+        Assert.Null(harness.Shell.ActiveProjectRow);
+
+        // Счётчики пересчитаны и на сбое: у уцелевшего проекта своя вкладка на месте.
+        Assert.Equal(1, beta.SessionCount);
+    }
+
+    [Fact]
+    public async Task Removing_the_project_of_the_active_tab_leaves_no_active_tab()
+    {
+        var harness = await StartedAsync(
+            Project("alpha", PathA, 0),
+            Project("beta", PathB, 1));
+        var alpha = harness.Row(0);
+
+        var stranger = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+        var doomed = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        Assert.Same(doomed, harness.Shell.Tabs.ActiveTab);
+
+        await harness.Shell.RemoveProjectAsync(alpha, CancellationToken.None);
+
+        // Выбор не остаётся на закрытой вкладке: соседней в убранном проекте не осталось,
+        // а вкладка чужого проекта активной не становится сама.
+        Assert.Null(harness.Shell.Tabs.ActiveTab);
+        Assert.False(doomed!.IsActive);
+        Assert.False(stranger!.IsActive);
+        Assert.Same(stranger, Assert.Single(harness.Shell.Tabs.AllTabs));
     }
 
     [Fact]

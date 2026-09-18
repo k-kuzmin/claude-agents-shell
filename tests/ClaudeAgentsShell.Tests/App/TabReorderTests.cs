@@ -241,7 +241,7 @@ public sealed class TabReorderTests
 
     private static TabViewModel Add(TabStripViewModel strip, Guid projectId, string title)
     {
-        var tab = new TabViewModel(TerminalId.New(), projectId, "проект") { ShortTitle = title };
+        var tab = new TabViewModel(TerminalId.New(), projectId, "проект", @"D:\src\alpha") { ShortTitle = title };
         strip.Add(tab);
         return tab;
     }
