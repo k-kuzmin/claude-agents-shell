@@ -17,9 +17,11 @@
     <ProjectReference Include="..\ClaudeAgentsShell.Sessions\ClaudeAgentsShell.Sessions.csproj" />
   </ItemGroup>
 
-  <!-- Расчёт границ развёрнутого окна (WorkAreaPlacement) — чистая арифметика над
-       прямоугольниками монитора, и проверяется она тестом, а не запуском GUI.
-       Наружу класс при этом не выставляется. -->
+  <!-- Тестам видны два внутренних типа, и оба проверяются без запуска GUI.
+       WorkAreaPlacement — расчёт границ развёрнутого окна: чистая арифметика над
+       прямоугольниками монитора. AppComposition — список регистраций DI: забытую
+       регистрацию не ловит ни компилятор, ни тесты на ViewModel, зато она роняет
+       приложение на старте. Наружу сборки ни тот, ни другой не выставляется. -->
   <ItemGroup>
     <InternalsVisibleTo Include="ClaudeAgentsShell.Tests" />
   </ItemGroup>

@@ -31,7 +31,7 @@ public sealed class ShellViewModelTests
             }
 
             var list = new ProjectListViewModel(
-                Store, BranchReader, Watcher, Probe, Picker, Dialog, Launcher, new InlineUiDispatcher());
+                Store, BranchReader, Watcher, Probe, Picker, Dialog, Prompt, Launcher, new InlineUiDispatcher());
             var sessionState = new SessionStateCoordinator(Hooks, Workspace, History, new InlineUiDispatcher());
             Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher(), sessionState);
         }

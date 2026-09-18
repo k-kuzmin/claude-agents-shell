@@ -1,18 +1,11 @@
 using System.Windows;
-using ClaudeAgentsShell.App.Input;
-using ClaudeAgentsShell.App.Services;
-using ClaudeAgentsShell.App.State;
-using ClaudeAgentsShell.App.ViewModels;
-using ClaudeAgentsShell.Application.Ports;
-using ClaudeAgentsShell.Sessions;
-using ClaudeAgentsShell.Terminal;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeAgentsShell.App;
 
 /// <summary>
-/// Композиционный корень: единственное место, где собирается контейнер.
-/// Статических синглтонов и service locator в приложении нет.
+/// Время жизни приложения: строит контейнер по <see cref="AppComposition"/>, показывает
+/// главное окно и детерминированно освобождает контейнер на выходе.
 /// </summary>
 public partial class App : System.Windows.Application
 {
@@ -24,12 +17,8 @@ public partial class App : System.Windows.Application
         base.OnStartup(e);
 
         var services = new ServiceCollection();
-        ConfigureServices(services);
-        _services = services.BuildServiceProvider(new ServiceProviderOptions
-        {
-            ValidateOnBuild = true,
-            ValidateScopes = true,
-        });
+        AppComposition.ConfigureServices(services);
+        _services = services.BuildServiceProvider(AppComposition.ProviderOptions);
 
         var window = _services.GetRequiredService<MainWindow>();
         MainWindow = window;
@@ -48,37 +37,5 @@ public partial class App : System.Windows.Application
         }
 
         base.OnExit(e);
-    }
-
-    private static void ConfigureServices(IServiceCollection services)
-    {
-        services.AddTerminalLayer();
-        services.AddSessionsLayer();
-
-        // Мост — единственное место, где приложение знает про WebView2.
-        services.AddSingleton<WebView2TerminalBridge>();
-        services.AddSingleton<ITerminalBridge>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
-
-        // Порты уровня оболочки: всё, что ViewModel нужно от WPF и файловой системы.
-        // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.
-        services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
-        services.AddSingleton<IUserPrompt, MessageBoxUserPrompt>();
-        services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
-        services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
-        services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
-        // IDirectoryProbe регистрирует слой Sessions: Directory.* — файловая система,
-        // а не WPF-специфика, и сборке оболочки не место её трогать.
-
-        // Захватывает Dispatcher.CurrentDispatcher, поэтому контейнер строится в потоке UI.
-        services.AddSingleton<IUiDispatcher, WpfUiDispatcher>();
-
-        // Единственный источник состояния вкладок — хуки Claude Code (раздел 5.3 ТЗ).
-        services.AddSingleton<SessionStateCoordinator>();
-
-        services.AddSingleton<ProjectListViewModel>();
-        services.AddSingleton<ShellViewModel>();
-        services.AddSingleton<ShellShortcutHandler>();
-
-        services.AddSingleton<MainWindow>();
     }
 }

@@ -27,6 +27,7 @@ public sealed class ShellShortcutHandlerTests
                 Probe,
                 new FakeFolderPicker(),
                 new FakeProjectSettingsDialog(),
+                Prompt,
                 new FakeShellLauncher(),
                 new InlineUiDispatcher());
             var sessionState = new SessionStateCoordinator(

@@ -20,6 +20,7 @@ public sealed class ProjectListViewModelTests
     private readonly FakeFolderPicker _picker = new();
     private readonly FakeProjectSettingsDialog _dialog = new();
     private readonly FakeShellLauncher _launcher = new();
+    private readonly FakeUserPrompt _prompt = new();
 
     [Fact]
     public async Task AddProject_StoresEverythingTheDialogReturned()
@@ -125,6 +126,31 @@ public sealed class ProjectListViewModelTests
         Assert.Same(list.Rows[0], row);
         Assert.Single(list.Rows);
         Assert.Equal(0, _store.SaveCount);
+
+        // Молча выброшенные настройки выглядят как не сработавшая кнопка: сообщение
+        // обязано назвать проект, который уже занимает каталог.
+        var message = Assert.Single(_prompt.Errors);
+        Assert.Contains("alpha", message, StringComparison.Ordinal);
+        Assert.Contains(GammaPath, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AddProject_FolderAlreadyInTheList_ShowsNoDialogAndSaysNothing()
+    {
+        _store.Seed(new ProjectDefinition(Guid.NewGuid(), "alpha", GammaPath, ShellKind.Pwsh, null, [], 0));
+        _probe.Add(GammaPath);
+
+        var list = Create();
+        await list.LoadAsync(CancellationToken.None);
+
+        _picker.NextFolder = GammaPath;
+
+        Assert.Same(list.Rows[0], await list.AddProjectAsync(CancellationToken.None));
+
+        // Здесь пользователь ещё ничего не вводил: показанная строка сама по себе говорит,
+        // что каталог уже в списке, и модальное окно поверх неё было бы шумом.
+        Assert.Empty(_dialog.Shown);
+        Assert.Empty(_prompt.Errors);
     }
 
     [Fact]
@@ -159,5 +185,5 @@ public sealed class ProjectListViewModelTests
     }
 
     private ProjectListViewModel Create() =>
-        new(_store, _branchReader, _watcher, _probe, _picker, _dialog, _launcher, new InlineUiDispatcher());
+        new(_store, _branchReader, _watcher, _probe, _picker, _dialog, _prompt, _launcher, new InlineUiDispatcher());
 }
