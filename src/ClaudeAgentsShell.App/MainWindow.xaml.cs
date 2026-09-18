@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 
@@ -13,22 +14,29 @@ public partial class MainWindow : Window
     private readonly WebView2TerminalBridge _bridge;
     private readonly ShellViewModel _shell;
     private readonly ShellShortcutHandler _shortcuts;
+    private readonly IWebView2MissingDialog _runtimeMissingDialog;
 
     private bool _shutdownStarted;
     private bool _shutdownCompleted;
 
     /// <inheritdoc cref="MainWindow" />
-    public MainWindow(WebView2TerminalBridge bridge, ShellViewModel shell, ShellShortcutHandler shortcuts)
+    public MainWindow(
+        WebView2TerminalBridge bridge,
+        ShellViewModel shell,
+        ShellShortcutHandler shortcuts,
+        IWebView2MissingDialog runtimeMissingDialog)
     {
         ArgumentNullException.ThrowIfNull(bridge);
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(shortcuts);
+        ArgumentNullException.ThrowIfNull(runtimeMissingDialog);
 
         InitializeComponent();
 
         _bridge = bridge;
         _shell = shell;
         _shortcuts = shortcuts;
+        _runtimeMissingDialog = runtimeMissingDialog;
 
         DataContext = _shell;
         TerminalHost.Children.Add(_bridge.Control);
@@ -121,6 +129,15 @@ public partial class MainWindow : Window
         try
         {
             await _shell.InitializeAsync(CancellationToken.None);
+        }
+        catch (TerminalRuntimeMissingException exception)
+        {
+            // Единственный сбой старта, который пользователь чинит сам: показываем разговор
+            // со ссылкой на установщик, а не стек-трейс (раздел 8 ТЗ). Ветка обязана стоять
+            // выше общей: тип наследует TerminalBridgeUnavailableException, и в обратном
+            // порядке она молча никогда бы не выполнилась.
+            _runtimeMissingDialog.Show(exception);
+            Close();
         }
         catch (Exception exception) when (exception is TerminalBridgeUnavailableException
                                              or ShellNotFoundException)

@@ -80,8 +80,12 @@ public interface ITerminalBridge : IAsyncDisposable
     ValueTask NotifyExitedAsync(TerminalId terminalId, int exitCode, CancellationToken cancellationToken);
 }
 
-/// <summary>Среда для страницы терминалов недоступна — например, не установлен WebView2 Runtime.</summary>
-public sealed class TerminalBridgeUnavailableException : Exception
+/// <summary>
+/// Среда для страницы терминалов недоступна: не нашлись локальные ассеты, не загрузился
+/// документ, не поднялся движок. Случай «движок вообще не установлен» вынесен в наследника
+/// <see cref="TerminalRuntimeMissingException"/>.
+/// </summary>
+public class TerminalBridgeUnavailableException : Exception
 {
     /// <inheritdoc cref="TerminalBridgeUnavailableException" />
     public TerminalBridgeUnavailableException(string message) : base(message)
@@ -90,6 +94,30 @@ public sealed class TerminalBridgeUnavailableException : Exception
 
     /// <inheritdoc cref="TerminalBridgeUnavailableException" />
     public TerminalBridgeUnavailableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// Движка страницы нет в системе: не установлен рантайм браузера (раздел 8 ТЗ).
+/// </summary>
+/// <remarks>
+/// Отдельный тип, а не признак внутри <see cref="TerminalBridgeUnavailableException"/>:
+/// только этот сбой пользователь чинит сам, установив рантайм, и только ему нужен разговор
+/// со ссылкой на установщик. Прочие сбои поднятия страницы — отсутствие каталога <c>web</c>,
+/// неудачная навигация — это дефекты сборки или окружения, и ссылка там не поможет.
+/// Наследование оставляет прикладному коду право ловить базовый тип там, где разница не важна.
+/// </remarks>
+public sealed class TerminalRuntimeMissingException : TerminalBridgeUnavailableException
+{
+    /// <inheritdoc cref="TerminalRuntimeMissingException" />
+    public TerminalRuntimeMissingException(string message) : base(message)
+    {
+    }
+
+    /// <inheritdoc cref="TerminalRuntimeMissingException" />
+    public TerminalRuntimeMissingException(string message, Exception innerException)
         : base(message, innerException)
     {
     }
