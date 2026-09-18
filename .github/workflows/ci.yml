@@ -1,0 +1,45 @@
+name: ci
+
+# Проверка до мержа. Без неё первая сборка кода случалась бы уже после
+# слияния — то есть релизный прогон и был бы первой проверкой.
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Разложить ассеты xterm.js
+        working-directory: web
+        run: |
+          npm ci
+          npm run vendor
+
+      # Предупреждения компилятора настроены как ошибки, поэтому отдельного
+      # шага «проверить предупреждения» нет: сборка упадёт сама.
+      - name: Сборка
+        run: dotnet build ClaudeAgentsShell.sln -c Release --nologo
+
+      - name: Тесты
+        run: dotnet test ClaudeAgentsShell.sln -c Release --nologo --no-build
+
+      - name: Форматирование
+        run: dotnet format ClaudeAgentsShell.sln --verify-no-changes --no-restore

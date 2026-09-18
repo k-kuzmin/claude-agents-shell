@@ -1,0 +1,117 @@
+name: release
+
+# Мердж PR в main — это push в main, поэтому триггер здесь один.
+# Изменения только в документации релиза не создают: собирать нечего.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
+      - '.github/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # WPF собирается только на Windows.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # web/vendor в .gitignore, поэтому ассеты xterm.js раскладываются здесь.
+      # Без этого шага приложение запустится с чёрным окном вместо терминала.
+      - name: Разложить ассеты xterm.js
+        working-directory: web
+        run: |
+          npm ci
+          npm run vendor
+
+      - name: Версия
+        id: version
+        shell: pwsh
+        run: |
+          $version = "0.2.$env:GITHUB_RUN_NUMBER"
+          # Add-Content с явной кодировкой: оператор >> может записать UTF-16,
+          # и тогда GITHUB_OUTPUT не разберётся, причём молча.
+          Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 -Value "version=$version"
+          Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 -Value "tag=v$version"
+
+      # Предупреждения компилятора настроены как ошибки, отдельная проверка не нужна.
+      - name: Сборка
+        run: dotnet build ClaudeAgentsShell.sln -c Release --nologo
+
+      - name: Тесты
+        run: dotnet test ClaudeAgentsShell.sln -c Release --nologo --no-build
+
+      # Self-contained: у пользователя не должно быть требования ставить .NET.
+      - name: Публикация
+        run: >
+          dotnet publish src/ClaudeAgentsShell.App
+          -c Release -r win-x64 --self-contained true
+          -p:Version=${{ steps.version.outputs.version }}
+          -o publish --nologo
+
+      # Отсутствие страницы в выходном каталоге даёт чёрное окно и ничего больше —
+      # молчаливый отказ, который дешевле поймать здесь, чем у пользователя.
+      - name: Проверить, что страница терминалов попала в сборку
+        shell: pwsh
+        run: |
+          $required = @(
+            'publish/ClaudeAgentsShell.exe',
+            'publish/web/index.html',
+            'publish/web/app.js',
+            'publish/web/vendor/xterm.js',
+            'publish/web/vendor/addon-fit.js',
+            'publish/web/vendor/addon-webgl.js',
+            'publish/web/vendor/addon-unicode11.js'
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            Write-Host "В сборке не хватает:"
+            $missing | ForEach-Object { Write-Host "  $_" }
+            exit 1
+          }
+          Write-Host "Страница терминалов и ассеты на месте."
+
+      - name: Архив
+        id: package
+        shell: pwsh
+        run: |
+          $name = "ClaudeAgentsShell-${{ steps.version.outputs.version }}-win-x64.zip"
+          Compress-Archive -Path publish/* -DestinationPath $name
+          Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 -Value "name=$name"
+
+      - name: Релиз
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          Сборка из коммита $env:GITHUB_SHA.
+
+          **Установка:** распаковать архив и запустить ``ClaudeAgentsShell.exe``.
+
+          **Требуется:** Windows 10 1809+ или Windows 11 x64 и
+          [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
+          В Windows 11 он уже установлен. .NET ставить не нужно — сборка self-contained.
+
+          Для работы сессий нужен ``claude`` в ``PATH``.
+          "@
+          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.package.outputs.name }}" `
+            --title "${{ steps.version.outputs.tag }}" `
+            --notes $notes
