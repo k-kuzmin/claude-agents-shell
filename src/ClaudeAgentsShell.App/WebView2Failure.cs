@@ -44,14 +44,23 @@ internal static class WebView2Failure
     /// промахнуться незаметно: воспроизвести этот путь на машине с установленным рантаймом
     /// нельзя.
     /// </summary>
-    internal static bool IsRuntimeMissing(Exception? failure)
-    {
-        // Глубина ограничена: цепочка причин в теории может оказаться закольцованной,
-        // и тогда обход висел бы вечно.
-        const int MaxDepth = 16;
+    internal static bool IsRuntimeMissing(Exception? failure) => IsRuntimeMissing(failure, MaxDepth);
 
-        for (int depth = 0; failure is not null && depth < MaxDepth; depth++)
+    /// <summary>Максимальная глубина обхода цепочки причин.</summary>
+    /// <remarks>
+    /// Цепочка в теории может оказаться закольцованной, и тогда обход не закончился бы.
+    /// Бюджет **общий** на весь обход, включая рекурсию по агрегатам: с локальным счётчиком
+    /// цикл, проходящий через <see cref="AggregateException"/>, обнулял бы глубину на каждом
+    /// витке и давал бы не зависание, а <c>StackOverflowException</c>, который не ловится.
+    /// </remarks>
+    private const int MaxDepth = 16;
+
+    private static bool IsRuntimeMissing(Exception? failure, int budget)
+    {
+        while (failure is not null && budget > 0)
         {
+            budget--;
+
             if (failure is WebView2RuntimeNotFoundException)
             {
                 return true;
@@ -61,7 +70,8 @@ internal static class WebView2Failure
             {
                 // InnerException у агрегата — только первое из исключений; остальные
                 // потерялись бы, а нужное может быть любым из них.
-                return aggregate.InnerExceptions.Any(static inner => IsRuntimeMissing(inner));
+                int remaining = budget;
+                return aggregate.InnerExceptions.Any(inner => IsRuntimeMissing(inner, remaining));
             }
 
             failure = failure.InnerException;
