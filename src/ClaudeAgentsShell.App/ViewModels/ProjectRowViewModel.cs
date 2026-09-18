@@ -21,7 +21,28 @@ public sealed class ProjectRowViewModel : ObservableObject
     }
 
     /// <summary>Проект, который показывает строка.</summary>
-    public ProjectDefinition Project { get; }
+    public ProjectDefinition Project { get; private set; }
+
+    /// <summary>
+    /// Заменяет описание проекта: диалог настроек вернул отредактированное либо сместился
+    /// порядок после удаления соседней строки. Идентификатор строки при этом не меняется,
+    /// поэтому вкладки, открытые в этом проекте, остаются привязанными к ней.
+    /// </summary>
+    public void Update(ProjectDefinition project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        if (Project == project)
+        {
+            return;
+        }
+
+        Project = project;
+        Raise(nameof(Project));
+        Raise(nameof(Name));
+        Raise(nameof(Path));
+        Raise(nameof(PathAndBranch));
+    }
 
     /// <summary>Идентификатор проекта.</summary>
     public Guid Id => Project.Id;

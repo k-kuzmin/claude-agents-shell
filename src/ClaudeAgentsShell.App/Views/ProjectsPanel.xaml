@@ -25,6 +25,72 @@
                 </Style.Triggers>
             </Style>
 
+            <!-- Контекстное меню строки проекта. Стандартная отделка MenuItem светлая и на
+                 тёмной панели читается чужеродно, поэтому шаблон свой, на цветах Theme.xaml. -->
+            <Style x:Key="RowContextMenuStyle" TargetType="ContextMenu">
+                <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+                <Setter Property="FontSize" Value="12.5" />
+                <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ContextMenu">
+                            <Border Background="{StaticResource ChromeBackgroundBrush}"
+                                    BorderBrush="{StaticResource OutlineBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="4"
+                                    SnapsToDevicePixels="True">
+                                <StackPanel IsItemsHost="True"
+                                            KeyboardNavigation.DirectionalNavigation="Cycle" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="RowMenuItemStyle" TargetType="MenuItem">
+                <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+                <Setter Property="Padding" Value="10,6" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="MenuItem">
+                            <Border x:Name="MenuItemRoot"
+                                    Background="Transparent"
+                                    CornerRadius="6"
+                                    Padding="{TemplateBinding Padding}"
+                                    SnapsToDevicePixels="True">
+                                <ContentPresenter ContentSource="Header"
+                                                  VerticalAlignment="Center"
+                                                  RecognizesAccessKey="True" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter TargetName="MenuItemRoot" Property="Background"
+                                            Value="{StaticResource RowHoverBrush}" />
+                                    <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Foreground" Value="{StaticResource DisabledTextBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="RowMenuSeparatorStyle" TargetType="Separator">
+                <Setter Property="Height" Value="1" />
+                <Setter Property="Margin" Value="6,4" />
+                <Setter Property="Background" Value="{StaticResource SeparatorBrush}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Separator">
+                            <Border Background="{TemplateBinding Background}" Height="1" />
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <Style x:Key="RowRestingStyle" TargetType="FrameworkElement">
                 <Setter Property="Visibility" Value="Visible" />
                 <Style.Triggers>
@@ -75,7 +141,27 @@
                                 Background="Transparent"
                                 BorderThickness="2,0,0,0"
                                 BorderBrush="Transparent"
-                                ToolTip="{Binding PathAndBranch}">
+                                ToolTip="{Binding PathAndBranch}"
+                                Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                            <!-- Меню живёт в своём визуальном дереве: команды берутся у корневой
+                                 ViewModel через Tag строки, а строка — у её же DataContext. -->
+                            <Border.ContextMenu>
+                                <ContextMenu Style="{StaticResource RowContextMenuStyle}">
+                                    <MenuItem Header="Открыть папку в проводнике"
+                                              Style="{StaticResource RowMenuItemStyle}"
+                                              Command="{Binding PlacementTarget.Tag.OpenProjectFolderCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <MenuItem Header="Настройки проекта…"
+                                              Style="{StaticResource RowMenuItemStyle}"
+                                              Command="{Binding PlacementTarget.Tag.ShowSettingsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <Separator Style="{StaticResource RowMenuSeparatorStyle}" />
+                                    <MenuItem Header="Убрать из списка"
+                                              Style="{StaticResource RowMenuItemStyle}"
+                                              Command="{Binding PlacementTarget.Tag.RemoveProjectCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                </ContextMenu>
+                            </Border.ContextMenu>
                             <Border.InputBindings>
                                 <MouseBinding MouseAction="LeftClick"
                                               Command="{Binding DataContext.SelectProjectCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"

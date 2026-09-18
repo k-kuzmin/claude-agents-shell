@@ -16,6 +16,8 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     private readonly IGitBranchWatcher _branchWatcher;
     private readonly IDirectoryProbe _directoryProbe;
     private readonly IFolderPicker _folderPicker;
+    private readonly IProjectSettingsDialog _settingsDialog;
+    private readonly IShellLauncher _shellLauncher;
     private readonly IUiDispatcher _dispatcher;
     private readonly ObservableCollection<ProjectRowViewModel> _rows = [];
 
@@ -33,6 +35,8 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         IGitBranchWatcher branchWatcher,
         IDirectoryProbe directoryProbe,
         IFolderPicker folderPicker,
+        IProjectSettingsDialog settingsDialog,
+        IShellLauncher shellLauncher,
         IUiDispatcher dispatcher)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -40,6 +44,8 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(branchWatcher);
         ArgumentNullException.ThrowIfNull(directoryProbe);
         ArgumentNullException.ThrowIfNull(folderPicker);
+        ArgumentNullException.ThrowIfNull(settingsDialog);
+        ArgumentNullException.ThrowIfNull(shellLauncher);
         ArgumentNullException.ThrowIfNull(dispatcher);
 
         _store = store;
@@ -47,6 +53,8 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         _branchWatcher = branchWatcher;
         _directoryProbe = directoryProbe;
         _folderPicker = folderPicker;
+        _settingsDialog = settingsDialog;
+        _shellLauncher = shellLauncher;
         _dispatcher = dispatcher;
 
         Rows = new ReadOnlyObservableCollection<ProjectRowViewModel>(_rows);
@@ -86,8 +94,8 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Добавляет проект: диалог выбора папки, имя по умолчанию — имя папки.
-    /// Полноценный диалог настроек — этап M5.
+    /// Добавляет проект: диалог выбора папки, имя по умолчанию — имя папки. Остальные
+    /// настройки правятся потом, через <see cref="EditProjectAsync" />.
     /// </summary>
     /// <returns>
     /// Добавленная строка, уже имеющаяся строка того же каталога либо <c>null</c>,
@@ -133,6 +141,94 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Открывает каталог строки в проводнике. Действие над строкой панели, поэтому живёт
+    /// здесь, а не в корневой ViewModel: с вкладками оно не связано никак.
+    /// </summary>
+    /// <returns><c>false</c>, если открыть не удалось; исключения порт не бросает.</returns>
+    public Task<bool> OpenFolderAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        return _shellLauncher.OpenFolderAsync(row.Path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Показывает диалог настроек проекта (раздел 6.5 ТЗ) и, если пользователь согласился,
+    /// записывает список и обновляет строку. Отказ от диалога не меняет ничего.
+    /// </summary>
+    /// <returns><c>true</c>, если настройки сохранены.</returns>
+    public async Task<bool> EditProjectAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var edited = await _settingsDialog.ShowAsync(row.Project, cancellationToken).ConfigureAwait(true);
+        if (edited is null)
+        {
+            return false;
+        }
+
+        // Идентификатор и место в списке принадлежат списку, а не диалогу: к идентификатору
+        // привязаны открытые вкладки, а порядок строк диалог не видит вовсе.
+        var updated = edited with { Id = row.Id, Order = row.Project.Order };
+        var previousPath = row.Path;
+
+        // Сначала запись, потом строка на экране: сорвавшееся сохранение оставило бы
+        // на экране настройки, которых нет в файле.
+        var projects = Renumber(candidate => ReferenceEquals(candidate, row) ? updated : candidate.Project);
+        await _store.SaveAsync(projects, cancellationToken).ConfigureAwait(true);
+
+        row.Update(updated);
+
+        if (!ProjectNaming.SamePath(previousPath, updated.Path))
+        {
+            // Каталог переехал: прежнему наблюдателю следить не за чем, а ветку и доступность
+            // нужно перечитать у нового каталога.
+            Unwatch(previousPath);
+            row.Branch = null;
+            await AttachAsync(row, cancellationToken).ConfigureAwait(true);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Убирает проект из списка. Каталог пользователя не трогается ничем: удаляется только
+    /// строка <c>projects.json</c> — приложение в проект не пишет (раздел 7 CLAUDE.md).
+    /// </summary>
+    /// <returns><c>true</c>, если строка убрана; <c>false</c>, если такой строки уже нет.</returns>
+    public async Task<bool> RemoveProjectAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var index = _rows.IndexOf(row);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var projects = _rows
+            .Where(candidate => !ReferenceEquals(candidate, row))
+            .Select((candidate, order) => candidate.Project with { Order = order })
+            .ToList();
+
+        // Сначала запись, потом экран: не удалось записать — список в памяти остаётся целым,
+        // а сообщение об ошибке показывает вызывающий.
+        await _store.SaveAsync(projects, cancellationToken).ConfigureAwait(true);
+
+        _rows.RemoveAt(index);
+        Unwatch(row.Path);
+
+        // Порядок оставшихся пересчитан: без этого в Order осталась бы дыра, и следующий
+        // добавленный проект встал бы в списке не туда.
+        for (var i = 0; i < _rows.Count; i++)
+        {
+            _rows[i].Update(projects[i]);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Перепроверяет, на месте ли каталог строки. Каталог мог исчезнуть уже после загрузки
     /// списка, поэтому проверка повторяется перед каждым запуском сессии.
     /// </summary>
@@ -168,6 +264,20 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         row.Branch = await _branchReader.ReadAsync(row.Path, cancellationToken).ConfigureAwait(true);
         await _branchWatcher.WatchAsync(row.Path, cancellationToken).ConfigureAwait(true);
         _watched.Add(row.Path);
+    }
+
+    // Список для записи: порядок строк на экране и есть порядок в файле.
+    private List<ProjectDefinition> Renumber(Func<ProjectRowViewModel, ProjectDefinition> select) =>
+        _rows.Select((row, order) => select(row) with { Order = order }).ToList();
+
+    private void Unwatch(string path)
+    {
+        // Наблюдателя снимаем ровно один раз: путь мог быть в списке только если каталог
+        // существовал в момент подключения строки.
+        if (_watched.Remove(path))
+        {
+            _branchWatcher.Unwatch(path);
+        }
     }
 
     private void UnwatchAll()

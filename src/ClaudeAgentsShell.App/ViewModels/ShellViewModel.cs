@@ -57,10 +57,28 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 : Task.CompletedTask,
             onError: ReportError);
 
-        // Окно истории сессий — этап M3, окно настроек — M5. Кнопки на своих местах,
-        // но пока отключены.
+        // Окно истории сессий — этап M3. Кнопка на месте, но пока отключена.
         ShowHistoryCommand = new RelayCommand(static _ => { }, static _ => false);
-        ShowSettingsCommand = new RelayCommand(static _ => { }, static _ => false);
+
+        // Пункты меню доступны всегда: параметр приезжает привязкой к PlacementTarget,
+        // и проверять его в CanExecute значило бы гасить пункт на первом открытии меню,
+        // пока привязка ещё не разрешилась. Не строка — команда просто ничего не делает.
+        OpenProjectFolderCommand = new AsyncRelayCommand(
+            parameter => parameter is ProjectRowViewModel row
+                ? OpenProjectFolderAsync(row, CancellationToken.None)
+                : Task.CompletedTask,
+            onError: ReportError);
+        ShowSettingsCommand = new AsyncRelayCommand(
+            parameter => RowOf(parameter) is { } row
+                ? ShowProjectSettingsAsync(row, CancellationToken.None)
+                : Task.CompletedTask,
+            parameter => RowOf(parameter) is not null,
+            ReportError);
+        RemoveProjectCommand = new AsyncRelayCommand(
+            parameter => parameter is ProjectRowViewModel row
+                ? RemoveProjectAsync(row, CancellationToken.None)
+                : Task.CompletedTask,
+            onError: ReportError);
 
         NewSessionCommand = new AsyncRelayCommand(
             _ => OpenSessionInActiveProjectAsync(CancellationToken.None),
@@ -103,8 +121,18 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// <summary>История сессий проекта. Отключена до этапа M3.</summary>
     public ICommand ShowHistoryCommand { get; }
 
-    /// <summary>Настройки приложения. Отключены до этапа M5.</summary>
+    /// <summary>Открыть каталог проекта в проводнике. Параметр — строка панели проектов.</summary>
+    public ICommand OpenProjectFolderCommand { get; }
+
+    /// <summary>
+    /// Настройки проекта (раздел 6.5 ТЗ). Параметр — строка панели проектов; без параметра
+    /// открываются настройки выбранного проекта, потому что кнопка в заголовке окна
+    /// параметра не передаёт.
+    /// </summary>
     public ICommand ShowSettingsCommand { get; }
+
+    /// <summary>Убрать проект из списка. Параметр — строка панели проектов.</summary>
+    public ICommand RemoveProjectCommand { get; }
 
     /// <summary>Новая сессия в активном проекте (кнопка «плюс» в полосе вкладок).</summary>
     public ICommand NewSessionCommand { get; }
@@ -231,6 +259,99 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         Tabs.SetActive(tab);
         RefreshSessionCounts();
         return tab;
+    }
+
+    /// <summary>
+    /// Открывает каталог проекта в проводнике. Не открылся — сообщение пользователю:
+    /// контекстное меню не должно ронять окно.
+    /// </summary>
+    public async Task OpenProjectFolderAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        if (!await Projects.OpenFolderAsync(row, cancellationToken).ConfigureAwait(true))
+        {
+            _prompt.ShowError(
+                "Не удалось открыть папку",
+                $"Каталог проекта «{row.Name}» не открылся в проводнике: {row.Path}");
+        }
+    }
+
+    /// <summary>
+    /// Показывает настройки проекта и, если пользователь их сохранил, обновляет строку.
+    /// </summary>
+    public async Task ShowProjectSettingsAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        if (await Projects.EditProjectAsync(row, cancellationToken).ConfigureAwait(true))
+        {
+            // Имя, путь и доступность могли измениться: заглушка на месте терминала и
+            // подсветка строки читают их у выбранного проекта.
+            RefreshCurrentProject();
+        }
+    }
+
+    /// <summary>
+    /// Убирает проект из списка после подтверждения. Каталог на диске остаётся на месте:
+    /// приложение в проект пользователя ничего не пишет и ничего из него не удаляет.
+    /// <para>
+    /// Открытые сессии этого проекта закрываются вместе со строкой. Оставить их в живых
+    /// нельзя: полоса показывает вкладки выбранного проекта, а выбрать исчезнувшую строку
+    /// уже нечем — вкладки стали бы недостижимыми, продолжая держать псевдоконсоли.
+    /// Поэтому число сессий названо прямо в подтверждении, а не спрошено по одной.
+    /// </para>
+    /// </summary>
+    /// <returns><c>true</c>, если проект убран.</returns>
+    public async Task<bool> RemoveProjectAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        if (!Projects.Rows.Contains(row))
+        {
+            // Строку уже убрали: повторный вызов приходит от меню, открытого до предыдущего
+            // подтверждения.
+            return false;
+        }
+
+        // Список материализуется до удаления: закрытие вкладки меняет тот самый набор,
+        // по которому идёт перебор.
+        var live = Tabs.AllTabs.Where(tab => tab.ProjectId == row.Id).ToList();
+
+        var message = live.Count == 0
+            ? $"Убрать проект «{row.Name}» из списка? Каталог на диске останется на месте."
+            : $"Убрать проект «{row.Name}» из списка? Его открытых сессий: {live.Count} — "
+                + "они будут закрыты. Каталог на диске останется на месте.";
+
+        if (!_prompt.Confirm("Убрать проект", message))
+        {
+            return false;
+        }
+
+        var wasSelected = ReferenceEquals(ActiveProjectRow, row);
+
+        // Сначала список: не удалось его записать — пользователь не лишится ни строки,
+        // ни открытых сессий, а исключение доедет до сообщения об ошибке.
+        if (!await Projects.RemoveProjectAsync(row, cancellationToken).ConfigureAwait(true))
+        {
+            return false;
+        }
+
+        foreach (var tab in live)
+        {
+            await _workspace.CloseAsync(tab.TerminalId, cancellationToken).ConfigureAwait(true);
+            Tabs.Remove(tab);
+        }
+
+        if (wasSelected)
+        {
+            // Выбранной строки больше нет: полоса остаётся ни на чём, на месте терминала —
+            // заглушка. Вкладки других проектов при этом продолжают жить.
+            SelectProject(null);
+        }
+
+        RefreshSessionCounts();
+        return true;
     }
 
     /// <summary>Новая сессия в активном проекте: и для кнопки полосы вкладок, и для <c>Ctrl+Shift+T</c>.</summary>
@@ -380,7 +501,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         Tabs.PropertyChanged -= OnTabsPropertyChanged;
         Projects.Dispose();
 
-        // Координатор снимается раньше набора вкладок: он подписан на его события.
+        // Координатор снимается раньше набора вкладок: он подписан на его TerminalExited.
         _sessionState.Dispose();
 
         // Набор вкладок освобождается раньше моста: помпам нужно дождаться подтверждений страницы.
@@ -436,6 +557,11 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         return false;
     }
 
+    // Строка, к которой относится команда: явно переданная либо выбранная. Кнопка настроек
+    // в заголовке окна параметра не передаёт — там подразумевается выбранный проект.
+    private ProjectRowViewModel? RowOf(object? parameter) =>
+        parameter as ProjectRowViewModel ?? ActiveProjectRow;
+
     private async Task ActivateIfAnyAsync(TabViewModel? tab, CancellationToken cancellationToken)
     {
         if (tab is not null)
@@ -490,13 +616,11 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             if (Tabs.Find(e.TerminalId) is { } tab)
             {
                 tab.IsRunning = false;
-
-                // Маркер снимается вместе с процессом. `SessionEnd` от убитой оболочки не придёт,
-                // а ввод у вкладки без помпы не рождается вовсе — значит вкладка, умершая
-                // в «ждёт ввода», осталась бы с оранжевой точкой и в счётчике до конца сеанса,
-                // и клик по счётчику вёл бы на мёртвый терминал (разделы 5.3 и 8 ТЗ).
-                tab.State = TabState.Unknown;
             }
+
+            // Маркер с умершей вкладки снимает координатор состояний: он подписан на то же
+            // событие. Выставлять состояние здесь нельзя — источник состояния один
+            // (раздел 7 CLAUDE.md), и второй писатель развёл бы показанное с запомненным.
         });
     }
 
