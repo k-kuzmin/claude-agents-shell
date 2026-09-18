@@ -171,8 +171,7 @@ public sealed class SessionStateCoordinator : IDisposable
         switch (hookEvent.Kind)
         {
             case HookKind.SessionStart:
-                // Началась другая сессия — прежний заголовок больше не её, ищем заново.
-                _sessions.Remove(terminalId);
+                ResetTitleIfSessionChanged(sink, terminalId, hookEvent);
                 sink.SetState(terminalId, TabState.Idle);
                 RequestTitle(sink, terminalId, hookEvent);
                 break;
@@ -197,6 +196,37 @@ public sealed class SessionStateCoordinator : IDisposable
                 // Незарегистрированный хук игнорируется: состояние вкладки не меняется.
                 break;
         }
+    }
+
+    /// <summary>
+    /// Возвращает короткое имя к «новая сессия», если во вкладке началась именно другая сессия.
+    /// Выполняется в потоке интерфейса.
+    /// </summary>
+    /// <remarks>
+    /// Короткое имя принадлежит сессии, а не вкладке (раздел 6.3 ТЗ), поэтому имя закончившейся
+    /// сессии висеть на экране не должно. Но сброс обязан быть условным: <c>SessionStart</c>
+    /// приходит и на <c>--resume</c>, и на <c>/clear</c>, и на сжатие контекста, а при
+    /// неизменившемся <c>session_id</c> заголовок мигал бы «новая сессия» и обратно на каждом
+    /// сжатии. Сигнал смены — только непустой и отличающийся идентификатор сессии: пустой
+    /// означает «неизвестно», а по незнанию имя не трогаем.
+    /// </remarks>
+    private void ResetTitleIfSessionChanged(ITabStateSink sink, TerminalId terminalId, HookEvent hookEvent)
+    {
+        if (!_sessions.TryGetValue(terminalId, out var probe))
+        {
+            // О прежней сессии вкладки ничего не известно — сбрасывать нечего.
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(hookEvent.SessionId) || hookEvent.SessionId == probe.SessionId)
+        {
+            return;
+        }
+
+        // Прежняя запись снимается вместе с именем: заголовок новой сессии ищется заново,
+        // а опоздавшее чтение прежней его уже не перебьёт — LoadTitleAsync сверяет session_id.
+        _sessions.Remove(terminalId);
+        sink.ResetShortTitle(terminalId);
     }
 
     /// <summary>

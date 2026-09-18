@@ -281,17 +281,29 @@ internal sealed class FakeSessionHistoryReader : ISessionHistoryReader
     /// <summary>Исключение, которым отвечает следующее чтение одной сессии.</summary>
     public Exception? ReadFailure { get; set; }
 
-    public Task<SessionSummary?> ReadOneAsync(string workingDirectory, string sessionId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Задержка следующего чтения: пока задача не завершена, чтение висит. Нужна, чтобы
+    /// проверить, что делает координатор, когда транскрипт доезжает с опозданием.
+    /// </summary>
+    public TaskCompletionSource? Gate { get; set; }
+
+    public async Task<SessionSummary?> ReadOneAsync(string workingDirectory, string sessionId, CancellationToken cancellationToken)
     {
         Requested.Add((workingDirectory, sessionId));
 
         if (ReadFailure is { } failure)
         {
             ReadFailure = null;
-            return Task.FromException<SessionSummary?>(failure);
+            throw failure;
         }
 
-        return Task.FromResult(_byId.TryGetValue(sessionId, out var summary) ? summary : null);
+        if (Gate is { } gate)
+        {
+            Gate = null;
+            await gate.Task;
+        }
+
+        return _byId.TryGetValue(sessionId, out var summary) ? summary : null;
     }
 }
 
