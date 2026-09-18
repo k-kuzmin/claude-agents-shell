@@ -64,6 +64,7 @@ public partial class App : System.Windows.Application
         services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
         services.AddSingleton<IUserPrompt, MessageBoxUserPrompt>();
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
+        services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
         services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
         // IDirectoryProbe регистрирует слой Sessions: Directory.* — файловая система,
         // а не WPF-специфика, и сборке оболочки не место её трогать.

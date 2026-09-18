@@ -219,7 +219,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         RefreshSessionCounts();
     }
 
-    /// <summary>Добавляет проект через диалог выбора папки.</summary>
+    /// <summary>Добавляет проект: выбор папки, затем диалог настроек (раздел 6.5 ТЗ).</summary>
     public async Task AddProjectAsync(CancellationToken cancellationToken)
     {
         var row = await Projects.AddProjectAsync(cancellationToken).ConfigureAwait(true);
