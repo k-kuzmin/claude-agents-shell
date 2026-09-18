@@ -1,3 +1,4 @@
+using System.Globalization;
 using ClaudeAgentsShell.Domain;
 
 namespace ClaudeAgentsShell.App.ViewModels;
@@ -15,6 +16,7 @@ public sealed class TabViewModel : ObservableObject
     private TabState _state = TabState.Unknown;
     private bool _isActive;
     private bool _isRunning = true;
+    private int? _exitCode;
 
     /// <inheritdoc cref="TabViewModel" />
     /// <param name="terminalId">Идентификатор вкладки в протоколе моста.</param>
@@ -88,9 +90,60 @@ public sealed class TabViewModel : ObservableObject
     /// Процесс оболочки ещё жив. Снимается по событию <c>TerminalExited</c>; сама вкладка
     /// при этом остаётся открытой — закрывает её только пользователь.
     /// </summary>
-    public bool IsRunning
+    public bool IsRunning => _isRunning;
+
+    /// <summary>
+    /// Процесс оболочки завершился. Обратная сторона <see cref="IsRunning"/>: разметке нужен
+    /// именно такой знак, потому что показывать пометку и кнопку «перезапустить» надо на
+    /// мёртвой вкладке, а обратного преобразователя булева значения в проекте нет.
+    /// </summary>
+    public bool HasExited => !_isRunning;
+
+    /// <summary>
+    /// Код выхода оболочки; <c>null</c>, пока процесс жив. Источник — событие
+    /// <c>TerminalExited</c>, а не разбор вывода вкладки.
+    /// </summary>
+    public int? ExitCode => _exitCode;
+
+    /// <summary>
+    /// Выход был ненулевым, то есть процесс упал. Штатный выход из оболочки (код 0) — это
+    /// не падение, и пометка о нём красится спокойным цветом (раздел 8 ТЗ).
+    /// </summary>
+    public bool HasFailedExit => _exitCode is not null and not 0;
+
+    /// <summary>
+    /// Пометка о коде выхода на вкладке. Пустая, пока процесс жив: видеть код надо
+    /// не наводя мышь, поэтому это текст, а не всплывающая подсказка.
+    /// </summary>
+    public string ExitBadgeText => _exitCode is { } code
+        ? "код " + code.ToString(CultureInfo.InvariantCulture)
+        : string.Empty;
+
+    /// <summary>
+    /// Отмечает, что процесс вкладки завершился с указанным кодом. Вкладка остаётся
+    /// открытой — закрывает её только пользователь (раздел 8 ТЗ).
+    /// </summary>
+    /// <param name="exitCode">Код выхода оболочки.</param>
+    /// <remarks>
+    /// Один метод вместо сеттера <see cref="IsRunning"/>: флаг и код обязаны меняться вместе,
+    /// иначе разметка успела бы показать пометку без кода. Состояние вкладки
+    /// (<see cref="State"/>) здесь не трогается — его единственный источник координатор
+    /// состояний, он же снимает маркер умершей вкладки.
+    /// </remarks>
+    public void MarkExited(int exitCode)
     {
-        get => _isRunning;
-        set => SetProperty(ref _isRunning, value);
+        if (!_isRunning && _exitCode == exitCode)
+        {
+            return;
+        }
+
+        _isRunning = false;
+        _exitCode = exitCode;
+
+        Raise(nameof(IsRunning));
+        Raise(nameof(HasExited));
+        Raise(nameof(ExitCode));
+        Raise(nameof(HasFailedExit));
+        Raise(nameof(ExitBadgeText));
     }
 }
