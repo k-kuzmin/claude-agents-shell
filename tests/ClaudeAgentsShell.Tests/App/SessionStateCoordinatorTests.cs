@@ -345,7 +345,7 @@ public sealed class SessionStateCoordinatorTests
         harness.History.Seed(SessionId, "первая сессия");
 
         var gate = new TaskCompletionSource();
-        harness.History.Gate = gate;
+        harness.History.Gates[SessionId] = gate;
         harness.RaiseHook(HookKind.SessionStart, tab);
         Assert.False(harness.Coordinator.PendingTitleWork.IsCompleted);
 
@@ -358,6 +358,87 @@ public sealed class SessionStateCoordinatorTests
 
         Assert.Empty(harness.Sink.ShortTitles);
         Assert.Equal([tab], harness.Sink.ResetTitles);
+    }
+
+    [Fact]
+    public async Task Прочитанный_транскрипт_без_заголовка_повтор_закрывает()
+    {
+        // Сводка без заголовка — это ответ «искали и не нашли»: на корпусе пользователя
+        // таких файлов 2,7 %, и перечитывать их на каждый ответ агента нельзя.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, title: null);
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        Assert.Single(harness.History.Requested);
+        Assert.Empty(harness.Sink.ShortTitles);
+    }
+
+    [Fact]
+    public async Task Пустой_результат_на_SessionStart_повтор_не_закрывает()
+    {
+        // На SessionStart транскрипт ещё дописывается, и отсутствие заголовка там ничего
+        // не доказывает — попытка по Stop обязана остаться.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, title: null);
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+        Assert.Single(harness.History.Requested);
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        Assert.Equal(2, harness.History.Requested.Count);
+    }
+
+    [Fact]
+    public async Task Одновременные_запросы_второго_чтения_не_порождают()
+    {
+        // Чтение уже идёт — Stop поверх него нового прохода по файлу не ставит.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "почини сборку");
+
+        var gate = new TaskCompletionSource();
+        harness.History.Gates[SessionId] = gate;
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        gate.SetResult();
+        await harness.SettleAsync();
+
+        Assert.Single(harness.History.Requested);
+        Assert.Equal("почини сборку", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Сбой_чтения_повтор_не_закрывает()
+    {
+        // Сбой — не «искали и не нашли»: спросить позже имеет смысл.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "почини сборку");
+        harness.History.ReadFailure = new IOException("файл занят");
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+        Assert.Empty(harness.Sink.ShortTitles);
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        Assert.Equal(2, harness.History.Requested.Count);
+        Assert.Equal("почини сборку", harness.Sink.ShortTitles[tab]);
     }
 
     [Fact]

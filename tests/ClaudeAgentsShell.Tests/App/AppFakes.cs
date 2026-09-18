@@ -282,14 +282,18 @@ internal sealed class FakeSessionHistoryReader : ISessionHistoryReader
     public Exception? ReadFailure { get; set; }
 
     /// <summary>
-    /// Задержка следующего чтения: пока задача не завершена, чтение висит. Нужна, чтобы
-    /// проверить, что делает координатор, когда транскрипт доезжает с опозданием.
+    /// Задержки чтения по сессиям: пока задача не завершена, чтение этой сессии висит.
+    /// Нужны, чтобы проверить, что делает координатор, когда транскрипт доезжает с опозданием.
     /// </summary>
-    public TaskCompletionSource? Gate { get; set; }
+    public Dictionary<string, TaskCompletionSource> Gates { get; } = [];
 
     public async Task<SessionSummary?> ReadOneAsync(string workingDirectory, string sessionId, CancellationToken cancellationToken)
     {
-        Requested.Add((workingDirectory, sessionId));
+        // Чтения уходят в пул, поэтому список запросов пополняется под замком.
+        lock (Requested)
+        {
+            Requested.Add((workingDirectory, sessionId));
+        }
 
         if (ReadFailure is { } failure)
         {
@@ -297,9 +301,8 @@ internal sealed class FakeSessionHistoryReader : ISessionHistoryReader
             throw failure;
         }
 
-        if (Gate is { } gate)
+        if (Gates.TryGetValue(sessionId, out var gate))
         {
-            Gate = null;
             await gate.Task;
         }
 

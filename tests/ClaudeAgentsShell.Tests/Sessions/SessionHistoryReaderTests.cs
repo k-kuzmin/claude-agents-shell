@@ -1,4 +1,5 @@
 using System.Text;
+using ClaudeAgentsShell.Sessions;
 using ClaudeAgentsShell.Sessions.History;
 using ClaudeAgentsShell.Sessions.Storage;
 using Xunit;
@@ -187,8 +188,61 @@ public sealed class SessionHistoryReaderTests
         Assert.Null(await reader.ReadOneAsync(WorkingDirectory, sessionId, CancellationToken.None));
     }
 
-    private static SessionHistoryReader CreateReader(TempDirectory temp) =>
-        new(new AppDataPaths(temp.Combine("appdata"), temp.Combine("claude", "projects")));
+    [Fact]
+    public async Task Предел_просмотра_обрывает_чтение_и_даёт_сводку_без_заголовка()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp, new SessionsOptions { TranscriptScanLimit = 200 });
+        WriteTranscript(temp, SessionId,
+            Filler,
+            Filler,
+            """{"type":"user","message":{"role":"user","content":"слишком глубоко"}}""");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        // Сводка есть, заголовка нет: это ответ «прочитали и не нашли», по которому
+        // вызывающий перестаёт спрашивать (а не «файла нет», после которого спросит снова).
+        Assert.NotNull(summary);
+        Assert.Null(summary.Title);
+        Assert.Equal(SessionId, summary.SessionId);
+    }
+
+    [Fact]
+    public async Task Заголовок_в_пределах_предела_по_прежнему_находится()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp, new SessionsOptions { TranscriptScanLimit = 64 * 1024 });
+        WriteTranscript(temp, SessionId,
+            Filler,
+            Filler,
+            """{"type":"user","message":{"role":"user","content":"вопрос в пределах предела"}}""");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("вопрос в пределах предела", summary?.Title);
+    }
+
+    [Fact]
+    public async Task Предел_просмотра_действует_и_на_список()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp, new SessionsOptions { TranscriptScanLimit = 200 });
+        WriteTranscript(temp, SessionId,
+            Filler,
+            Filler,
+            """{"type":"user","message":{"role":"user","content":"слишком глубоко"}}""");
+
+        // Список деградирует до «имя файла и дата» — строка остаётся, заголовка в ней нет.
+        var summaries = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        Assert.Null(Assert.Single(summaries).Title);
+    }
+
+    /// <summary>Строка, которая заголовком стать не может, — около 140 символов.</summary>
+    private static string Filler => "{\"type\":\"assistant\",\"text\":\"" + new string('a', 110) + "\"}";
+
+    private static SessionHistoryReader CreateReader(TempDirectory temp, SessionsOptions? options = null) =>
+        new(new AppDataPaths(temp.Combine("appdata"), temp.Combine("claude", "projects")), options ?? new SessionsOptions());
 
     /// <summary>Кладёт транскрипт туда, где его ищет Claude Code: <c>&lt;projects&gt;/&lt;slug&gt;</c>.</summary>
     private static string WriteTranscript(TempDirectory temp, string sessionId, params string[] lines)
