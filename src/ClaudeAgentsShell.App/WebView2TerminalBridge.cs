@@ -95,6 +95,12 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
         CoreWebView2Environment environment;
         try
         {
+            // Прямой вопрос «какой рантайм установлен» до создания среды. Это документированный
+            // способ узнать об отсутствии рантайма: метод бросает WebView2RuntimeNotFoundException
+            // сам, ещё до того, как отказ успеет обрасти обёртками асинхронной инициализации
+            // контрола. Ответ не нужен — нужен только факт, что вопрос не провалился.
+            _ = CoreWebView2Environment.GetAvailableBrowserVersionString(browserExecutableFolder: null);
+
             environment = await CoreWebView2Environment
                 .CreateAsync(browserExecutableFolder: null, userDataFolder: ResolveUserDataFolder())
                 .ConfigureAwait(true);
@@ -103,9 +109,9 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw new TerminalBridgeUnavailableException(
-                "Не удалось поднять WebView2. Проверьте, установлен ли WebView2 Runtime.",
-                exception);
+            // Отсутствие рантайма отделяется от прочих сбоев: у него своё окно со ссылкой
+            // на установщик (раздел 8 ТЗ).
+            throw WebView2Failure.Describe(exception);
         }
 
         _core = _webView.CoreWebView2;
