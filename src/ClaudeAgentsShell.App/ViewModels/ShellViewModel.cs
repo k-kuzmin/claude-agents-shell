@@ -1,3 +1,4 @@
+﻿using System.ComponentModel;
 using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.Services;
@@ -75,8 +76,13 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 ? CloseTabAsync(tab, CancellationToken.None)
                 : Task.CompletedTask,
             onError: ReportError);
+        ShowAwaitingTabCommand = new AsyncRelayCommand(
+            _ => ShowAwaitingTabAsync(CancellationToken.None),
+            _ => Tabs.HasAwaitingInput,
+            ReportError);
 
         _workspace.TerminalExited += OnTerminalExited;
+        Tabs.PropertyChanged += OnTabsPropertyChanged;
     }
 
     /// <summary>Панель проектов.</summary>
@@ -108,6 +114,12 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
 
     /// <summary>Закрыть вкладку.</summary>
     public ICommand CloseTabCommand { get; }
+
+    /// <summary>
+    /// Клик по счётчику «N ждёт ввода»: показать первую ждущую вкладку (раздел 6.3 ТЗ).
+    /// Ждущих вкладок нет — команда недоступна, а сам счётчик в разметке скрыт.
+    /// </summary>
+    public ICommand ShowAwaitingTabCommand { get; }
 
     /// <summary>
     /// Выбранный проект: его вкладки показаны в полосе и в нём откроется новая сессия.
@@ -266,6 +278,18 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     }
 
     /// <summary>
+    /// Показывает первую вкладку, ждущую ввода. Ждущих вкладок нет — не делает ничего.
+    /// <para>
+    /// Счётчик считает вкладки всех проектов, а полоса показывает вкладки одного, поэтому
+    /// переход идёт обычным <see cref="ActivateTabAsync"/>: он же переключает выбранный
+    /// проект. Без этого ждущая вкладка чужого проекта осталась бы недостижимой — команда
+    /// сработала бы, а на экране не изменилось бы ничего.
+    /// </para>
+    /// </summary>
+    public Task ShowAwaitingTabAsync(CancellationToken cancellationToken) =>
+        ActivateIfAnyAsync(Tabs.FirstAwaitingInput(), cancellationToken);
+
+    /// <summary>
     /// Закрывает вкладку. Живой процесс — сначала подтверждение: отказ оставляет вкладку на месте.
     /// </summary>
     /// <returns><c>true</c>, если вкладка закрыта.</returns>
@@ -353,6 +377,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
 
         _disposed = true;
         _workspace.TerminalExited -= OnTerminalExited;
+        Tabs.PropertyChanged -= OnTabsPropertyChanged;
         Projects.Dispose();
 
         // Координатор снимается раньше набора вкладок: он подписан на его события.
@@ -458,6 +483,17 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 tab.IsRunning = false;
             }
         });
+    }
+
+    private void OnTabsPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        // Доступность команд окна перепроверяется через CommandManager (см. RelayCommand).
+        // Состояние вкладок меняют хуки, а не пользователь, поэтому сам по себе запрос
+        // доступности не придёт: кнопка счётчика появилась бы видимой, но выключенной.
+        if (e.PropertyName is nameof(TabStripViewModel.HasAwaitingInput))
+        {
+            CommandManager.InvalidateRequerySuggested();
+        }
     }
 
     private void ReportError(Exception exception) =>

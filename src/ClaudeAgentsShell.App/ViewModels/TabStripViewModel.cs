@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using ClaudeAgentsShell.Domain;
 
@@ -63,8 +63,8 @@ public sealed class TabStripViewModel : ObservableObject
     /// <summary>
     /// Сколько вкладок ждёт ввода. Считается по всем вкладкам, а не только по видимым:
     /// смысл счётчика — заметить, что тебя ждёт сессия, в том числе в другом проекте.
-    /// Источник состояния — хуки (M4); до тех пор счётчик равен нулю и в разметке скрыт.
-    /// Клик по счётчику (раздел 6.3 ТЗ) в M4 должен будет заодно переключать выбранный проект.
+    /// Источник состояния — хуки; пока состояние не пришло, счётчик равен нулю и в разметке скрыт.
+    /// Клик по счётчику (раздел 6.3 ТЗ) ведёт на <see cref="FirstAwaitingInput"/>.
     /// </summary>
     public int AwaitingInputCount
     {
@@ -205,6 +205,18 @@ public sealed class TabStripViewModel : ObservableObject
 
         return _all.FirstOrDefault(tab => tab.ProjectId == projectId);
     }
+
+    /// <summary>
+    /// Первая вкладка, ждущая ввода, среди **всех** проектов; <c>null</c>, если таких нет.
+    /// Цель клика по счётчику «N ждёт ввода».
+    /// <para>
+    /// «Первая» — в порядке открытия. Видимая полоса строится фильтрацией того же списка
+    /// с сохранением порядка, поэтому внутри проекта это ровно самая левая ждущая вкладка,
+    /// а между проектами — та, что ждёт дольше всех. Порядок не зависит от того, как
+    /// пользователь переставил проекты в панели, и не меняется от клика к клику.
+    /// </para>
+    /// </summary>
+    public TabViewModel? FirstAwaitingInput() => _all.FirstOrDefault(tab => tab.IsAwaitingInput);
 
     /// <summary>Вкладка полосы по номеру 1..9; <c>null</c>, если столько вкладок не показано.</summary>
     public TabViewModel? ByNumber(int number) =>

@@ -123,20 +123,26 @@
             </StackPanel>
         </ScrollViewer>
 
-        <!-- Счётчик «N ждёт ввода». Разметка готова, данные приходят от хуков в M4,
-             поэтому пока счётчик всегда скрыт. -->
-        <StackPanel Grid.Column="1"
-                    Orientation="Horizontal"
-                    VerticalAlignment="Center"
-                    Margin="10,0,14,0"
-                    Visibility="{Binding Tabs.HasAwaitingInput, Converter={StaticResource BoolToVisibility}}">
-            <Ellipse Width="6" Height="6" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{StaticResource AccentBrush}" />
-            <TextBlock VerticalAlignment="Center"
-                       FontSize="11"
-                       FontFamily="{StaticResource MonoFontFamily}"
-                       Foreground="{StaticResource FaintTextBrush}">
-                <Run Text="{Binding Tabs.AwaitingInputCount, Mode=OneWay}" /><Run Text=" ждёт ввода" />
-            </TextBlock>
-        </StackPanel>
+        <!-- Счётчик «N ждёт ввода»: кнопка перехода на первую ждущую вкладку (раздел 6.3 ТЗ).
+             Считает вкладки всех проектов, поэтому переход меняет и выбранный проект.
+             Ждущих вкладок нет — кнопки не видно. -->
+        <Button Grid.Column="1"
+                VerticalAlignment="Center"
+                Margin="10,0,14,0"
+                Style="{StaticResource FlatButtonStyle}"
+                Command="{Binding ShowAwaitingTabCommand}"
+                Visibility="{Binding Tabs.HasAwaitingInput, Converter={StaticResource BoolToVisibility}}"
+                ToolTip="Перейти к первой сессии, которая ждёт ввода"
+                AutomationProperties.Name="Сессии, ждущие ввода">
+            <StackPanel Orientation="Horizontal">
+                <Ellipse Width="6" Height="6" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{StaticResource AccentBrush}" />
+                <TextBlock VerticalAlignment="Center"
+                           FontSize="11"
+                           FontFamily="{StaticResource MonoFontFamily}"
+                           Foreground="{StaticResource FaintTextBrush}">
+                    <Run Text="{Binding Tabs.AwaitingInputCount, Mode=OneWay}" /><Run Text=" ждёт ввода" />
+                </TextBlock>
+            </StackPanel>
+        </Button>
     </Grid>
 </UserControl>

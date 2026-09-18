@@ -1,3 +1,4 @@
+﻿using System.ComponentModel;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
@@ -826,5 +827,112 @@ public sealed class ShellViewModelTests
         Assert.All(harness.Shell.Tabs.Tabs, tab => Assert.Equal(TabState.Unknown, tab.State));
         Assert.Equal(0, harness.Shell.Tabs.AwaitingInputCount);
         Assert.False(harness.Shell.Tabs.HasAwaitingInput);
+    }
+
+    [Fact]
+    public async Task Awaiting_input_counter_counts_tabs_of_every_project()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var alpha = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var beta = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+
+        alpha!.State = TabState.AwaitingInput;
+        beta!.State = TabState.AwaitingInput;
+
+        // Полоса показывает вкладки одного проекта, а счётчик считает все: смысл счётчика —
+        // заметить сессию, которая ждёт в проекте, который сейчас не на экране.
+        Assert.Single(harness.Shell.Tabs.Tabs);
+        Assert.Equal(2, harness.Shell.Tabs.AwaitingInputCount);
+        Assert.True(harness.Shell.Tabs.HasAwaitingInput);
+    }
+
+    [Fact]
+    public async Task Counter_recalculates_when_a_tab_changes_state()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        var changed = new List<string?>();
+        ((INotifyPropertyChanged)harness.Shell.Tabs).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        tab!.State = TabState.AwaitingInput;
+
+        Assert.Equal(1, harness.Shell.Tabs.AwaitingInputCount);
+        Assert.True(harness.Shell.Tabs.HasAwaitingInput);
+
+        // Без этих уведомлений счётчик в разметке застынет на значении, которое
+        // вычислилось при открытии вкладки.
+        Assert.Contains(nameof(TabStripViewModel.AwaitingInputCount), changed);
+        Assert.Contains(nameof(TabStripViewModel.HasAwaitingInput), changed);
+
+        tab.State = TabState.Busy;
+
+        Assert.Equal(0, harness.Shell.Tabs.AwaitingInputCount);
+        Assert.False(harness.Shell.Tabs.HasAwaitingInput);
+    }
+
+    [Fact]
+    public async Task Counter_command_is_disabled_until_a_tab_starts_waiting()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.False(harness.Shell.ShowAwaitingTabCommand.CanExecute(null));
+
+        tab!.State = TabState.AwaitingInput;
+
+        Assert.True(harness.Shell.ShowAwaitingTabCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task Counter_without_awaiting_tabs_leaves_everything_as_it_was()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+
+        Assert.Same(tab, harness.Shell.Tabs.ActiveTab);
+        Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+    }
+
+    [Fact]
+    public async Task Clicking_the_counter_switches_both_the_project_and_the_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var waiting = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+
+        // Возвращаемся в alpha: ждущая вкладка beta уходит из полосы.
+        await harness.Shell.ActivateProjectAsync(harness.Row(0), CancellationToken.None);
+        waiting!.State = TabState.AwaitingInput;
+        Assert.DoesNotContain(waiting, harness.Shell.Tabs.Tabs);
+
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+
+        // Переключиться обязано всё сразу: иначе команда «сработает», а на экране
+        // не изменится ничего.
+        Assert.Same(harness.Row(1), harness.Shell.ActiveProjectRow);
+        Assert.Same(waiting, harness.Shell.Tabs.ActiveTab);
+        Assert.Contains(waiting, harness.Shell.Tabs.Tabs);
+        Assert.Equal(waiting.TerminalId, harness.Workspace.VisibleTerminal);
+    }
+
+    [Fact]
+    public async Task Counter_leads_to_the_tab_that_has_been_waiting_longest()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var first = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+
+        // Ждать начала вторая, но «первая» считается в порядке открытия: так цель клика
+        // не зависит от того, в каком порядке пришли события хуков.
+        second!.State = TabState.AwaitingInput;
+        first!.State = TabState.AwaitingInput;
+
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+
+        Assert.Same(first, harness.Shell.Tabs.ActiveTab);
+        Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
     }
 }
