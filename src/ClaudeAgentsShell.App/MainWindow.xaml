@@ -104,11 +104,12 @@
                             VerticalAlignment="Center"
                             Margin="0,0,4,0">
 
-                    <!-- Окно настроек приезжает в M5: кнопка на месте, но отключена. -->
+                    <!-- Настройки выбранного проекта. Параметр не передаётся намеренно:
+                         команда без параметра берёт активную строку панели проектов. -->
                     <Button Style="{StaticResource CaptionButtonStyle}"
                             Command="{Binding ShowSettingsCommand}"
-                            ToolTip="Настройки (этап M5)"
-                            AutomationProperties.Name="Настройки">
+                            ToolTip="Настройки проекта"
+                            AutomationProperties.Name="Настройки проекта">
                         <Canvas Width="15" Height="15">
                             <Ellipse Canvas.Left="2.2" Canvas.Top="2.2" Width="10.6" Height="10.6"
                                      Stroke="{StaticResource MutedTextBrush}" StrokeThickness="1.5" />

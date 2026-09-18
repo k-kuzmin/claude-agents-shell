@@ -63,6 +63,7 @@ public partial class App : System.Windows.Application
         // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.
         services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
         services.AddSingleton<IUserPrompt, MessageBoxUserPrompt>();
+        services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
         // IDirectoryProbe регистрирует слой Sessions: Directory.* — файловая система,
         // а не WPF-специфика, и сборке оболочки не место её трогать.
 
