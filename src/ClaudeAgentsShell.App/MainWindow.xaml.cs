@@ -23,13 +23,17 @@ public partial class MainWindow : Window
         ShellViewModel shell,
         ShellShortcutHandler shortcuts,
         IWebView2MissingDialog runtimeMissingDialog,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ShutdownSignal shutdownSignal,
+        ICrashLog crashLog)
     {
         ArgumentNullException.ThrowIfNull(bridge);
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(shortcuts);
         ArgumentNullException.ThrowIfNull(runtimeMissingDialog);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(shutdownSignal);
+        ArgumentNullException.ThrowIfNull(crashLog);
 
         InitializeComponent();
 
@@ -37,7 +41,7 @@ public partial class MainWindow : Window
         _shell = shell;
         _shortcuts = shortcuts;
         _runtimeMissingDialog = runtimeMissingDialog;
-        _shutdown = new WindowShutdownSequence(ReleaseAsync, Hide, Close, timeProvider);
+        _shutdown = new WindowShutdownSequence(ReleaseAsync, Hide, Close, timeProvider, shutdownSignal, crashLog);
 
         DataContext = _shell;
         TerminalHost.Children.Add(_bridge.Control);

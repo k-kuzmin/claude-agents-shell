@@ -54,6 +54,8 @@ internal static class AppComposition
         services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
 
         // Глобальные обработчики исключений; ICrashLog регистрирует слой Sessions.
+        // Признак гашения общий на приложение: его взводит окно, а читает докладчик о сбоях.
+        services.AddSingleton<ShutdownSignal>();
         services.AddSingleton<CrashReporter>();
         // IDirectoryProbe регистрирует слой Sessions: Directory.* — файловая система,
         // а не WPF-специфика, и сборке оболочки не место её трогать.

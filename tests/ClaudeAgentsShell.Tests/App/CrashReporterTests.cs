@@ -1,5 +1,4 @@
 using ClaudeAgentsShell.App.Services;
-using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Tests.Fakes;
 using Xunit;
 
@@ -19,7 +18,7 @@ public sealed class CrashReporterTests
     {
         var log = new FakeCrashLog();
         var prompt = new FakeUserPrompt();
-        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider());
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), new ShutdownSignal());
 
         var shown = reporter.Report("TestSource", Failure);
 
@@ -33,7 +32,7 @@ public sealed class CrashReporterTests
     {
         var log = new FakeCrashLog { Path = @"C:\data\crash.log" };
         var prompt = new FakeUserPrompt();
-        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider());
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), new ShutdownSignal());
 
         reporter.Report("TestSource", Failure);
 
@@ -45,7 +44,7 @@ public sealed class CrashReporterTests
     {
         var log = new FakeCrashLog();
         var prompt = new FakeUserPrompt();
-        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider());
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), new ShutdownSignal());
 
         reporter.Record("AppDomain", Failure);
 
@@ -70,7 +69,7 @@ public sealed class CrashReporterTests
             }
         });
 
-        reporter = new CrashReporter(log, prompt, new ManualTimeProvider());
+        reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), new ShutdownSignal());
 
         Assert.True(reporter.Report("TestSource", Failure));
 
@@ -84,7 +83,7 @@ public sealed class CrashReporterTests
     {
         var log = new FakeCrashLog();
         var prompt = new FakeUserPrompt();
-        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider());
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), new ShutdownSignal());
 
         for (var i = 0; i < CrashReporter.MaxDialogsPerWindow; i++)
         {
@@ -101,7 +100,7 @@ public sealed class CrashReporterTests
     {
         var log = new FakeCrashLog();
         var prompt = new FakeUserPrompt();
-        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider());
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), new ShutdownSignal());
 
         for (var i = 0; i < CrashReporter.MaxDialogsPerWindow; i++)
         {
@@ -118,7 +117,7 @@ public sealed class CrashReporterTests
         var log = new FakeCrashLog();
         var prompt = new FakeUserPrompt();
         var time = new ManualTimeProvider();
-        var reporter = new CrashReporter(log, prompt, time);
+        var reporter = new CrashReporter(log, prompt, time, new ShutdownSignal());
 
         for (var i = 0; i < CrashReporter.MaxDialogsPerWindow; i++)
         {
@@ -137,7 +136,7 @@ public sealed class CrashReporterTests
     {
         var log = new FakeCrashLog();
         var prompt = new ReentrantUserPrompt(static () => throw new InvalidOperationException("окна нет"));
-        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider());
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), new ShutdownSignal());
 
         Assert.False(reporter.Report("TestSource", Failure));
 
@@ -152,27 +151,52 @@ public sealed class CrashReporterTests
     {
         var log = new FakeCrashLog { Failure = new IOException("диск полон") };
         var prompt = new FakeUserPrompt();
-        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider());
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), new ShutdownSignal());
 
         Assert.True(reporter.Report("TestSource", Failure));
         Assert.Single(prompt.Errors);
     }
 
-    /// <summary>Журнал сбоев в памяти. Умеет отвечать исключением: порт этого не обещает, но и не запрещает.</summary>
-    private sealed class FakeCrashLog : ICrashLog
+    [Fact]
+    public void После_начала_гашения_окно_не_показывается_а_сбой_записывается()
     {
-        public List<(string Source, Exception Exception)> Entries { get; } = [];
+        var log = new FakeCrashLog();
+        var prompt = new FakeUserPrompt();
+        var signal = new ShutdownSignal();
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), signal);
 
-        public string? Path { get; set; } = @"C:\appdata\crash.log";
+        signal.MarkStarted();
 
-        /// <summary>Исключение, которым отвечает запись.</summary>
-        public Exception? Failure { get; set; }
+        // Окно уже спрятано: модальное окно об ошибке всплыло бы поверх пустого места,
+        // без владельца, и держало бы процесс живым, пока его не закроют, — тот самый
+        // процесс-призрак, который двухфазное закрытие и убирает.
+        Assert.False(reporter.Report("TestSource", Failure));
+        Assert.Empty(prompt.Errors);
 
-        public string? Write(string source, Exception exception)
+        // Замолчать сбой при этом нельзя: в журнал он попадает как обычно.
+        Assert.Equal(("TestSource", Failure), Assert.Single(log.Entries));
+    }
+
+    [Fact]
+    public void Все_сбои_во_время_гашения_доходят_до_журнала()
+    {
+        var log = new FakeCrashLog();
+        var prompt = new FakeUserPrompt();
+        var signal = new ShutdownSignal();
+        var reporter = new CrashReporter(log, prompt, new ManualTimeProvider(), signal);
+
+        signal.MarkStarted();
+
+        // Сбоев во время гашения бывает много: завершение каждой псевдоконсоли поднимает
+        // своё событие. Тишина на экране не должна превращаться в тишину в журнале —
+        // иначе разбираться с гашением будет не по чему.
+        for (var i = 0; i < CrashReporter.MaxDialogsPerWindow + 1; i++)
         {
-            Entries.Add((source, exception));
-            return Failure is { } failure ? throw failure : Path;
+            Assert.False(reporter.Report("TestSource", Failure));
         }
+
+        Assert.Empty(prompt.Errors);
+        Assert.Equal(CrashReporter.MaxDialogsPerWindow + 1, log.Entries.Count);
     }
 
     /// <summary>Окно, которое на показе выполняет заданное действие: повторный сбой или отказ открыться.</summary>

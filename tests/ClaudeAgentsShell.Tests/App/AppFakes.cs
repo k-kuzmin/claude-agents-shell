@@ -150,6 +150,26 @@ internal sealed class FakeUserPrompt : IUserPrompt
     public void ShowError(string title, string message) => Errors.Add(message);
 }
 
+/// <summary>
+/// Журнал сбоев в памяти. Умеет отвечать исключением: порт этого не обещает, но и
+/// не запрещает, а падение журнала не должно валить того, кто в него пишет.
+/// </summary>
+internal sealed class FakeCrashLog : ICrashLog
+{
+    public List<(string Source, Exception Exception)> Entries { get; } = [];
+
+    public string? Path { get; set; } = @"C:\appdata\crash.log";
+
+    /// <summary>Исключение, которым отвечает запись.</summary>
+    public Exception? Failure { get; set; }
+
+    public string? Write(string source, Exception exception)
+    {
+        Entries.Add((source, exception));
+        return Failure is { } failure ? throw failure : Path;
+    }
+}
+
 /// <summary>Поток интерфейса в тестах — текущий поток.</summary>
 /// <remarks>
 /// Годится только там, где отправитель уже находится в «потоке интерфейса»: колбэк исполняется

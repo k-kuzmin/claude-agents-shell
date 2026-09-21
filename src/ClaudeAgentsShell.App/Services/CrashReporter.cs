@@ -33,6 +33,7 @@ internal sealed class CrashReporter
     private readonly ICrashLog _log;
     private readonly IUserPrompt _prompt;
     private readonly TimeProvider _time;
+    private readonly ShutdownSignal _shutdown;
 
     // Сбой приходит с любого потока, поэтому предохранитель под замком. Замок держится
     // только на время решения: показ окна модальный и под замком запер бы остальных.
@@ -42,14 +43,16 @@ internal sealed class CrashReporter
     private DateTimeOffset _windowStartedAt;
 
     /// <inheritdoc cref="CrashReporter" />
-    public CrashReporter(ICrashLog log, IUserPrompt prompt, TimeProvider time)
+    public CrashReporter(ICrashLog log, IUserPrompt prompt, TimeProvider time, ShutdownSignal shutdown)
     {
         ArgumentNullException.ThrowIfNull(log);
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentNullException.ThrowIfNull(time);
+        ArgumentNullException.ThrowIfNull(shutdown);
         _log = log;
         _prompt = prompt;
         _time = time;
+        _shutdown = shutdown;
     }
 
     /// <summary>
@@ -62,11 +65,22 @@ internal sealed class CrashReporter
     /// <summary>
     /// Запись в журнал и, если предохранитель позволяет, окно с текстом ошибки.
     /// Не бросает: исключение отсюда убило бы процесс без следа.
+    /// <para>
+    /// После начала гашения вырождается в <see cref="Record" />: окна уже нет на экране,
+    /// и модальное окно об ошибке всплыло бы поверх пустого места, без владельца, — а
+    /// пока его не закроют, процесс не уйдёт. Это ровно тот процесс-призрак, ради
+    /// которого затевалось двухфазное закрытие.
+    /// </para>
     /// </summary>
     /// <returns><c>true</c>, если окно было показано.</returns>
     public bool Report(string source, Exception exception)
     {
         var path = SafeWrite(source, exception);
+
+        if (_shutdown.IsShuttingDown)
+        {
+            return false;
+        }
 
         if (!TryEnterDialog(out var last))
         {
