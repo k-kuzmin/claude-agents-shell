@@ -49,13 +49,21 @@ public partial class App : System.Windows.Application
     /// <inheritdoc />
     protected override void OnExit(ExitEventArgs e)
     {
-        DispatcherUnhandledException -= OnDispatcherUnhandledException;
-
-        if (_domainHandler is { } domainHandler)
+        // Обработчики снимаются ПОСЛЕ освобождения, а не до него. Освобождение контейнера —
+        // это приёмник хуков, наблюдатель за ветками, мост и помпы; исключение оттуда,
+        // снятое заранее, не поймал бы никто — ни диспетчер (OnExit исполняется как его
+        // операция), ни домен, — и процесс умер бы с дампом вместо записи в crash.log.
+        // Особенно это важно после двухфазного закрытия: к этому моменту в фоне может
+        // доигрываться гашение, брошенное по потолку.
+        if (_services is { } services)
         {
-            AppDomain.CurrentDomain.UnhandledException -= domainHandler;
-            _domainHandler = null;
+            // К этому моменту окно уже освободило мост и псевдоконсоли; повторное освобождение
+            // идемпотентно и не уходит в ожидание.
+            services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _services = null;
         }
+
+        DispatcherUnhandledException -= OnDispatcherUnhandledException;
 
         if (_taskHandler is { } taskHandler)
         {
@@ -63,14 +71,17 @@ public partial class App : System.Windows.Application
             _taskHandler = null;
         }
 
-        if (_services is { } services)
+        // Обработчик домена снимается последним: он единственный ловит то, что прилетело
+        // с чужого потока, и остаётся последней сетью, пока снимаются остальные.
+        if (_domainHandler is { } domainHandler)
         {
-            // К этому моменту окно уже освободило мост и псевдоконсоли; повторное освобождение
-            // идемпотентно и не уходит в ожидание.
-            services.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            _services = null;
-            _crashes = null;
+            AppDomain.CurrentDomain.UnhandledException -= domainHandler;
+            _domainHandler = null;
         }
+
+        // Докладчик отпускается после отключения обработчиков: сбой, пришедший между
+        // концом освобождения и отпиской, должен застать его на месте.
+        _crashes = null;
 
         base.OnExit(e);
     }

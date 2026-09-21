@@ -1,4 +1,5 @@
-using System.Diagnostics;
+using ClaudeAgentsShell.App.Services;
+using ClaudeAgentsShell.Application.Ports;
 
 namespace ClaudeAgentsShell.App;
 
@@ -22,10 +23,20 @@ internal sealed class WindowShutdownSequence
     /// <summary>
     /// Общий потолок на всё гашение. Вышли за него — ждать перестаём и закрываемся.
     /// <para>
-    /// Вложенные бюджеты (ожидание цикла помпы, освобождение псевдоконсоли, выход оболочки)
-    /// складываются в верхнюю границу, которая нигде не выражена одним числом и растёт с
-    /// каждым новым шагом гашения. Это число — единственная граница, за которой невидимый
-    /// процесс считается зависшим.
+    /// Это страховка от зависшего гашения, а не сумма вложенных бюджетов: точной верхней
+    /// границы у гашения нет. В <c>TerminalPump.DisposeAsync</c> есть ожидание замка
+    /// сброса вообще без предела по времени — пока оно там, никакое число не будет
+    /// гарантированной суммой.
+    /// </para>
+    /// <para>
+    /// Нижнюю планку задаёт честный, просто медленный случай: одна помпа тратит до 3 с на
+    /// ожидание цикла, до 2 с на повторное ожидание и до 5 с на освобождение
+    /// псевдоконсоли. Эти десять секунд достижимы и на одной вкладке — помпы гасятся
+    /// параллельно, так что на число вкладок они не множатся. Потолок обязан быть заметно
+    /// выше: иначе он рвал бы не зависшее, а просто медленное гашение, и невежливо
+    /// прибитая оболочка, записанная ниже как исключительный случай, наступала бы штатно.
+    /// Удлинения пользователь не почувствует: окно к этому моменту уже спрятано, и платит
+    /// он только за то, чтобы оболочки умирали по-честному.
     /// </para>
     /// <para>
     /// Осознанно принятый худший случай: по истечении потолка брошенное гашение
@@ -35,12 +46,20 @@ internal sealed class WindowShutdownSequence
     /// лучше, чем невидимый процесс, висящий вечно.
     /// </para>
     /// </summary>
-    internal static readonly TimeSpan ShutdownDeadline = TimeSpan.FromSeconds(8);
+    internal static readonly TimeSpan ShutdownDeadline = TimeSpan.FromSeconds(15);
+
+    /// <summary>Источник записи в журнале: гашение упало, не дойдя до потолка.</summary>
+    internal const string CrashSource = "WindowShutdownSequence";
+
+    /// <summary>Источник записи в журнале: брошенное по потолку гашение упало уже в фоне.</summary>
+    internal const string LateCrashSource = "WindowShutdownSequence.AfterDeadline";
 
     private readonly Func<Task> _shutdown;
     private readonly Action _hide;
     private readonly Action _close;
     private readonly TimeProvider _timeProvider;
+    private readonly ShutdownSignal _signal;
+    private readonly ICrashLog _log;
     private readonly TimeSpan _deadline;
 
     private bool _started;
@@ -50,12 +69,16 @@ internal sealed class WindowShutdownSequence
     /// <param name="hide">Убрать окно с экрана — вызывается один раз, на первой попытке.</param>
     /// <param name="close">Закрыть окно — вызывается один раз, когда гашение кончилось или вышло за потолок.</param>
     /// <param name="timeProvider">Источник времени для потолка.</param>
+    /// <param name="signal">Общий признак «гашение началось».</param>
+    /// <param name="log">Журнал сбоев: туда уходит упавшее гашение — ждать его больше некому.</param>
     internal WindowShutdownSequence(
         Func<Task> shutdown,
         Action hide,
         Action close,
-        TimeProvider timeProvider)
-        : this(shutdown, hide, close, timeProvider, ShutdownDeadline)
+        TimeProvider timeProvider,
+        ShutdownSignal signal,
+        ICrashLog log)
+        : this(shutdown, hide, close, timeProvider, signal, log, ShutdownDeadline)
     {
     }
 
@@ -63,23 +86,31 @@ internal sealed class WindowShutdownSequence
     /// <param name="hide">Убрать окно с экрана — вызывается один раз, на первой попытке.</param>
     /// <param name="close">Закрыть окно — вызывается один раз, когда гашение кончилось или вышло за потолок.</param>
     /// <param name="timeProvider">Источник времени для потолка.</param>
+    /// <param name="signal">Общий признак «гашение началось».</param>
+    /// <param name="log">Журнал сбоев: туда уходит упавшее гашение — ждать его больше некому.</param>
     /// <param name="deadline">Потолок, отличный от <see cref="ShutdownDeadline"/>. Нужен тестам.</param>
     internal WindowShutdownSequence(
         Func<Task> shutdown,
         Action hide,
         Action close,
         TimeProvider timeProvider,
+        ShutdownSignal signal,
+        ICrashLog log,
         TimeSpan deadline)
     {
         ArgumentNullException.ThrowIfNull(shutdown);
         ArgumentNullException.ThrowIfNull(hide);
         ArgumentNullException.ThrowIfNull(close);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(signal);
+        ArgumentNullException.ThrowIfNull(log);
 
         _shutdown = shutdown;
         _hide = hide;
         _close = close;
         _timeProvider = timeProvider;
+        _signal = signal;
+        _log = log;
         _deadline = deadline;
     }
 
@@ -110,6 +141,10 @@ internal sealed class WindowShutdownSequence
         {
             _started = true;
 
+            // Признак взводится до Hide: с этого момента показывать модальные окна об
+            // ошибке некому — включая сбой в самом Hide.
+            _signal.MarkStarted();
+
             // Окно уходит с экрана и с панели задач до того, как начнётся ожидание.
             // Оно остаётся открытым — спрятанное окно закрывается как обычное, и
             // ShutdownMode="OnMainWindowClose" сработает на его Close как всегда.
@@ -128,20 +163,33 @@ internal sealed class WindowShutdownSequence
         // на закрытие посреди закрытия отвечает исключением.
         await Task.Yield();
 
-        var shutdown = _shutdown();
-
         try
         {
-            // ConfigureAwait здесь не ставится намеренно: Hide и Close принадлежат потоку
-            // интерфейса, и продолжение обязано вернуться туда же, откуда пришла попытка.
-            await shutdown.WaitAsync(_deadline, _timeProvider);
+            // Запуск гашения внутри try: синхронный бросок из делегата иначе унёс бы
+            // управление мимо finally и оставил бы окно спрятанным навсегда.
+            var shutdown = _shutdown();
+
+            try
+            {
+                // ConfigureAwait здесь не ставится намеренно: Hide и Close принадлежат потоку
+                // интерфейса, и продолжение обязано вернуться туда же, откуда пришла попытка.
+                await shutdown.WaitAsync(_deadline, _timeProvider);
+            }
+            catch (TimeoutException)
+            {
+                // Потолок исчерпан. WaitAsync не отменяет само гашение — оно продолжается в
+                // фоне и может упасть уже после того, как окна не станет, поэтому его исход
+                // наблюдается отдельно.
+                Observe(shutdown);
+            }
         }
-        catch (TimeoutException)
+        catch (Exception exception)
         {
-            // Потолок исчерпан. WaitAsync не отменяет само гашение — оно продолжается в
-            // фоне и может упасть уже после того, как окна не станет, поэтому его исход
-            // наблюдается отдельно.
-            Observe(shutdown);
+            // Сбой гашения, уложившегося в потолок. Выпускать его наружу некуда: Running —
+            // поле живого объекта, ждать которое некому, финализатора у держателя нет, и
+            // UnobservedTaskException не сработает. Без этой ветки сбой до потолка не
+            // попадал бы никуда, тогда как сбой после потолка журнал получает.
+            Record(CrashSource, exception);
         }
         finally
         {
@@ -153,12 +201,29 @@ internal sealed class WindowShutdownSequence
         }
     }
 
-    private static void Observe(Task task) =>
+    private void Observe(Task task) =>
         _ = task.ContinueWith(
-            static completed => Trace.TraceError(
-                "Claude Agents Shell: гашение не уложилось в потолок и завершилось ошибкой: {0}",
-                completed.Exception),
+            completed => Record(LateCrashSource, completed.Exception!),
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+
+    /// <summary>
+    /// Запись сбоя гашения в журнал. Оба исхода — сбой до потолка и сбой брошенного
+    /// гашения после него — идут сюда, чтобы у одного класса не было двух разных
+    /// представлений о том, куда девать собственную ошибку.
+    /// </summary>
+    private void Record(string source, Exception exception)
+    {
+        try
+        {
+            _log.Write(source, exception);
+        }
+        catch
+        {
+            // Порт обязан не бросать, но полагаться здесь на чужую дисциплину нельзя:
+            // исключение отсюда снова оставило бы задачу гашения в Faulted — ровно то
+            // состояние, от которого запись и заводилась.
+        }
+    }
 }
