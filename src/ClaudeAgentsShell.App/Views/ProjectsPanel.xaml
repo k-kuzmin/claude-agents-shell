@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:ClaudeAgentsShell.App.ViewModels"
+             xmlns:domain="clr-namespace:ClaudeAgentsShell.Domain;assembly=ClaudeAgentsShell.Domain"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
@@ -195,7 +196,13 @@
                                             VerticalAlignment="Center"
                                             Margin="0,0,8,0"
                                             Style="{StaticResource RowRestingStyle}">
-                                    <Ellipse Width="6" Height="6"
+                                    <!-- Точка состояния проекта: самое важное из состояний его вкладок
+                                         (MarkerState). Кисти те же, что у точек вкладок в TabStrip.xaml, —
+                                         два маркера одного состояния не должны различаться по цвету.
+                                         Состояние по умолчанию, TabState.Unknown, стоит здесь заливкой,
+                                         поэтому отдельного триггера у него нет. -->
+                                    <Ellipse x:Name="StateDot"
+                                             Width="6" Height="6"
                                              Margin="0,0,6,0"
                                              VerticalAlignment="Center"
                                              Fill="{StaticResource UnknownStateBrush}"
@@ -257,6 +264,18 @@
                                 <Setter TargetName="ProjectName" Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
                             </DataTrigger>
                             <!-- Каталог исчез: строка недоступна, запуск заблокирован (раздел 8 ТЗ). -->
+                            <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.Idle}">
+                                <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource DisabledTextBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.Busy}">
+                                <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource CalmBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.AwaitingInput}">
+                                <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource AccentBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.BackgroundWork}">
+                                <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource BackgroundWorkBrush}" />
+                            </DataTrigger>
                             <DataTrigger Binding="{Binding IsAvailable}" Value="False">
                                 <Setter TargetName="RowRoot" Property="Opacity" Value="0.45" />
                                 <Setter TargetName="RowRoot" Property="ToolTip" Value="Каталог проекта недоступен" />

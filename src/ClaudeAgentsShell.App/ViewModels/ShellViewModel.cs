@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.Services;
@@ -216,7 +216,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // Список строк перечитан: полоса вкладок не должна остаться на проекте,
         // строки которого в новом списке может уже не быть.
         SelectProject(null);
-        RefreshSessionCounts();
+        RefreshProjectRows();
     }
 
     /// <summary>Добавляет проект: выбор папки, затем диалог настроек (раздел 6.5 ТЗ).</summary>
@@ -228,7 +228,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             // Сразу после добавления «+» в полосе вкладок должен работать, а полоса —
             // показывать вкладки нового проекта, то есть быть пустой.
             SelectProject(row);
-            RefreshSessionCounts();
+            RefreshProjectRows();
         }
     }
 
@@ -281,7 +281,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // Открытую вкладку страница показывает сама внутри OpenAsync — второй показ
         // был бы лишним разговором с мостом. Здесь остаётся только состояние ViewModel.
         Tabs.SetActive(tab);
-        RefreshSessionCounts();
+        RefreshProjectRows();
         return tab;
     }
 
@@ -417,7 +417,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 SelectProject(null);
             }
 
-            RefreshSessionCounts();
+            RefreshProjectRows();
         }
 
         return true;
@@ -506,7 +506,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         await _workspace.CloseAsync(tab.TerminalId, cancellationToken).ConfigureAwait(true);
 
         var next = Tabs.Remove(tab);
-        RefreshSessionCounts();
+        RefreshProjectRows();
 
         if (next is null)
         {
@@ -672,16 +672,30 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         }
     }
 
-    private void RefreshSessionCounts()
+    // Зовётся там, где изменился состав вкладок: и счётчик, и точка состояния строки
+    // считаются по этому составу.
+    private void RefreshProjectRows()
     {
         // Единственный источник счётчика — список вкладок. Отдельный счётчик на строке
         // разъезжается с реальностью, потому что вкладка закрывается тремя путями.
         foreach (var row in Projects.Rows)
         {
             row.SessionCount = Tabs.CountFor(row.Id);
+            row.MarkerState = Tabs.MarkerStateFor(row.Id);
         }
 
         RefreshCurrentProject();
+    }
+
+    // Отдельно от счётчиков: состояние меняют хуки, и на каждое их событие поднимать
+    // ещё и свойства выбранного проекта (RefreshCurrentProject) значило бы дёргать окно
+    // там, где поменялся цвет одной точки.
+    private void RefreshMarkerStates()
+    {
+        foreach (var row in Projects.Rows)
+        {
+            row.MarkerState = Tabs.MarkerStateFor(row.Id);
+        }
     }
 
     /// <summary>
@@ -742,6 +756,14 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         if (e.PropertyName is nameof(TabStripViewModel.HasAwaitingInput))
         {
             CommandManager.InvalidateRequerySuggested();
+        }
+
+        // Хук поменял состояние уже открытой вкладки: состав вкладок тот же, счётчики
+        // на строках не поедут, а точка проекта обязана перекраситься. Подписка на вкладки
+        // остаётся в полосе — сюда приходит только признак «маркеры устарели».
+        if (e.PropertyName is nameof(TabStripViewModel.StateRevision))
+        {
+            RefreshMarkerStates();
         }
     }
 
