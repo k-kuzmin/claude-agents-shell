@@ -7,3 +7,6 @@ artifacts/
 TestResults/
 node_modules/
 web/vendor/
+
+# рабочие каталоги сабагентов
+.claude/worktrees/
