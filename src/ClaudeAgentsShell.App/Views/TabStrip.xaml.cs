@@ -1,8 +1,9 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Media3D;
 using ClaudeAgentsShell.App.ViewModels;
 
 namespace ClaudeAgentsShell.App.Views;
@@ -38,7 +39,7 @@ public partial class TabStrip : UserControl
     // Перетаскивать можно только за саму вкладку: нажатие на крестик или на «+» — это кнопка.
     // Ищем вкладку вверх по дереву от того, куда попал указатель, и отказываемся, если по
     // дороге встретилась кнопка: её содержимое наследует ту же вкладку в DataContext.
-    private static TabViewModel? DraggableTabAt(DependencyObject? source)
+    internal static TabViewModel? DraggableTabAt(DependencyObject? source)
     {
         TabViewModel? tab = null;
 
@@ -49,7 +50,7 @@ public partial class TabStrip : UserControl
                 return null;
             }
 
-            if (tab is null && source is FrameworkElement { DataContext: TabViewModel candidate })
+            if (tab is null && TabOf(source) is { } candidate)
             {
                 tab = candidate;
             }
@@ -59,11 +60,45 @@ public partial class TabStrip : UserControl
                 break;
             }
 
-            source = VisualTreeHelper.GetParent(source);
+            // Шаг наверх делается только через ParentOf: он единственный знает, каким
+            // деревом идти, и рано или поздно возвращает null — обход конечен.
+            source = ParentOf(source);
         }
 
         return tab;
     }
+
+    /// <summary>
+    /// Шаг вверх по дереву, переживающий любой <see cref="DependencyObject" />. Полоса
+    /// перехватывает нажатие на своём корне, поэтому сюда приходит что угодно из окна —
+    /// в том числе <see cref="System.Windows.Documents.Run" /> из счётчика «N ждёт ввода».
+    /// <see cref="ContentElement" /> не является <see cref="Visual" />, и
+    /// <see cref="VisualTreeHelper.GetParent" /> на нём бросает исключение прямо из
+    /// обработчика события мыши — ловить его уже некому, процесс умирает.
+    /// </summary>
+    /// <param name="source">Узел, от которого делается шаг.</param>
+    /// <returns>Родитель или <see langword="null" />, если дерево кончилось.</returns>
+    internal static DependencyObject? ParentOf(DependencyObject source) => source switch
+    {
+        Visual or Visual3D => VisualTreeHelper.GetParent(source),
+
+        // Для inline-текста визуального родителя нет. ContentOperations знает про хозяина
+        // содержимого, а для Run внутри TextBlock отвечает логическое дерево: оно и выводит
+        // обход на сам TextBlock, откуда дальше идёт обычное визуальное дерево.
+        ContentElement content => ContentOperations.GetParent(content) ?? LogicalTreeHelper.GetParent(content),
+
+        _ => LogicalTreeHelper.GetParent(source),
+    };
+
+    // Вкладку несут и FrameworkElement, и FrameworkContentElement: общего предка с
+    // DataContext у них нет, поэтому разбор по двум веткам. Inline-текста внутри вкладок
+    // сегодня нет, но появившийся в шаблоне <Run> иначе тихо сломал бы перетаскивание.
+    private static TabViewModel? TabOf(DependencyObject source) => source switch
+    {
+        FrameworkElement element => element.DataContext as TabViewModel,
+        FrameworkContentElement element => element.DataContext as TabViewModel,
+        _ => null,
+    };
 
     private void OnTabPressed(object sender, MouseButtonEventArgs e)
     {
