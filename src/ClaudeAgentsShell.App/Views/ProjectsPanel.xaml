@@ -263,7 +263,10 @@
                                 <Setter TargetName="RowRoot" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
                                 <Setter TargetName="ProjectName" Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
                             </DataTrigger>
-                            <!-- Каталог исчез: строка недоступна, запуск заблокирован (раздел 8 ТЗ). -->
+                            <!-- Точка состояния проекта: свод по его вкладкам (раздел 6.2 ТЗ).
+                                 Кисти те же, что у точек вкладок в TabStrip.xaml, — один и тот же
+                                 TabState обязан выглядеть одинаково в обоих местах.
+                                 Unknown отдельного триггера не имеет: это заливка по умолчанию. -->
                             <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.Idle}">
                                 <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource DisabledTextBrush}" />
                             </DataTrigger>
@@ -276,6 +279,7 @@
                             <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.BackgroundWork}">
                                 <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource BackgroundWorkBrush}" />
                             </DataTrigger>
+                            <!-- Каталог исчез: строка недоступна, запуск заблокирован (раздел 8 ТЗ). -->
                             <DataTrigger Binding="{Binding IsAvailable}" Value="False">
                                 <Setter TargetName="RowRoot" Property="Opacity" Value="0.45" />
                                 <Setter TargetName="RowRoot" Property="ToolTip" Value="Каталог проекта недоступен" />
