@@ -1463,4 +1463,85 @@ public sealed class ShellViewModelTests
         Assert.Same(alive, Assert.Single(harness.Shell.Tabs.Tabs));
         Assert.Equal(1, harness.Row(0).SessionCount);
     }
+
+    [Fact]
+    public async Task A_row_without_tabs_keeps_its_marker_unknown()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+
+        Assert.Equal(TabState.Unknown, harness.Row(0).MarkerState);
+    }
+
+    [Fact]
+    public async Task Row_marker_repaints_when_a_hook_changes_the_state_of_an_open_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var tab = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+
+        var changed = new List<string?>();
+        ((INotifyPropertyChanged)row).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        // Состав вкладок не меняется — меняется только состояние. Точка на строке обязана
+        // перекраситься без переоткрытия вкладок, иначе она застынет на значении,
+        // вычисленном при открытии сессии.
+        tab!.State = TabState.Busy;
+
+        Assert.Equal(TabState.Busy, row.MarkerState);
+        Assert.Contains(nameof(ProjectRowViewModel.MarkerState), changed);
+
+        tab.State = TabState.AwaitingInput;
+
+        Assert.Equal(TabState.AwaitingInput, row.MarkerState);
+    }
+
+    [Fact]
+    public async Task Row_marker_of_a_project_that_is_not_shown_repaints_too()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var beta = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+        await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        beta!.State = TabState.AwaitingInput;
+
+        // На экране вкладки alpha, но точка beta должна загореться: ради этого маркер
+        // и нужен — увидеть проект, до которого ещё не дошли.
+        Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+        Assert.Equal(TabState.AwaitingInput, harness.Row(1).MarkerState);
+        Assert.Equal(TabState.Unknown, harness.Row(0).MarkerState);
+    }
+
+    [Fact]
+    public async Task Row_marker_sums_up_the_tabs_of_the_project()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var idle = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+        var busy = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+
+        idle!.State = TabState.Idle;
+        busy!.State = TabState.Busy;
+
+        Assert.Equal(TabState.Busy, row.MarkerState);
+
+        busy.State = TabState.AwaitingInput;
+
+        Assert.Equal(TabState.AwaitingInput, row.MarkerState);
+    }
+
+    [Fact]
+    public async Task Closing_the_last_tab_of_a_project_returns_the_marker_to_unknown()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var tab = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+        tab!.State = TabState.AwaitingInput;
+        Assert.Equal(TabState.AwaitingInput, row.MarkerState);
+
+        await harness.Shell.CloseTabAsync(tab, CancellationToken.None);
+
+        // Вкладок не осталось — светиться нечему, и точка в разметке всё равно скрыта.
+        Assert.Equal(TabState.Unknown, row.MarkerState);
+        Assert.False(row.HasSessions);
+    }
 }

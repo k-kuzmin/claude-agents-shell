@@ -33,6 +33,7 @@ public sealed class TabStripViewModel : ObservableObject
     private Guid? _projectId;
     private TabViewModel? _activeTab;
     private int _awaitingInputCount;
+    private int _stateRevision;
 
     /// <inheritdoc cref="TabStripViewModel" />
     public TabStripViewModel() => Tabs = new ReadOnlyObservableCollection<TabViewModel>(_visible);
@@ -85,6 +86,23 @@ public sealed class TabStripViewModel : ObservableObject
 
     /// <summary>Счётчик показывается только когда есть кого считать.</summary>
     public bool HasAwaitingInput => AwaitingInputCount > 0;
+
+    /// <summary>
+    /// Растёт на единицу каждый раз, когда у любой открытой вкладки поменялось состояние.
+    /// Само число ничего не значит и на экране не показывается: это способ сказать наружу
+    /// «маркеры устарели», не подписывая слушателя на каждую вкладку по отдельности —
+    /// учёт подписок на вкладки живёт здесь и больше нигде.
+    /// <para>
+    /// Нужен строкам проектов: их точка состояния считается по вкладкам
+    /// (<see cref="MarkerStateFor" />), а состав вкладок при смене состояния не меняется,
+    /// и обычных уведомлений полосы для перекраски не хватает.
+    /// </para>
+    /// </summary>
+    public int StateRevision
+    {
+        get => _stateRevision;
+        private set => SetProperty(ref _stateRevision, value);
+    }
 
     /// <summary>
     /// Переключает полосу на вкладки проекта. <c>null</c> — проект не выбран, полоса пуста.
@@ -198,6 +216,39 @@ public sealed class TabStripViewModel : ObservableObject
     public int CountFor(Guid projectId) => _all.Count(tab => tab.ProjectId == projectId);
 
     /// <summary>
+    /// Состояние проекта одной точкой: самое важное среди состояний **всех** его вкладок,
+    /// а не только показанных в полосе. У проекта без вкладок — <see cref="TabState.Unknown" />.
+    /// <para>
+    /// Приоритет сверху вниз: <see cref="TabState.AwaitingInput" />, <see cref="TabState.Busy" />,
+    /// <see cref="TabState.BackgroundWork" />, <see cref="TabState.Idle" />,
+    /// <see cref="TabState.Unknown" />. Смысл: «меня ждут» важнее «идёт работа», а любая
+    /// известная работа важнее простоя.
+    /// </para>
+    /// </summary>
+    public TabState MarkerStateFor(Guid projectId)
+    {
+        var best = TabState.Unknown;
+        var bestRank = 0;
+
+        foreach (var tab in _all)
+        {
+            if (tab.ProjectId != projectId)
+            {
+                continue;
+            }
+
+            var rank = MarkerRank(tab.State);
+            if (rank > bestRank)
+            {
+                best = tab.State;
+                bestRank = rank;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
     /// Активная вкладка проекта: последняя, на которой пользователь был, иначе самая левая в полосе.
     /// <c>null</c>, если у проекта нет вкладок.
     /// </summary>
@@ -278,6 +329,18 @@ public sealed class TabStripViewModel : ObservableObject
     /// <summary>Предыдущая вкладка полосы по кругу; <c>null</c>, если полоса пуста.</summary>
     public TabViewModel? Previous() => Shift(-1);
 
+    // Вес состояния для точки проекта. Порядок намеренно не совпадает с числовым порядком
+    // TabState: BackgroundWork объявлен последним, но по важности стоит ниже Busy, а выше
+    // всех — AwaitingInput. Поэтому сравнить состояния напрямую (Max) нельзя.
+    private static int MarkerRank(TabState state) => state switch
+    {
+        TabState.AwaitingInput => 4,
+        TabState.Busy => 3,
+        TabState.BackgroundWork => 2,
+        TabState.Idle => 1,
+        _ => 0,
+    };
+
     private bool IsVisible(TabViewModel tab) => _projectId is { } id && tab.ProjectId == id;
 
     private void Rebuild()
@@ -340,6 +403,11 @@ public sealed class TabStripViewModel : ObservableObject
         if (e.PropertyName is nameof(TabViewModel.State))
         {
             RecalculateAwaitingInput();
+
+            // Состав вкладок не изменился, а точки на строках проектов устарели: считаются
+            // они по состояниям вкладок. Уведомление наружу идёт отсюда, чтобы слушателю
+            // не подписываться на каждую вкладку самому.
+            StateRevision++;
         }
     }
 
