@@ -52,6 +52,9 @@ internal static class AppComposition
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
         services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
         services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
+
+        // Глобальные обработчики исключений; ICrashLog регистрирует слой Sessions.
+        services.AddSingleton<CrashReporter>();
         // IDirectoryProbe регистрирует слой Sessions: Directory.* — файловая система,
         // а не WPF-специфика, и сборке оболочки не место её трогать.
 

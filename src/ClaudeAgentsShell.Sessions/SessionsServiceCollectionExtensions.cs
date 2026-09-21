@@ -14,7 +14,8 @@ public static class SessionsServiceCollectionExtensions
 {
     /// <summary>
     /// Регистрирует пути приложения, хранилище проектов, проверку каталогов и файлов,
-    /// чтение и слежение за веткой, сборку команд запуска, приёмник хуков, открытие ссылок,
+    /// журнал сбоев, чтение и слежение за веткой, сборку команд запуска, приёмник хуков,
+    /// открытие ссылок,
     /// генератор настроек с хуками, чтение истории сессий и запуск проводника.
     /// </summary>
     public static IServiceCollection AddSessionsLayer(this IServiceCollection services)
@@ -29,6 +30,7 @@ public static class SessionsServiceCollectionExtensions
         services.TryAddSingleton<IDirectoryProbe, DirectoryProbe>();
         services.TryAddSingleton<IFileProbe, FileProbe>();
         services.TryAddSingleton<IShellLauncher, ShellLauncher>();
+        services.TryAddSingleton<ICrashLog, CrashLog>();
         services.TryAddSingleton<IUrlLauncher, UrlLauncher>();
 
         services.TryAddSingleton<IGitBranchReader, GitBranchReader>();
