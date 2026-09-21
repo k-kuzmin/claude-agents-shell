@@ -287,14 +287,15 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
     /// Источник правды один — C#; дублировать значения константами в app.js нельзя.
     /// Это не сообщение моста: протокол раздела 3.2 ТЗ не расширяется.
     /// </summary>
-    private static string BuildConfigScript(TerminalOptions options)
+    internal static string BuildConfigScript(TerminalOptions options)
     {
         int scrollback = options.Scrollback;
+        int exitedScrollback = options.ExitedScrollback;
         int resizeDebounce = (int)options.ResizeDebounce.TotalMilliseconds;
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"window.__terminalConfig = {{ scrollback: {scrollback}, resizeDebounceMs: {resizeDebounce} }};");
+            $"window.__terminalConfig = {{ scrollback: {scrollback}, exitedScrollback: {exitedScrollback}, resizeDebounceMs: {resizeDebounce} }};");
     }
 
     private static string ResolveUserDataFolder()
