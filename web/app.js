@@ -18,6 +18,7 @@
   var config = window.__terminalConfig || {};
   var RESIZE_DEBOUNCE_MS = config.resizeDebounceMs;
   var SCROLLBACK = config.scrollback;
+  var EXITED_SCROLLBACK = config.exitedScrollback;
 
   var THEME = {
     background: '#0E0E0D',
@@ -530,10 +531,39 @@
     });
   }
 
+  // Урезает историю мёртвой вкладки до EXITED_SCROLLBACK строк.
+  //
+  // Присваивание options.scrollback в xterm 5.5 не просто меняет настройку на будущее:
+  // BufferSet подписан на onSpecificOptionChange('scrollback') и зовёт resize обоим
+  // буферам — и основному, и альтернативному, — а Buffer.resize при уменьшении делает
+  // lines.trimStart(лишние) и переустанавливает lines.maxLength, то есть перевыделяет
+  // массив меньшего размера. Именно перевыделение и возвращает память; без него хватило
+  // бы и сдвига индексов. trimStart сдвигает ybase и ydisp на то же число строк, поэтому
+  // видимый экран не прыгает — код выхода и последние строки остаются на месте.
+  //
+  // Math.min обязателен, а не подстраховка: нулевой scrollback — легальная настройка
+  // (см. начало файла), и addon-fit читает options.scrollback на каждом proposeDimensions,
+  // обнуляя при нуле scrollBarWidth. Подняв мёртвой вкладке scrollback с нуля до 500,
+  // мы дали бы ей cols, отличные от всех живых, и сломали бы инвариант общего размера
+  // (см. комментарий у term.open в createTerminal).
+  //
+  // Идемпотентно: значение константное, а сеттер xterm при совпадении со старым не шлёт
+  // события вовсе, и Buffer.resize всё равно режет только когда новая длина меньше текущей.
+  function trimDeadScrollback(entry) {
+    entry.term.options.scrollback = Math.min(EXITED_SCROLLBACK, SCROLLBACK);
+  }
+
   function notifyExited(id, code) {
     var entry = terminals.get(id);
     if (entry) {
       entry.term.write('\r\n[33m[процесс завершился с кодом ' + code + '][0m\r\n');
+
+      // Урезание идёт до releaseRenderer намеренно. Пока аддон WebGL на месте, правка
+      // буфера ложится на уже живой и дешёвый рендерер; dispose аддона сразу за ней
+      // строит DOM-рендерер ровно один раз и сразу по конечному, урезанному буферу.
+      // В обратном порядке DOM-рендерер сначала собрался бы по полному буферу, а потом
+      // перерисовался бы от урезания.
+      trimDeadScrollback(entry);
 
       // Вкладка остаётся на странице с кодом выхода (раздел 8 ТЗ), но вывода в ней больше
       // не будет — ускорение рендера ей ни к чему. Буфер остаётся виден: xterm переходит
@@ -586,7 +616,9 @@
   // Настройки обязаны прийти из C# скриптом, выполняемым до создания документа.
   // Если их нет, это ошибка сборки моста: работать на неизвестном дебаунсе нельзя,
   // но и молчать нельзя — пишем причину прямо в страницу, DevTools отключены.
-  if (typeof SCROLLBACK !== 'number' || typeof RESIZE_DEBOUNCE_MS !== 'number') {
+  if (typeof SCROLLBACK !== 'number'
+    || typeof EXITED_SCROLLBACK !== 'number'
+    || typeof RESIZE_DEBOUNCE_MS !== 'number') {
     showFatal('Настройки терминала не получены: window.__terminalConfig не задан. '
       + 'Страница открыта мимо моста приложения.');
     return;
