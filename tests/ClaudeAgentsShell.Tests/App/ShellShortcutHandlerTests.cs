@@ -34,7 +34,7 @@ public sealed class ShellShortcutHandlerTests
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             var layouts = new FakeLayoutStore();
             Shell = new ShellViewModel(
-                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts, layouts.CreateRecorder(),
+                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts.CreateService(),
                 Diff.Coordinator, Diff.Tracker);
             Handler = new ShellShortcutHandler(Shell, Prompt);
         }
