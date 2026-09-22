@@ -19,11 +19,18 @@ public sealed class SessionCommandBuilder : ISessionCommandBuilder
     /// <summary>Аргумент, которым сессии передаётся сгенерированный файл настроек с хуками.</summary>
     private const string SettingsOption = "--settings";
 
+    /// <summary>
+    /// Аргумент, которым сессии передаётся файл с MCP-сервером приложения. Он добавляет серверы
+    /// к серверам пользователя, а не заменяет их: <c>--strict-mcp-config</c> не передаётся.
+    /// </summary>
+    private const string McpConfigOption = "--mcp-config";
+
     /// <inheritdoc />
-    public IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch, string? hookSettingsPath)
+    public IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch, SessionIntegration integration)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(launch);
+        ArgumentNullException.ThrowIfNull(integration);
 
         var lines = new List<string>(2);
 
@@ -32,20 +39,17 @@ public sealed class SessionCommandBuilder : ISessionCommandBuilder
             lines.Add(project.PreLaunch.Trim() + LineTerminator);
         }
 
-        lines.Add(BuildLaunchCommand(project, launch, hookSettingsPath) + LineTerminator);
+        lines.Add(BuildLaunchCommand(project, launch, integration) + LineTerminator);
         return lines;
     }
 
-    private static string BuildLaunchCommand(ProjectDefinition project, SessionLaunch launch, string? hookSettingsPath)
+    private static string BuildLaunchCommand(ProjectDefinition project, SessionLaunch launch, SessionIntegration integration)
     {
-        var parts = new List<string>(4) { ClaudeExecutable };
+        var parts = new List<string>(6) { ClaudeExecutable };
 
-        // Пустого --settings не бывает: путь либо есть, либо сессия запускается без хуков.
-        if (!string.IsNullOrWhiteSpace(hookSettingsPath))
-        {
-            parts.Add(SettingsOption);
-            parts.Add(PowerShellArgument.Quote(hookSettingsPath));
-        }
+        // Пустого флага не бывает: путь либо есть, либо сессия запускается без этой интеграции.
+        AppendFileOption(parts, SettingsOption, integration.HookSettingsPath);
+        AppendFileOption(parts, McpConfigOption, integration.McpConfigPath);
 
         // Иерархия SessionLaunch закрыта приватным конструктором: новых вариантов извне не бывает,
         // поэтому разбор по образцу здесь не мешает расширению.
@@ -66,6 +70,15 @@ public sealed class SessionCommandBuilder : ISessionCommandBuilder
         }
 
         return string.Join(' ', parts);
+    }
+
+    private static void AppendFileOption(List<string> parts, string option, string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            parts.Add(option);
+            parts.Add(PowerShellArgument.Quote(path));
+        }
     }
 
     private static void AppendExtraArgs(ProjectDefinition project, List<string> parts)

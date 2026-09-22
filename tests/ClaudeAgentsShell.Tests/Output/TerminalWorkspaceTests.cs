@@ -448,6 +448,7 @@ public sealed class TerminalWorkspaceTests
             new FakeSessionCommandBuilder(),
             new FakeHookSettingsProvider(),
             new FakeHookListener(),
+            new FakeMcpConfigProvider(),
             TestOptions,
             TimeProvider.System);
 
@@ -486,6 +487,7 @@ public sealed class TerminalWorkspaceTests
             new FakeSessionCommandBuilder(),
             hooks,
             new FakeHookListener(),
+            new FakeMcpConfigProvider(),
             TestOptions,
             TimeProvider.System);
 
@@ -529,6 +531,7 @@ public sealed class TerminalWorkspaceTests
             new FakeSessionCommandBuilder(),
             hooks,
             new FakeHookListener(),
+            new FakeMcpConfigProvider(),
             TestOptions,
             TimeProvider.System);
 
@@ -563,6 +566,7 @@ public sealed class TerminalWorkspaceTests
             commands,
             hooks,
             new FakeHookListener(),
+            new FakeMcpConfigProvider(),
             TestOptions,
             TimeProvider.System);
 
@@ -609,12 +613,113 @@ public sealed class TerminalWorkspaceTests
             commands,
             new FakeHookSettingsProvider(Path),
             new FakeHookListener(),
+            new FakeMcpConfigProvider(),
             TestOptions,
             TimeProvider.System);
 
         await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
 
         Assert.Equal([Path], commands.HookSettingsPaths);
+    }
+
+    /// <summary>
+    /// Issue #5: конфиг MCP готовится под адрес маршрута /mcp того же приёмника и уезжает
+    /// в команду рядом с настройками хуков — один раз на все вкладки.
+    /// </summary>
+    [Fact]
+    public async Task Конфиг_MCP_готовится_один_раз_и_уезжает_в_команду()
+    {
+        var factory = new FakePtySessionFactory();
+        var bridge = new FakeTerminalBridge();
+        var commands = new FakeSessionCommandBuilder();
+        var mcp = new FakeMcpConfigProvider(@"C:\data\mcp.json");
+        await using var workspace = new TerminalWorkspace(
+            bridge,
+            factory,
+            new FakeShellResolver(),
+            commands,
+            new FakeHookSettingsProvider(@"C:\data\hooks.json"),
+            new FakeHookListener(),
+            mcp,
+            TestOptions,
+            TimeProvider.System);
+
+        await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+        await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+
+        Assert.Equal([@"C:\data\hooks.json", @"C:\data\hooks.json"], commands.HookSettingsPaths);
+        Assert.Equal([@"C:\data\mcp.json", @"C:\data\mcp.json"], commands.McpConfigPaths);
+        Assert.Equal(1, mcp.Calls);
+        Assert.Equal(new Uri("http://127.0.0.1:51789/mcp"), mcp.Endpoint);
+    }
+
+    /// <summary>
+    /// Половины интеграции деградируют независимо: MCP не встал — хуки всё равно подключаются,
+    /// и наоборот. Иначе сбой второстепенного инструмента стоил бы вкладке маркера состояния.
+    /// </summary>
+    [Fact]
+    public async Task Сбой_конфига_MCP_не_отнимает_хуки()
+    {
+        var commands = new FakeSessionCommandBuilder();
+        await using var workspace = new TerminalWorkspace(
+            new FakeTerminalBridge(),
+            new FakePtySessionFactory(),
+            new FakeShellResolver(),
+            commands,
+            new FakeHookSettingsProvider(@"C:\data\hooks.json"),
+            new FakeHookListener(),
+            new FakeMcpConfigProvider(failure: new IOException("каталог данных недоступен")),
+            TestOptions,
+            TimeProvider.System);
+
+        await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+
+        Assert.Equal([@"C:\data\hooks.json"], commands.HookSettingsPaths);
+        Assert.Equal([null], commands.McpConfigPaths);
+    }
+
+    [Fact]
+    public async Task Без_MCP_маршрута_флаг_не_передаётся_а_хуки_остаются()
+    {
+        var commands = new FakeSessionCommandBuilder();
+        var mcp = new FakeMcpConfigProvider();
+        await using var workspace = new TerminalWorkspace(
+            new FakeTerminalBridge(),
+            new FakePtySessionFactory(),
+            new FakeShellResolver(),
+            commands,
+            new FakeHookSettingsProvider(@"C:\data\hooks.json"),
+            new FakeHookListener { WithoutMcp = true },
+            mcp,
+            TestOptions,
+            TimeProvider.System);
+
+        await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+
+        Assert.Equal([@"C:\data\hooks.json"], commands.HookSettingsPaths);
+        Assert.Equal([null], commands.McpConfigPaths);
+        Assert.Equal(0, mcp.Calls);
+    }
+
+    [Fact]
+    public async Task Сбой_настроек_хуков_не_отнимает_MCP()
+    {
+        var commands = new FakeSessionCommandBuilder();
+        await using var workspace = new TerminalWorkspace(
+            new FakeTerminalBridge(),
+            new FakePtySessionFactory(),
+            new FakeShellResolver(),
+            commands,
+            new FakeHookSettingsProvider(failure: new IOException("каталог данных недоступен")),
+            new FakeHookListener(),
+            new FakeMcpConfigProvider(@"C:\data\mcp.json"),
+            TestOptions,
+            TimeProvider.System);
+
+        await workspace.OpenAsync(Project(), Launch, CancellationToken.None);
+
+        Assert.Equal([null], commands.HookSettingsPaths);
+        Assert.Equal([@"C:\data\mcp.json"], commands.McpConfigPaths);
     }
 
     /// <summary>
@@ -634,6 +739,7 @@ public sealed class TerminalWorkspaceTests
             new FakeSessionCommandBuilder(),
             new FakeHookSettingsProvider(),
             new FakeHookListener(),
+            new FakeMcpConfigProvider(),
             TestOptions,
             TimeProvider.System);
 
@@ -702,6 +808,7 @@ public sealed class TerminalWorkspaceTests
             new FakeSessionCommandBuilder(),
             new FakeHookSettingsProvider(),
             new FakeHookListener(),
+            new FakeMcpConfigProvider(),
             TestOptions,
             TimeProvider.System);
 
@@ -733,6 +840,7 @@ public sealed class TerminalWorkspaceTests
             new FakeSessionCommandBuilder(startupInput),
             new FakeHookSettingsProvider(),
             new FakeHookListener(),
+            new FakeMcpConfigProvider(),
             TestOptions,
             TimeProvider.System);
 
@@ -781,14 +889,17 @@ public sealed class TerminalWorkspaceTests
 /// </summary>
 internal sealed class FakeSessionCommandBuilder(params string[] lines) : ISessionCommandBuilder
 {
-    private readonly List<string?> _hookSettingsPaths = [];
+    private readonly List<SessionIntegration> _integrations = [];
 
     /// <summary>Пути к файлу настроек, с которыми собирали команду, — по одному на запуск.</summary>
-    public IReadOnlyList<string?> HookSettingsPaths => _hookSettingsPaths;
+    public IReadOnlyList<string?> HookSettingsPaths => [.. _integrations.Select(static i => i.HookSettingsPath)];
 
-    public IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch, string? hookSettingsPath)
+    /// <summary>Пути к конфигу MCP, с которыми собирали команду, — по одному на запуск.</summary>
+    public IReadOnlyList<string?> McpConfigPaths => [.. _integrations.Select(static i => i.McpConfigPath)];
+
+    public IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch, SessionIntegration integration)
     {
-        _hookSettingsPaths.Add(hookSettingsPath);
+        _integrations.Add(integration);
         return lines;
     }
 }
@@ -842,10 +953,40 @@ internal sealed class FakeHookSettingsProvider(string? path = @"C:\data\hooks.js
     }
 }
 
+/// <summary>
+/// Поставщик конфига MCP — заглушка: отдаёт заранее заданный путь либо не создаёт файл вовсе.
+/// </summary>
+internal sealed class FakeMcpConfigProvider(string? path = @"C:\data\mcp.json", Exception? failure = null)
+    : IMcpConfigProvider
+{
+    /// <summary>Сколько раз просили файл.</summary>
+    public int Calls { get; private set; }
+
+    /// <summary>Адрес, под который просили файл.</summary>
+    public Uri? Endpoint { get; private set; }
+
+    public Task<string> EnsureConfigFileAsync(Uri endpoint, CancellationToken cancellationToken)
+    {
+        Calls++;
+        Endpoint = endpoint;
+
+        return failure is not null
+            ? Task.FromException<string>(failure)
+            : Task.FromResult(path!);
+    }
+}
+
 /// <summary>Приёмник хуков — заглушка: нужен только ради адреса.</summary>
 internal sealed class FakeHookListener : IHookListener
 {
     public Uri Endpoint { get; } = new("http://127.0.0.1:51789/hook");
+
+    /// <summary>MCP-маршрута нет — так выглядит приёмник, у которого его не зарегистрировали.</summary>
+    public bool WithoutMcp { get; init; }
+
+    public Uri McpEndpoint => WithoutMcp
+        ? throw new InvalidOperationException("MCP-маршрут не зарегистрирован.")
+        : new Uri("http://127.0.0.1:51789/mcp");
 
     /// <summary>Подписаться можно, событий не будет: слою терминала нужен только адрес.</summary>
     public event EventHandler<HookEventArgs>? HookReceived

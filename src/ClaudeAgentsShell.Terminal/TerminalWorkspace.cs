@@ -20,6 +20,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     private readonly ISessionCommandBuilder _commands;
     private readonly IHookSettingsProvider _hooks;
     private readonly IHookListener _hookListener;
+    private readonly IMcpConfigProvider _mcpConfig;
     private readonly TerminalOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, TerminalPump> _pumps = new(StringComparer.Ordinal);
@@ -43,7 +44,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     /// </summary>
     private const int StartFailureExitCode = -1;
 
-    private Task<string?>? _hookSettings;
+    private Task<SessionIntegration>? _integration;
     private int _disposed;
 
     /// <inheritdoc cref="TerminalWorkspace" />
@@ -54,6 +55,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         ISessionCommandBuilder commands,
         IHookSettingsProvider hooks,
         IHookListener hookListener,
+        IMcpConfigProvider mcpConfig,
         TerminalOptions options,
         TimeProvider timeProvider)
     {
@@ -63,6 +65,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(hooks);
         ArgumentNullException.ThrowIfNull(hookListener);
+        ArgumentNullException.ThrowIfNull(mcpConfig);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
@@ -72,6 +75,7 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         _commands = commands;
         _hooks = hooks;
         _hookListener = hookListener;
+        _mcpConfig = mcpConfig;
         _options = options;
         _timeProvider = timeProvider;
 
@@ -126,12 +130,13 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         // навсегда — без псевдоконсоли и без терминала на странице.
         var shell = _shells.Resolve(project.Shell);
 
-        // Файл настроек с хуками готовится до сборки команды: его путь уходит в команду
-        // запуска аргументом --settings (раздел 5.3 ТЗ). Не вышло — null, и построитель
-        // собирает команду без хуков: сессия работает, просто без маркера состояния.
-        string? hookSettings = await EnsureHookSettingsAsync().ConfigureAwait(false);
+        // Файлы интеграции готовятся до сборки команды: их пути уходят в команду запуска
+        // аргументами --settings и --mcp-config (раздел 5.3 ТЗ, issue #5). Какой не вышел —
+        // null, и построитель собирает команду без него: сессия работает, просто без маркера
+        // состояния или без инструмента show_diff.
+        var integration = await EnsureIntegrationAsync().ConfigureAwait(false);
 
-        var startupInput = _commands.Build(project, launch, hookSettings);
+        var startupInput = _commands.Build(project, launch, integration);
 
         var terminalId = TerminalId.New();
 
@@ -408,35 +413,48 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     /// <summary>
-    /// Готовит файл настроек с хуками. Файл один на приложение (см. <see cref="IHookSettingsProvider"/>),
-    /// поэтому создаётся один раз на всё время жизни набора вкладок: переписывать его при
-    /// открытии каждой вкладки значило бы менять файл под уже запущенными сессиями.
+    /// Готовит файлы интеграции: настройки хуков и конфиг MCP. Оба одни на приложение
+    /// (см. <see cref="IHookSettingsProvider"/> и <see cref="IMcpConfigProvider"/>), поэтому
+    /// создаются один раз на всё время жизни набора вкладок: переписывать их при открытии
+    /// каждой вкладки значило бы менять файлы под уже запущенными сессиями.
     /// </summary>
-    private Task<string?> EnsureHookSettingsAsync()
+    private Task<SessionIntegration> EnsureIntegrationAsync()
     {
         lock (_hookSync)
         {
-            return _hookSettings ??= CreateHookSettingsAsync();
+            return _integration ??= CreateIntegrationAsync();
         }
     }
 
-    private async Task<string?> CreateHookSettingsAsync()
+    private async Task<SessionIntegration> CreateIntegrationAsync()
+    {
+        // Половины деградируют независимо: хуки без MCP — вкладка с маркером, но без show_diff;
+        // MCP без хуков — инструмент есть, но спросит разрешения (правило лежит в настройках хуков).
+        var hookSettings = await TryCreateFileAsync(
+            () => _hooks.EnsureSettingsFileAsync(_hookListener.Endpoint, _cts.Token)).ConfigureAwait(false);
+        var mcpConfig = await TryCreateFileAsync(
+            () => _mcpConfig.EnsureConfigFileAsync(_hookListener.McpEndpoint, _cts.Token)).ConfigureAwait(false);
+
+        return new SessionIntegration(hookSettings, mcpConfig);
+    }
+
+    private static async Task<string?> TryCreateFileAsync(Func<Task<string>> create)
     {
         try
         {
-            return await _hooks.EnsureSettingsFileAsync(_hookListener.Endpoint, _cts.Token).ConfigureAwait(false);
+            return await create().ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException
                                               or UnauthorizedAccessException
                                               or InvalidOperationException
                                               or OperationCanceledException)
         {
-            // Раздел 5.3 ТЗ: хуки не встали — сессия запускается без --settings и живёт без
-            // маркера состояния. Это допустимая деградация, ошибку пользователю не показываем.
+            // Раздел 5.3 ТЗ: интеграция не встала — сессия запускается без этого флага.
+            // Это допустимая деградация, ошибку пользователю не показываем.
             // Повторных попыток нет намеренно: результат кэшируется, иначе каждая новая
             // вкладка снова упиралась бы в тот же недоступный каталог.
-            // InvalidOperationException ловится тоже: приёмник хуков мог не подняться,
-            // и тогда адреса для файла настроек попросту нет.
+            // InvalidOperationException ловится тоже: приёмник мог не подняться,
+            // и тогда адреса для файла попросту нет.
             return null;
         }
     }
