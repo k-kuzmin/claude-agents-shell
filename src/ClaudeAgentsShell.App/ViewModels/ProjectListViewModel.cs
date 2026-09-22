@@ -149,10 +149,7 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
             // Здесь, в отличие от проверки по выбранной папке, пользователь уже заполнил
             // имя, оболочку и аргументы: молча выбросить их — то же, что не отработавшая
             // кнопка. Называем проект, который занимает каталог, чтобы было куда смотреть.
-            _prompt.ShowError(
-                "Проект не добавлен",
-                $"Каталог «{twin.Path}» уже открыт проектом «{twin.Name}». "
-                + "Два проекта на один каталог развели бы счётчики сессий, поэтому второй не добавлен.");
+            _prompt.ShowError("Проект не добавлен", DuplicatePathMessage(twin, "второй не добавлен"));
             return twin;
         }
 
@@ -188,7 +185,8 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Показывает диалог настроек проекта (раздел 6.5 ТЗ) и, если пользователь согласился,
-    /// записывает список и обновляет строку. Отказ от диалога не меняет ничего.
+    /// записывает список и обновляет строку. Отказ от диалога не меняет ничего; путь,
+    /// уже занятый другой строкой, тоже не сохраняется — с сообщением, какой проект его занял.
     /// </summary>
     /// <returns><c>true</c>, если настройки сохранены.</returns>
     public async Task<bool> EditProjectAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
@@ -203,10 +201,23 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
             return false;
         }
 
+        var previousPath = row.Path;
+        var pathChanged = !ProjectNaming.SamePath(previousPath, edited.Path);
+
+        // Правило «один проект на один каталог» то же, что у добавления: иначе запрещённое
+        // одним путём разрешалось бы другим. Проверяется только переезд: у пользователей
+        // прежних версий уже могут лежать две строки на один каталог, и отказ по неизменному
+        // пути не дал бы им сменить даже имя. Саму строку при переезде поиск не найдёт —
+        // её путь другой.
+        if (pathChanged && FindByPath(edited.Path) is { } twin)
+        {
+            _prompt.ShowError("Настройки не сохранены", DuplicatePathMessage(twin, "настройки не сохранены"));
+            return false;
+        }
+
         // Идентификатор и место в списке принадлежат списку, а не диалогу: к идентификатору
         // привязаны открытые вкладки, а порядок строк диалог не видит вовсе.
         var updated = edited with { Id = row.Id, Order = row.Project.Order };
-        var previousPath = row.Path;
 
         // Сначала запись, потом строка на экране: сорвавшееся сохранение оставило бы
         // на экране настройки, которых нет в файле.
@@ -215,7 +226,7 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
 
         row.Update(updated);
 
-        if (!ProjectNaming.SamePath(previousPath, updated.Path))
+        if (pathChanged)
         {
             // Каталог переехал: прежнему наблюдателю следить не за чем, а ветку и доступность
             // нужно перечитать у нового каталога.
@@ -309,6 +320,13 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     // Строка того же каталога, если она уже есть в списке.
     private ProjectRowViewModel? FindByPath(string path) =>
         _rows.FirstOrDefault(existing => ProjectNaming.SamePath(existing.Path, path));
+
+    // Отказ по близнецу — одна формулировка причины для добавления и редактирования, чтобы
+    // тексты не разъехались; различается только исход. Называет проект, который занимает
+    // каталог: пользователю есть куда смотреть.
+    private static string DuplicatePathMessage(ProjectRowViewModel twin, string outcome) =>
+        $"Каталог «{twin.Path}» уже открыт проектом «{twin.Name}». "
+        + $"Два проекта на один каталог развели бы счётчики сессий, поэтому {outcome}.";
 
     private void Unwatch(string path)
     {

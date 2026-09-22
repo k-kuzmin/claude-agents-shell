@@ -12,6 +12,7 @@ namespace ClaudeAgentsShell.Tests.App;
 public sealed class ProjectListViewModelTests
 {
     private const string GammaPath = @"D:\src\gamma";
+    private const string DeltaPath = @"D:\src\delta";
 
     private readonly FakeProjectStore _store = new();
     private readonly FakeGitBranchReader _branchReader = new();
@@ -132,6 +133,8 @@ public sealed class ProjectListViewModelTests
         var message = Assert.Single(_prompt.Errors);
         Assert.Contains("alpha", message, StringComparison.Ordinal);
         Assert.Contains(GammaPath, message, StringComparison.Ordinal);
+        Assert.Contains("второй не добавлен", message, StringComparison.Ordinal);
+        Assert.Equal("Проект не добавлен", Assert.Single(_prompt.ErrorTitles));
     }
 
     [Fact]
@@ -182,6 +185,93 @@ public sealed class ProjectListViewModelTests
 
         Assert.Equal(ProjectSettingsPurpose.Edit, Assert.Single(_dialog.Purposes));
         Assert.Equal("Альфа", list.Rows[0].Name);
+    }
+
+    [Fact]
+    public async Task EditProject_PathChangedToAnotherRowsFolder_SavesNothing()
+    {
+        _store.Seed(
+            new ProjectDefinition(Guid.NewGuid(), "alpha", GammaPath, ShellKind.Pwsh, null, [], 0),
+            new ProjectDefinition(Guid.NewGuid(), "beta", DeltaPath, ShellKind.Pwsh, null, [], 1));
+        _probe.Add(GammaPath);
+        _probe.Add(DeltaPath);
+
+        var list = Create();
+        await list.LoadAsync(CancellationToken.None);
+        _dialog.Edit = project => project with { Name = "Альфа", Path = DeltaPath + @"\" };
+
+        Assert.False(await list.EditProjectAsync(list.Rows[0], CancellationToken.None));
+
+        Assert.Equal(0, _store.SaveCount);
+        Assert.Equal("alpha", list.Rows[0].Name);
+        Assert.Equal(GammaPath, list.Rows[0].Path);
+        Assert.Equal([GammaPath, DeltaPath], _watcher.Watched);
+
+        // Отказ называет проект, который занимает каталог, — как и при добавлении.
+        var message = Assert.Single(_prompt.Errors);
+        Assert.Contains("beta", message, StringComparison.Ordinal);
+        Assert.Contains(DeltaPath, message, StringComparison.Ordinal);
+        Assert.Contains("настройки не сохранены", message, StringComparison.Ordinal);
+        Assert.Equal("Настройки не сохранены", Assert.Single(_prompt.ErrorTitles));
+    }
+
+    [Fact]
+    public async Task EditProject_LegacyTwinsOnOneFolder_CanStillBeRenamed()
+    {
+        // Список прежних версий: добавление дубли уже не пускало, но редактирование
+        // пускало, и такие файлы у пользователей есть. Отказ по неизменному пути
+        // запер бы их настройки навсегда.
+        _store.Seed(
+            new ProjectDefinition(Guid.NewGuid(), "alpha", GammaPath, ShellKind.Pwsh, null, [], 0),
+            new ProjectDefinition(Guid.NewGuid(), "beta", GammaPath, ShellKind.Pwsh, null, [], 1));
+        _probe.Add(GammaPath);
+
+        var list = Create();
+        await list.LoadAsync(CancellationToken.None);
+        _dialog.Edit = project => project with { Name = "Альфа" };
+
+        Assert.True(await list.EditProjectAsync(list.Rows[0], CancellationToken.None));
+
+        Assert.Empty(_prompt.Errors);
+        Assert.Equal(1, _store.SaveCount);
+        Assert.Equal("Альфа", list.Rows[0].Name);
+    }
+
+    [Fact]
+    public async Task EditProject_PathWrittenDifferentlyButTheSame_DoesNotRefuseItself()
+    {
+        _store.Seed(new ProjectDefinition(Guid.NewGuid(), "alpha", GammaPath, ShellKind.Pwsh, null, [], 0));
+        _probe.Add(GammaPath);
+
+        var list = Create();
+        await list.LoadAsync(CancellationToken.None);
+        _dialog.Edit = project => project with { Path = GammaPath.ToUpperInvariant() + @"\" };
+
+        Assert.True(await list.EditProjectAsync(list.Rows[0], CancellationToken.None));
+
+        Assert.Empty(_prompt.Errors);
+        Assert.Equal(1, _store.SaveCount);
+    }
+
+    [Fact]
+    public async Task EditProject_PathChangedToAFreeFolder_RewatchesAndRereadsTheBranch()
+    {
+        _store.Seed(new ProjectDefinition(Guid.NewGuid(), "alpha", GammaPath, ShellKind.Pwsh, null, [], 0));
+        _probe.Add(GammaPath);
+        _probe.Add(DeltaPath);
+        _branchReader.Set(GammaPath, "main");
+        _branchReader.Set(DeltaPath, "feature");
+
+        var list = Create();
+        await list.LoadAsync(CancellationToken.None);
+        _dialog.Edit = project => project with { Path = DeltaPath };
+
+        Assert.True(await list.EditProjectAsync(list.Rows[0], CancellationToken.None));
+
+        Assert.Empty(_prompt.Errors);
+        Assert.Equal(DeltaPath, Assert.Single(_store.Saved).Path);
+        Assert.Equal(DeltaPath, Assert.Single(_watcher.Watched));
+        Assert.Equal("feature", list.Rows[0].Branch);
     }
 
     private ProjectListViewModel Create() =>

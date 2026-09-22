@@ -61,34 +61,13 @@ public sealed class SessionStateCoordinator : IDisposable
     private readonly Dictionary<TerminalId, SessionProbe> _sessions = [];
 
     /// <summary>
-    /// Что известно о вкладке прямо сейчас: сколько у неё незавершённых сабагентов и какое
-    /// состояние ей выставлено последним. Трогается только из потока интерфейса, поэтому
-    /// обычный словарь без блокировок.
+    /// Что известно о вкладке прямо сейчас и как её меняют хуки — см. <see cref="TabActivity"/>.
+    /// Трогается только из потока интерфейса, поэтому обычный словарь без блокировок.
     /// </summary>
     /// <remarks>
-    /// Счётчик сабагентов приложение ведёт само: ни <c>SubagentStart</c>, ни <c>SubagentStop</c>
-    /// не сообщают, сколько их осталось. Хук идёт через <c>curl</c> и может потеряться, поэтому
-    /// счётчик не только вычитается, но и **обнуляется на границах сессии** — на
-    /// <c>SessionStart</c> с настоящей сменой хода и на <c>SessionEnd</c>. Только там достоверно
-    /// известно, что живых сабагентов нет: сжатие контекста (<c>SessionStart</c> с
-    /// <c>source=compact</c>) и отправка промпта случаются посреди фоновой работы, и обнуление
-    /// на них потеряло бы работающих сабагентов. Потерянный <c>SubagentStop</c> поэтому живёт
-    /// до конца сессии, а не до конца хода: цена — вкладка держит «занята своей работой» вместо
-    /// «ждёт ввода», и человек всё равно может в неё зайти и написать. Обратная ошибка дороже:
-    /// «ждёт ввода» на работающей вкладке выглядит приглашением, которого нет.
-    /// В минус счётчик не уходит: лишний <c>SubagentStop</c> — это тот же дрейф, только в другую
-    /// сторону, и отрицательный остаток скрыл бы следующий настоящий запуск сабагента.
-    /// <para>
-    /// Покрыты только сабагенты. Фоновые команды <c>Bash</c> с <c>run_in_background</c>
-    /// не покрыты вовсе: хуков для них у Claude Code нет — ни на запуск, ни на завершение.
-    /// Сессия, ждущая только фоновую команду, покажет «ждёт ввода», и это не ошибка счётчика,
-    /// а отсутствие источника события.
-    /// </para>
-    /// <para>
-    /// Последнее состояние хранится здесь, а не спрашивается у <see cref="ITabStateSink"/>:
-    /// порт остаётся узким, а координатору оно нужно ровно в одном месте — чтобы
-    /// <c>SubagentStop</c>, опоздавший к уже выставленному «ждёт ввода», не сбил маркер.
-    /// </para>
+    /// Последнее состояние хранится там, а не спрашивается у <see cref="ITabStateSink"/>:
+    /// порт остаётся узким, а переходам оно нужно — чтобы опоздавший хук не сбил уже
+    /// выставленный маркер.
     /// </remarks>
     private readonly Dictionary<TerminalId, TabActivity> _activity = [];
 
@@ -102,7 +81,8 @@ public sealed class SessionStateCoordinator : IDisposable
     /// <inheritdoc cref="SessionStateCoordinator" />
     /// <param name="hooks">
     /// Приёмник хуков: <c>SessionStart</c>, <c>UserPromptSubmit</c>, <c>Stop</c>,
-    /// <c>StopFailure</c>, <c>SubagentStart</c>, <c>SubagentStop</c>, <c>SessionEnd</c>.
+    /// <c>StopFailure</c>, <c>SubagentStart</c>, <c>SubagentStop</c>, <c>PostToolBatch</c>,
+    /// <c>PermissionRequest</c>, <c>SessionEnd</c>.
     /// </param>
     /// <param name="workspace">Набор вкладок: сопоставление токена хука с вкладкой.</param>
     /// <param name="history">Чтение транскрипта ради заголовка вкладки.</param>
@@ -226,8 +206,9 @@ public sealed class SessionStateCoordinator : IDisposable
     /// Вкладка остаётся на экране (раздел 5.1 ТЗ), но состояние её сессии больше не значит
     /// ничего: <c>SessionEnd</c> от убитой оболочки не придёт, а нового хода не будет.
     /// Забыть о вкладке обязательно, а не только показать <c>Unknown</c>: опоздавший
-    /// <c>SubagentStop</c> увидел бы запомненную «фоновую работу» и зажёг бы на мёртвой
-    /// вкладке точку «работает» до конца сеанса (разделы 5.3 и 8 ТЗ).
+    /// <c>SubagentStop</c> увидел бы запомненную «фоновую работу», а опоздавший
+    /// <c>PostToolBatch</c> — живую сессию, и зажгли бы на мёртвой вкладке точку «работает»
+    /// до конца сеанса (разделы 5.3 и 8 ТЗ).
     /// </remarks>
     private void ApplyExit(TerminalId terminalId)
     {
@@ -236,7 +217,7 @@ public sealed class SessionStateCoordinator : IDisposable
             return;
         }
 
-        SetState(sink, terminalId, TabState.Unknown);
+        sink.SetState(terminalId, TabState.Unknown);
         _sessions.Remove(terminalId);
         _activity.Remove(terminalId);
     }
@@ -256,52 +237,34 @@ public sealed class SessionStateCoordinator : IDisposable
             return;
         }
 
+        // Имя закончившейся сессии снимается раньше, чем показывается состояние новой.
+        if (hookEvent.Kind == HookKind.SessionStart)
+        {
+            ResetTitleIfSessionChanged(sink, terminalId, hookEvent);
+        }
+
+        if (!_activity.TryGetValue(terminalId, out var activity))
+        {
+            activity = new TabActivity();
+            _activity[terminalId] = activity;
+        }
+
+        // Мимо TabActivity состояние не выставляется нигде — иначе запомненное разошлось бы
+        // с показанным, а на нём держатся решения об опоздавших хуках.
+        if (activity.Apply(hookEvent) is { } state)
+        {
+            sink.SetState(terminalId, state);
+        }
+
         switch (hookEvent.Kind)
         {
-            case HookKind.SessionStart:
-                ResetTitleIfSessionChanged(sink, terminalId, hookEvent);
-
-                // Сжатие контекста приходит тем же хуком, но ходом не является: сессия
-                // в этот момент работает. Выставить «простаивает» значило бы зажечь серую
-                // точку посреди работы агента, а обнулить счётчик — забыть уже запущенных
-                // сабагентов. Разбор source — в HookSourceRules.
-                if (!HookSourceRules.StartsNewTurn(hookEvent.Source))
-                {
-                    break;
-                }
-
-                // Настоящее начало хода: незакрытые сабагенты прежней сессии не считаются.
-                ResetBackgroundAgents(terminalId);
-                SetState(sink, terminalId, TabState.Idle);
+            case HookKind.SessionStart when HookSourceRules.StartsNewTurn(hookEvent.Source):
+                // Сжатие контекста бюджет заголовка не тратит: транскрипт той же сессии.
                 RequestTitle(sink, terminalId, hookEvent);
-                break;
-
-            case HookKind.UserPromptSubmit:
-                // Счётчик здесь **не** обнуляется, хотя ход и начинается. Промпт прилетает
-                // и посреди чужой фоновой работы: человек дописывает его прямо из состояния
-                // «занята своей работой» (оно ровно на то и намекает), а Claude Code шлёт
-                // этот хук ещё и сам — по /loop, по расписанию и на машинные сообщения.
-                // Обнуление стёрло бы живых сабагентов, и следующий Stop дал бы ложное
-                // «ждёт ввода» — приглашение зайти во вкладку, которая на самом деле работает.
-                // Сверка с состоянием («обнулять, только если не BackgroundWork») не спасает:
-                // дрейф счётчика как раз и держит вкладку в BackgroundWork, то есть проверка
-                // выключала бы обнуление ровно там, где оно нужно. Поэтому защита от дрейфа
-                // здесь не ходовая, а сессионная — SessionStart и SessionEnd.
-                SetState(sink, terminalId, TabState.Busy);
                 break;
 
             case HookKind.Stop:
             case HookKind.StopFailure:
-                // Ход агента кончился — штатно либо ошибкой API или отменой. StopFailure
-                // обрабатывается наравне со Stop: на оборванном ходе Stop может не прийти
-                // вовсе, и без этой ветки вкладка осталась бы в «работает» навсегда.
-                // Если сабагенты ещё работают, от человека сейчас ничего
-                // не нужно: сессия продолжится сама, когда они закончат.
-                SetState(
-                    sink,
-                    terminalId,
-                    BackgroundAgents(terminalId) > 0 ? TabState.BackgroundWork : TabState.AwaitingInput);
-
                 // Ещё одна попытка достать заголовок. Конец хода — единственный момент, когда
                 // транскрипт заведомо подрос, поэтому повтор привязан к нему. Оборванный ход
                 // считается наравне: промпт пользователя в файл уже лёг, а ждать Stop, которого
@@ -312,76 +275,14 @@ public sealed class SessionStateCoordinator : IDisposable
                 RequestTitle(sink, terminalId, hookEvent);
                 break;
 
-            case HookKind.SubagentStart:
-                // Только счётчик: состояние вкладки уже «работает» — сабагента запускает
-                // работающий агент.
-                ChangeBackgroundAgents(terminalId, delta: 1);
-                break;
-
-            case HookKind.SubagentStop:
-                // Последний сабагент закончил — главный агент вот-вот продолжит сам.
-                // Проверка состояния обязательна: SubagentStop, опоздавший или пришедший дважды
-                // уже после «ждёт ввода», иначе сбил бы маркер, которого ждёт пользователь.
-                if (ChangeBackgroundAgents(terminalId, delta: -1) == 0
-                    && StateOf(terminalId) == TabState.BackgroundWork)
-                {
-                    SetState(sink, terminalId, TabState.Busy);
-                }
-
-                break;
-
             case HookKind.SessionEnd:
                 _sessions.Remove(terminalId);
-
-                // Сессии больше нет — её сабагентов тоже: счётчик снимается вместе с маркером.
-                ResetBackgroundAgents(terminalId);
-                SetState(sink, terminalId, TabState.Unknown);
                 break;
 
-            case HookKind.Unknown:
             default:
-                // Незарегистрированный хук игнорируется: состояние вкладки не меняется.
+                // Остальные хуки заголовка не касаются.
                 break;
         }
-    }
-
-    /// <summary>
-    /// Единственный путь, которым выставляется состояние вкладки: отдаёт его полосе вкладок
-    /// и запоминает. Выполняется в потоке интерфейса.
-    /// </summary>
-    /// <remarks>
-    /// Мимо этого метода состояние не выставляется нигде — иначе запомненное разошлось бы
-    /// с показанным, а на нём держится решение <c>SubagentStop</c>.
-    /// </remarks>
-    private void SetState(ITabStateSink sink, TerminalId terminalId, TabState state)
-    {
-        _activity.TryGetValue(terminalId, out var activity);
-        _activity[terminalId] = activity with { State = state };
-        sink.SetState(terminalId, state);
-    }
-
-    /// <summary>Состояние, выставленное вкладке последним; о незнакомой вкладке — <c>Unknown</c>.</summary>
-    private TabState StateOf(TerminalId terminalId) =>
-        _activity.TryGetValue(terminalId, out var activity) ? activity.State : TabState.Unknown;
-
-    /// <summary>Сколько сабагентов вкладки сейчас считаются незавершёнными.</summary>
-    private int BackgroundAgents(TerminalId terminalId) =>
-        _activity.TryGetValue(terminalId, out var activity) ? activity.BackgroundAgents : 0;
-
-    /// <summary>Меняет счётчик сабагентов и возвращает новое значение. Ниже нуля не опускается.</summary>
-    private int ChangeBackgroundAgents(TerminalId terminalId, int delta)
-    {
-        _activity.TryGetValue(terminalId, out var activity);
-        var count = Math.Max(0, activity.BackgroundAgents + delta);
-        _activity[terminalId] = activity with { BackgroundAgents = count };
-        return count;
-    }
-
-    /// <summary>Снимает счётчик сабагентов на границе сессии — см. <see cref="_activity"/>.</summary>
-    private void ResetBackgroundAgents(TerminalId terminalId)
-    {
-        _activity.TryGetValue(terminalId, out var activity);
-        _activity[terminalId] = activity with { BackgroundAgents = 0 };
     }
 
     /// <summary>
@@ -560,11 +461,6 @@ public sealed class SessionStateCoordinator : IDisposable
 
         return string.IsNullOrWhiteSpace(fallback) ? null : fallback;
     }
-
-    /// <summary>Что известно о вкладке прямо сейчас — см. <see cref="_activity"/>.</summary>
-    /// <param name="BackgroundAgents">Сколько сабагентов вкладки считаются незавершёнными.</param>
-    /// <param name="State">Состояние, выставленное вкладке последним.</param>
-    private readonly record struct TabActivity(int BackgroundAgents, TabState State);
 
     /// <summary>Чем читать транскрипт вкладки и нужен ли ей ещё заголовок.</summary>
     /// <remarks>

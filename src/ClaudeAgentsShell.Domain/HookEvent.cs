@@ -41,16 +41,16 @@ public enum HookKind
     /// </remarks>
     UserPromptSubmit = 4,
 
-    /// <summary>Сабагент запущен — счётчик фоновой работы вкладки увеличивается.</summary>
+    /// <summary>Сабагент запущен — его <c>agent_id</c> попадает в учёт живых сабагентов вкладки.</summary>
     SubagentStart = 5,
 
-    /// <summary>Сабагент завершился — счётчик фоновой работы вкладки уменьшается.</summary>
+    /// <summary>Сабагент завершился — его <c>agent_id</c> снимается с учёта.</summary>
     /// <remarks>
-    /// Ни <c>SubagentStart</c>, ни <c>SubagentStop</c> не сообщают, сколько сабагентов осталось,
-    /// поэтому счётчик приложение ведёт само. Потерянный хук уводит счётчик в дрейф, и вкладка
-    /// залипает в <see cref="TabState.BackgroundWork"/> — снимается это только на границе сессии
-    /// (<see cref="SessionStart"/> с настоящей сменой хода и <see cref="SessionEnd"/>), потому что
-    /// только там достоверно известно, что незавершённых сабагентов нет.
+    /// Учёт по <c>agent_id</c> — запасной путь. Основной источник фоновой работы — поле
+    /// <c>background_tasks</c> у <see cref="Stop"/>: оно перечисляет живые задачи само, а его
+    /// пустой список заодно очищает учёт. Без поля (старая версия Claude Code или сбой разбора)
+    /// потерянный <c>SubagentStop</c> держит вкладку в <see cref="TabState.BackgroundWork"/>
+    /// до ближайшей границы сессии.
     /// </remarks>
     SubagentStop = 6,
 
@@ -66,7 +66,35 @@ public enum HookKind
     /// а конца хода нет.
     /// </remarks>
     StopFailure = 7,
+
+    /// <summary>
+    /// Закончилась пачка параллельных вызовов инструментов — доказательство, что агент работает.
+    /// </summary>
+    /// <remarks>
+    /// Широкий вход в «работает»: срабатывает независимо от того, как начался ход
+    /// (промпт, <c>!</c>-команда, пробуждение по фоновой задаче). Хук сабагента приносит
+    /// <see cref="HookEvent.AgentId"/>, хук главного потока — нет. Выбран вместо
+    /// <c>PreToolUse</c>: тот при недоступном приёмнике отказывает инструменту (fail closed).
+    /// </remarks>
+    PostToolBatch = 8,
+
+    /// <summary>
+    /// Claude Code показал диалог разрешения на инструмент — вкладка ждёт человека.
+    /// </summary>
+    /// <remarks>
+    /// Приходит сразу при показе диалога, в отличие от <c>Notification(permission_prompt)</c>,
+    /// который запаздывает на 6 секунд. Может прийти и от сабагента.
+    /// </remarks>
+    PermissionRequest = 9,
 }
+
+/// <summary>Живая фоновая задача сессии из поля <c>background_tasks</c> полезной нагрузки.</summary>
+/// <param name="Id">Идентификатор задачи, если пришёл.</param>
+/// <param name="Type">
+/// Тип задачи: <c>subagent</c>, <c>shell</c>, <c>monitor</c>, <c>workflow</c>, <c>teammate</c>
+/// и другие. Список открытый; расписания (<c>session_crons</c>) сюда не входят.
+/// </param>
+public sealed record BackgroundTask(string? Id, string? Type);
 
 /// <summary>Событие от хука, пришедшее на локальный endpoint приложения.</summary>
 /// <param name="Kind">Какой хук сработал.</param>
@@ -82,6 +110,15 @@ public enum HookKind
 /// <c>startup</c>, <c>resume</c>, <c>clear</c>, <c>compact</c> или <c>fork</c>;
 /// у <c>UserPromptSubmit</c> — кто автор промпта. Остальные хуки поля не приносят.
 /// </param>
+/// <param name="AgentId">
+/// Поле <c>agent_id</c>: есть у хуков сабагента (<c>SubagentStart</c>, <c>SubagentStop</c>,
+/// его <c>PostToolBatch</c> и <c>PermissionRequest</c>), нет у хуков главного потока.
+/// </param>
+/// <param name="BackgroundTasks">
+/// Поле <c>background_tasks</c> у <c>Stop</c>/<c>StopFailure</c>/<c>SubagentStop</c>: живые фоновые
+/// задачи сессии. <see langword="null"/> — поля в полезной нагрузке нет (старая версия Claude Code
+/// или сбой разбора), пустой список — фоновых задач нет. Это разные случаи.
+/// </param>
 /// <remarks>
 /// <paramref name="Source" /> необязателен намеренно: формат полезной нагрузки Claude Code
 /// считается нестабильным (раздел 7 CLAUDE.md), и сам Claude Code помечает это поле как
@@ -94,4 +131,6 @@ public sealed record HookEvent(
     string? WorkingDirectory,
     string? CorrelationToken,
     DateTimeOffset ReceivedUtc,
-    string? Source = null);
+    string? Source = null,
+    string? AgentId = null,
+    IReadOnlyList<BackgroundTask>? BackgroundTasks = null);

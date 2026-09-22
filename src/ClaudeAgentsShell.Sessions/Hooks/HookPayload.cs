@@ -13,6 +13,10 @@ internal static class HookPayload
     private const string SessionIdField = "session_id";
     private const string WorkingDirectoryField = "cwd";
     private const string SourceField = "source";
+    private const string AgentIdField = "agent_id";
+    private const string BackgroundTasksField = "background_tasks";
+    private const string TaskIdField = "id";
+    private const string TaskTypeField = "type";
 
     /// <summary>
     /// Событие либо <c>null</c>, если тело не разобралось или хук незнакомый:
@@ -46,7 +50,9 @@ internal static class HookPayload
                 ReadString(root, WorkingDirectoryField),
                 string.IsNullOrWhiteSpace(token) ? ReadString(root, HookProtocol.TokenPayloadField) : token,
                 receivedUtc,
-                ReadString(root, SourceField));
+                ReadString(root, SourceField),
+                ReadString(root, AgentIdField),
+                ReadBackgroundTasks(root));
         }
         catch (JsonException)
         {
@@ -59,11 +65,10 @@ internal static class HookPayload
     /// <see cref="HookKind.Unknown"/>, то есть не событие.
     /// </summary>
     /// <remarks>
-    /// Поля, которые хуки приносят сверх <c>session_id</c>, <c>cwd</c> и <c>source</c>,
-    /// не разбираются: <c>agent_id</c> и <c>agent_type</c> у сабагентов, <c>prompt</c> у промпта,
-    /// <c>error</c> и <c>error_details</c> у <c>StopFailure</c>. Состояние вкладки от них
-    /// не зависит — счётчик сабагентов приложение ведёт само, а текст промпта и текст ошибки
-    /// ему не нужны вовсе.
+    /// Поля, которые хуки приносят сверх разобранных, не читаются: <c>agent_type</c>
+    /// у сабагентов, <c>prompt</c> у промпта, <c>error</c> и <c>error_details</c>
+    /// у <c>StopFailure</c>, <c>session_crons</c> у конца хода. Состояние вкладки от них
+    /// не зависит.
     /// </remarks>
     private static HookKind ParseKind(string? name) => name switch
     {
@@ -74,6 +79,8 @@ internal static class HookPayload
         "UserPromptSubmit" => HookKind.UserPromptSubmit,
         "SubagentStart" => HookKind.SubagentStart,
         "SubagentStop" => HookKind.SubagentStop,
+        "PostToolBatch" => HookKind.PostToolBatch,
+        "PermissionRequest" => HookKind.PermissionRequest,
         _ => HookKind.Unknown,
     };
 
@@ -81,4 +88,34 @@ internal static class HookPayload
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() is { Length: > 0 } text ? text : null
             : null;
+
+    /// <summary>
+    /// Поле <c>background_tasks</c>: <c>null</c>, если поля нет или оно не разобралось,
+    /// пустой список — если фоновых задач нет.
+    /// </summary>
+    /// <remarks>
+    /// Любой мусор делает <c>null</c> всё поле, а не укорачивает список: короткий список
+    /// сказал бы координатору «фоновой работы нет», и вкладка показала бы «ждёт ввода»
+    /// при живых задачах. <c>null</c> же означает «неизвестно» — прежнее поведение.
+    /// </remarks>
+    private static IReadOnlyList<BackgroundTask>? ReadBackgroundTasks(JsonElement root)
+    {
+        if (!root.TryGetProperty(BackgroundTasksField, out var value) || value.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var tasks = new List<BackgroundTask>(value.GetArrayLength());
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            tasks.Add(new BackgroundTask(ReadString(item, TaskIdField), ReadString(item, TaskTypeField)));
+        }
+
+        return tasks;
+    }
 }

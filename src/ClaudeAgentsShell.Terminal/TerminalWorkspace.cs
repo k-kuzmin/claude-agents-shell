@@ -142,17 +142,19 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         // локальный процесс переключал бы состояние чужой вкладки.
         string token = NewCorrelationToken();
 
-        var startInfo = new PtyStartInfo(
-            shell,
-            project.Path,
-            TerminalSize.Default,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                // Окружение процесса наследуется от приложения; здесь только то, что
-                // добавляется поверх. TERM обязателен — без него TUI рисует рамки псевдографикой.
-                ["TERM"] = "xterm-256color",
-                [_hooks.TokenVariableName] = token,
-            });
+        // Окружение процесса наследуется от приложения; здесь только то, что добавляется
+        // поверх. TERM обязателен — без него TUI рисует рамки псевдографикой. Переменные хуков
+        // (токен вкладки и то, что нужно их транспорту) отдаёт слой хуков.
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TERM"] = "xterm-256color",
+        };
+        foreach (var (name, value) in _hooks.SessionEnvironment(token))
+        {
+            environment[name] = value;
+        }
+
+        var startInfo = new PtyStartInfo(shell, project.Path, TerminalSize.Default, environment);
 
         _pending[terminalId.Value] = new PendingTerminal(startInfo, startupInput);
         _tokens[token] = terminalId;

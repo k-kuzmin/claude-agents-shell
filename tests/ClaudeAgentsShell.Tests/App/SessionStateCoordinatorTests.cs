@@ -30,6 +30,9 @@ public sealed class SessionStateCoordinatorTests
     /// </remarks>
     private const int MaxTitleAttempts = 3;
 
+    /// <summary>Поле <c>background_tasks</c> пришло и пусто: фоновых задач у сессии нет.</summary>
+    private static readonly IReadOnlyList<BackgroundTask> NoTasks = [];
+
     [Fact]
     public async Task SessionStart_переводит_вкладку_в_простаивает()
     {
@@ -110,11 +113,12 @@ public sealed class SessionStateCoordinatorTests
     public async Task Stop_при_работающем_сабагенте_даёт_фоновую_работу()
     {
         // Ход агента кончился, но сессия продолжится сама: от человека сейчас ничего не нужно.
+        // Без background_tasks решает учёт живых сабагентов — откат для старых версий.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
 
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
@@ -127,9 +131,9 @@ public sealed class SessionStateCoordinatorTests
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
-        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
 
         // Главный агент вот-вот продолжит сам — «ждёт ввода» здесь было бы враньём.
         Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
@@ -142,14 +146,14 @@ public sealed class SessionStateCoordinatorTests
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a2");
         harness.RaiseHook(HookKind.Stop, tab);
-        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
 
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
 
-        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a2");
 
         Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
     }
@@ -164,7 +168,7 @@ public sealed class SessionStateCoordinatorTests
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
         var before = harness.Sink.StateLog.Count;
 
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
 
         Assert.Equal(before, harness.Sink.StateLog.Count);
     }
@@ -176,8 +180,8 @@ public sealed class SessionStateCoordinatorTests
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
-        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
 
         Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
@@ -191,42 +195,102 @@ public sealed class SessionStateCoordinatorTests
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
-        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
 
         Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
     }
 
     [Fact]
-    public async Task Лишний_SubagentStop_не_уводит_счётчик_в_минус()
+    public async Task Повторный_SubagentStop_одного_сабагента_не_снимает_другого()
     {
+        // Счётчик от задвоенного хука уходил в дрейф: два вычитания снимали и чужого сабагента.
+        // Учёт по agent_id задвоения не замечает.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStop, tab);
-        harness.RaiseHook(HookKind.SubagentStop, tab);
-
-        // Отрицательный остаток скрыл бы настоящий запуск сабагента: Stop дал бы «ждёт ввода».
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a2");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
 
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
     }
 
     [Fact]
-    public async Task Потерянный_SubagentStop_живёт_до_конца_сессии()
+    public async Task Повторный_SubagentStart_одного_сабагента_не_требует_двух_остановок()
     {
-        // Хук идёт через curl и может не доехать. Снять дрейф на отправке промпта нельзя:
-        // промпт прилетает и посреди чужой фоновой работы, и обнуление стёрло бы живых
-        // сабагентов. Поэтому дрейф держится до границы сессии — вкладка показывает «занята
-        // своей работой». Это мягкий отказ: зайти и написать в неё человеку никто не мешает,
-        // а обратная ошибка — «ждёт ввода» на работающей вкладке — дороже.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task SubagentStop_незнакомого_сабагента_не_будит_фоновую_работу()
+    {
+        // Вкладку держит фоновая команда, а не сабагент: остановка чужого или уже снятого
+        // сабагента не повод объявлять, что главный агент продолжил.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("shell"));
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+        var before = harness.Sink.StateLog.Count;
+
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "чужой");
+
+        Assert.Equal(before, harness.Sink.StateLog.Count);
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Хуки_сабагента_без_agent_id_в_учёт_не_попадают()
+    {
+        // Сабагентский хук без agent_id — сбой разбора: сопоставить запуск с остановкой
+        // нечем, поэтому учёт его не видит вовсе. Сказывается это только при откате, когда
+        // и background_tasks нет.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
         harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Потерянный_SubagentStop_без_background_tasks_живёт_до_конца_сессии()
+    {
+        // Откат для версий без background_tasks. Хук идёт через curl и может не доехать.
+        // Снять потерянного на отправке промпта нельзя: промпт прилетает и посреди чужой
+        // фоновой работы. Поэтому он держится до границы сессии — мягкий отказ: «занята своей
+        // работой» вместо «ждёт ввода».
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
 
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
@@ -245,6 +309,73 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
+    public async Task Пустой_background_tasks_снимает_потерянного_сабагента()
+    {
+        // Сам Claude Code сказал, что фоновых задач нет, — это достовернее собственного учёта.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: NoTasks);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        // Следующий Stop — уже без поля: учёт после сверки пуст, дрейфа нет.
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Фоновые_сабагенты_по_background_tasks_дают_фоновую_работу()
+    {
+        // Случай 1 issue #1: Stop приходит, пока фоновые сабагенты ещё живы. Решает
+        // background_tasks, даже если SubagentStart до приложения не доехал.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent", "subagent"));
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Пустой_background_tasks_важнее_собственного_учёта()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.StopFailure, tab, backgroundTasks: NoTasks);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+    }
+
+    [Theory]
+    [InlineData("shell")]
+    [InlineData("monitor")]
+    [InlineData("workflow")]
+    [InlineData("teammate")]
+    [InlineData("незнакомый-тип")]
+    [InlineData(null)]
+    public async Task Фоновая_задача_любого_типа_держит_фоновую_работу(string? type)
+    {
+        // Список типов открытый: любая живая фоновая задача означает, что сессия продолжится
+        // сама. Фоновая команда Bash теперь тоже видна — раньше источника для неё не было.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: [new BackgroundTask("t1", type)]);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
     public async Task Сжатие_контекста_не_гасит_работающую_вкладку()
     {
         // Автосжатие срабатывает посреди хода и приходит тем же SessionStart, что и запуск.
@@ -260,15 +391,15 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Сжатие_контекста_не_снимает_счётчик_сабагентов()
+    public async Task Сжатие_контекста_не_забывает_живых_сабагентов()
     {
-        // Первая из трёх последовательностей, роняющих счётчик: сжатие посреди хода
-        // с работающим сабагентом. Обнуление дало бы на следующем Stop ложное «ждёт ввода».
+        // Сжатие посреди хода с работающим сабагентом. Очистка учёта дала бы на следующем
+        // Stop без background_tasks ложное «ждёт ввода».
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.SessionStart, tab, source: "compact");
         harness.RaiseHook(HookKind.Stop, tab);
 
@@ -280,15 +411,15 @@ public sealed class SessionStateCoordinatorTests
     [InlineData("loop_wakeup")]
     [InlineData("system")]
     [InlineData("sdk")]
-    public async Task Машинный_промпт_не_снимает_счётчик_сабагентов(string source)
+    public async Task Машинный_промпт_не_забывает_живых_сабагентов(string source)
     {
-        // Вторая последовательность: пробуждение по расписанию или по /loop приходит тем же
-        // UserPromptSubmit, но человека за ним нет и ход сабагентов не прерывает.
+        // Пробуждение по расписанию или по /loop приходит тем же UserPromptSubmit, но человека
+        // за ним нет и ход сабагентов не прерывает.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "user");
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: source);
 
         // В «работает» переводят все источники: ход начинается в любом случае.
@@ -300,15 +431,15 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Промпт_досланный_в_фоновую_работу_не_снимает_счётчик()
+    public async Task Промпт_досланный_в_фоновую_работу_не_забывает_сабагентов()
     {
-        // Третья последовательность, и она про живого человека: «занята своей работой» ровно
-        // на то и намекает, что туда можно зайти и написать. Счётчик при этом остаётся живым.
+        // Про живого человека: «занята своей работой» ровно на то и намекает, что туда можно
+        // зайти и написать. Учёт сабагентов при этом остаётся живым.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "user");
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
 
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
@@ -319,7 +450,7 @@ public sealed class SessionStateCoordinatorTests
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
 
         // Сабагент закончил — вкладка возвращается к человеку.
-        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
 
         Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
@@ -350,8 +481,20 @@ public sealed class SessionStateCoordinatorTests
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.StopFailure, tab);
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task StopFailure_с_фоновыми_задачами_даёт_фоновую_работу()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.StopFailure, tab, backgroundTasks: Tasks("subagent"));
 
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
     }
@@ -362,7 +505,7 @@ public sealed class SessionStateCoordinatorTests
     [InlineData("resume")]
     [InlineData("clear")]
     [InlineData("fork")]
-    public async Task SessionStart_настоящей_границей_хода_снимает_счётчик_фоновой_работы(string? source)
+    public async Task SessionStart_настоящей_границей_хода_забывает_сабагентов(string? source)
     {
         // Сессия поднялась заново (startup/resume/fork) или потеряла контекст (clear): живых
         // сабагентов у неё нет. Отсутствующий source ведёт себя так же — формат нестабилен
@@ -371,7 +514,7 @@ public sealed class SessionStateCoordinatorTests
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.SessionStart, tab, source: source);
 
         Assert.Equal(TabState.Idle, harness.Sink.States[tab]);
@@ -382,13 +525,13 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task SessionEnd_снимает_счётчик_фоновой_работы()
+    public async Task SessionEnd_забывает_сабагентов()
     {
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.SessionEnd, tab);
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
@@ -398,13 +541,13 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Счётчики_вкладок_не_перемешиваются()
+    public async Task Сабагенты_вкладок_не_перемешиваются()
     {
         using var harness = new Harness();
         var first = await harness.StartWithTabAsync();
         var second = await harness.OpenTabAsync();
 
-        harness.RaiseHook(HookKind.SubagentStart, first);
+        harness.RaiseHook(HookKind.SubagentStart, first, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, second);
 
         Assert.Equal(TabState.AwaitingInput, harness.Sink.States[second]);
@@ -412,6 +555,405 @@ public sealed class SessionStateCoordinatorTests
         harness.RaiseHook(HookKind.Stop, first);
 
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[first]);
+    }
+
+    [Fact]
+    public async Task Команда_через_восклицательный_знак_видна_по_PostToolBatch()
+    {
+        // Случай 2 issue #1: `!`-команда не даёт ни UserPromptSubmit, ни какого-либо другого
+        // хука на старте хода. Ход после неё виден только по PostToolBatch главного потока.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: NoTasks);
+        harness.RaiseHook(HookKind.PostToolBatch, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: NoTasks);
+
+        Assert.Equal(
+            new[] { TabState.Idle, TabState.Busy, TabState.AwaitingInput, TabState.Busy, TabState.AwaitingInput },
+            harness.Sink.StateLog.Select(entry => entry.State));
+    }
+
+    [Theory]
+    [InlineData(HookKind.SessionStart)]
+    [InlineData(HookKind.Stop)]
+    public async Task PostToolBatch_главного_потока_переводит_в_работает(HookKind before)
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(before, tab);
+        harness.RaiseHook(HookKind.PostToolBatch, tab);
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task PostToolBatch_главного_потока_будит_фоновую_работу()
+    {
+        // Главный агент снова вызывает инструменты — значит, он продолжил ход сам.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("shell"));
+        harness.RaiseHook(HookKind.PostToolBatch, tab);
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+    }
+
+    [Theory]
+    [InlineData(TabState.BackgroundWork)]
+    [InlineData(TabState.AwaitingInput)]
+    public async Task PostToolBatch_сабагента_вкладку_не_будит(TabState stateBefore)
+    {
+        // Работа сабагента не означает, что работает главный агент: вкладка в «занята своей
+        // работой» такой и остаётся, а «ждёт ввода» — тем более.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(
+            HookKind.Stop,
+            tab,
+            backgroundTasks: stateBefore == TabState.BackgroundWork ? Tasks("subagent") : NoTasks);
+
+        Assert.Equal(stateBefore, harness.Sink.States[tab]);
+        var before = harness.Sink.StateLog.Count;
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(before, harness.Sink.StateLog.Count);
+    }
+
+    [Fact]
+    public async Task PostToolBatch_после_SessionEnd_вкладку_не_оживляет()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SessionEnd, tab);
+        harness.RaiseHook(HookKind.PostToolBatch, tab);
+
+        Assert.Equal(TabState.Unknown, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Разрешение_главного_потока_ждёт_ввода_до_следующего_PostToolBatch()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab);
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Разрешение_фонового_сабагента_возвращает_фоновую_работу()
+    {
+        // Главный агент закончил ход, фоновый сабагент упёрся в диалог разрешения. После
+        // ответа вкладка возвращается туда, где была без диалога, — не в «работает».
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Разрешение_сабагента_посреди_хода_возвращает_работает()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task PostToolBatch_главного_потока_не_снимает_диалог_сабагента()
+    {
+        // Главный поток работает дальше, но диалог сабагента всё ещё на экране. Пачка главного
+        // потока меняет только место возврата: после ответа сабагенту вкладка — «работает».
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.PostToolBatch, tab);
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Пачка_другого_сабагента_диалог_не_снимает()
+    {
+        // a1 ждёт разрешения, a3 тем временем работает: его пачка ничего не говорит об ответе a1.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent", "subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        var before = harness.Sink.StateLog.Count;
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a3");
+
+        Assert.Equal(before, harness.Sink.StateLog.Count);
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Два_диалога_снимаются_каждый_своим_сабагентом()
+    {
+        // Вкладка ждёт ввода, пока открыт хоть один диалог. Место возврата общее и не затирается
+        // вторым запросом.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent", "subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a2");
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a2");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Stop_главного_потока_не_снимает_диалог_сабагента_при_двух_диалогах()
+    {
+        // Отказ главному потоку закрывает только его диалог; диалог сабагента остаётся.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task SubagentStop_сабагента_с_открытым_диалогом_снимает_диалог()
+    {
+        // Сабагент закончился, не дождавшись ответа (прерван, упал) — его диалога больше нет.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent", "subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task SubagentStop_последнего_учтённого_сабагента_с_диалогом_будит_вкладку()
+    {
+        // Откат без background_tasks: сабагент с открытым диалогом был последним живым —
+        // диалог снят, главный агент продолжит сам.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.Stop, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+    }
+
+    [Theory]
+    [InlineData(HookKind.Stop, TabState.BackgroundWork)]
+    [InlineData(HookKind.UserPromptSubmit, TabState.Busy)]
+    [InlineData(HookKind.SessionStart, TabState.Idle)]
+    public async Task Диалог_главного_потока_снимается_сменой_хода(HookKind next, TabState expected)
+    {
+        // Диалог главного потока закрыт отказом, отменой или новым ходом: вкладка уходит
+        // из «ждёт ввода», и поздний PostToolBatch сабагента не поднимет устаревшее состояние.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab);
+        harness.RaiseHook(next, tab, backgroundTasks: next == HookKind.Stop ? Tasks("shell") : null);
+
+        Assert.Equal(expected, harness.Sink.States[tab]);
+        var before = harness.Sink.StateLog.Count;
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(before, harness.Sink.StateLog.Count);
+        Assert.Equal(expected, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Машинный_промпт_диалог_сабагента_не_снимает()
+    {
+        // Человек при открытом диалоге промпт отправить не может: UserPromptSubmit в этот
+        // момент шлёт сам Claude Code — по /loop, расписанию или на машинное сообщение.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "system");
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Ход_после_машинного_промпта_диалог_сабагента_не_прячет()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "loop_wakeup");
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Граница_сессии_снимает_диалог_сабагента()
+    {
+        // Сессия поднялась заново: диалогов прежней на экране нет, и поздняя пачка a1
+        // вкладку из «простаивает» не уводит.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "startup");
+
+        Assert.Equal(TabState.Idle, harness.Sink.States[tab]);
+        var before = harness.Sink.StateLog.Count;
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(before, harness.Sink.StateLog.Count);
+        Assert.Equal(TabState.Idle, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Stop_главного_потока_при_разрешении_сабагента_диалог_не_прячет()
+    {
+        // Фоновый сабагент ждёт человека, а главный агент тем временем заканчивает ход.
+        // Диалог всё ещё на экране — вкладка остаётся «ждёт ввода», а после ответа уходит
+        // туда, куда её отправил бы этот Stop.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Stop_после_отказа_главному_потоку_снимает_ожидание_сразу()
+    {
+        // Диалог главного потока закрыт отказом, ход кончился: ждать больше нечего,
+        // и вкладка сразу показывает фоновую работу сабагентов.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Последний_SubagentStop_во_время_диалога_диалог_не_прячет()
+    {
+        // Откат без background_tasks: сабагент закончил, пока другой ждёт разрешения.
+        // Пробуждение откладывается до ответа на диалог.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.Stop, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a2");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a2");
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Запрос_разрешения_после_SessionEnd_вкладку_не_трогает()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SessionEnd, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+
+        Assert.Equal(TabState.Unknown, harness.Sink.States[tab]);
     }
 
     [Fact]
@@ -1037,17 +1579,38 @@ public sealed class SessionStateCoordinatorTests
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
-        harness.RaiseHook(HookKind.SubagentStart, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
         harness.RaiseHook(HookKind.Stop, tab);
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
 
         // Процесс убит в «фоновой работе», а `curl` сабагента был запущен раньше и доезжает
         // уже после смерти вкладки.
         harness.RaiseExited(tab);
-        harness.RaiseHook(HookKind.SubagentStop, tab);
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
 
         Assert.Equal(TabState.Unknown, harness.Sink.States[tab]);
     }
+
+    [Theory]
+    [InlineData(HookKind.PostToolBatch, null)]
+    [InlineData(HookKind.PermissionRequest, null)]
+    [InlineData(HookKind.PermissionRequest, "a1")]
+    public async Task Опоздавший_хук_инструмента_не_оживляет_мёртвую_вкладку(HookKind kind, string? agentId)
+    {
+        // Процесс убит посреди вызова инструмента, а `curl` хука доезжает уже после смерти.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseExited(tab);
+        harness.RaiseHook(kind, tab, agentId: agentId);
+
+        Assert.Equal(TabState.Unknown, harness.Sink.States[tab]);
+    }
+
+    /// <summary>Поле <c>background_tasks</c> с живыми задачами перечисленных типов.</summary>
+    private static IReadOnlyList<BackgroundTask> Tasks(params string[] types) =>
+        types.Select((type, index) => new BackgroundTask($"t{index}", type)).ToArray();
 
     private sealed class Harness : IDisposable
     {
@@ -1099,9 +1662,11 @@ public sealed class SessionStateCoordinatorTests
             TerminalId tab,
             string? sessionId = SessionId,
             string? workingDirectory = ProjectPath,
-            string? source = null)
+            string? source = null,
+            string? agentId = null,
+            IReadOnlyList<BackgroundTask>? backgroundTasks = null)
         {
-            Hooks.Raise(kind, Workspace.TokenFor(tab), sessionId, workingDirectory, source);
+            Hooks.Raise(kind, Workspace.TokenFor(tab), sessionId, workingDirectory, source, agentId, backgroundTasks);
             Pump();
         }
 

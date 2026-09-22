@@ -27,42 +27,91 @@ public sealed class HookSettingsProviderTests
     }
 
     [Fact]
-    public async Task Зарегистрированы_все_семь_хуков_и_каждый_зовёт_командный_файл()
+    public async Task Зарегистрирован_точный_набор_хуков_и_PreToolUse_среди_них_нет()
     {
         using var temp = new TempDirectory();
         var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
 
-        var path = await provider.EnsureSettingsFileAsync(Endpoint, CancellationToken.None);
+        var hooks = await ReadHooks(provider);
 
-        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, CancellationToken.None));
-        var hooks = document.RootElement.GetProperty("hooks");
-
-        // Семь зарегистрированных хуков — единственный источник состояния вкладки
-        // (раздел 7 CLAUDE.md), но не весь набор хуков Claude Code: Notification сознательно
-        // не регистрируется. Список точный и в обе стороны: лишнее имя Claude Code молча
-        // пропустит, а недостающее оставит вкладку без перехода.
+        // Список точный и в обе стороны: лишнее имя Claude Code молча пропустит, а недостающее
+        // оставит вкладку без перехода. PreToolUse при недоступном HTTP-приёмнике отказывает
+        // инструменту, поэтому его здесь быть не должно.
         string[] expected =
         [
+            "PermissionRequest",
+            "PostToolBatch",
+            "SessionEnd",
             "SessionStart",
-            "UserPromptSubmit",
             "Stop",
             "StopFailure",
             "SubagentStart",
             "SubagentStop",
-            "SessionEnd",
+            "UserPromptSubmit",
         ];
 
-        Assert.Equal(expected.Length, hooks.EnumerateObject().Count());
+        Assert.Equal(expected, hooks.EnumerateObject().Select(static p => p.Name).Order(StringComparer.Ordinal));
 
         foreach (var name in expected)
         {
-            var command = hooks.GetProperty(name)[0].GetProperty("hooks")[0];
+            var matchers = hooks.GetProperty(name);
+            Assert.Equal(1, matchers.GetArrayLength());
 
-            Assert.Equal("command", command.GetProperty("type").GetString());
-            Assert.Equal(
-                $"\"{Path.Combine(temp.Combine("appdata"), "hook-send.cmd")}\"",
-                command.GetProperty("command").GetString());
+            // Без matcher — хук срабатывает на любой инструмент и любой source.
+            Assert.False(matchers[0].TryGetProperty("matcher", out _));
+            Assert.Equal(1, matchers[0].GetProperty("hooks").GetArrayLength());
         }
+    }
+
+    [Fact]
+    public async Task SessionStart_остаётся_командным_хуком_на_командный_файл()
+    {
+        using var temp = new TempDirectory();
+        var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
+
+        var hooks = await ReadHooks(provider);
+        var handler = hooks.GetProperty("SessionStart")[0].GetProperty("hooks")[0];
+
+        // HTTP-хуки SessionStart не поддерживает.
+        Assert.Equal(["command", "timeout", "type"], PropertyNames(handler));
+        Assert.Equal("command", handler.GetProperty("type").GetString());
+        Assert.Equal(
+            $"\"{Path.Combine(temp.Combine("appdata"), "hook-send.cmd")}\"",
+            handler.GetProperty("command").GetString());
+        Assert.Equal(5, handler.GetProperty("timeout").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("UserPromptSubmit")]
+    [InlineData("Stop")]
+    [InlineData("StopFailure")]
+    [InlineData("SubagentStart")]
+    [InlineData("SubagentStop")]
+    [InlineData("SessionEnd")]
+    [InlineData("PostToolBatch")]
+    [InlineData("PermissionRequest")]
+    public async Task Остальные_хуки_HTTP_с_токеном_вкладки_в_заголовке(string name)
+    {
+        using var temp = new TempDirectory();
+        var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
+
+        var hooks = await ReadHooks(provider);
+        var handler = hooks.GetProperty(name)[0].GetProperty("hooks")[0];
+
+        // Ровно поля HTTP-хука: пустой command рядом с url мог бы сделать файл невалидным.
+        Assert.Equal(["allowedEnvVars", "headers", "timeout", "type", "url"], PropertyNames(handler));
+        Assert.Equal("http", handler.GetProperty("type").GetString());
+        Assert.Equal("http://127.0.0.1:52341/hook", handler.GetProperty("url").GetString());
+        Assert.Equal(3, handler.GetProperty("timeout").GetInt32());
+
+        // Токен у каждой вкладки свой, файл общий: в заголовке ссылка на переменную окружения,
+        // и подставить её Claude Code разрешено только через allowedEnvVars.
+        var headers = handler.GetProperty("headers");
+        Assert.Equal(["X-Agents-Shell-Token"], PropertyNames(headers));
+        Assert.Equal("$" + provider.TokenVariableName, headers.GetProperty("X-Agents-Shell-Token").GetString());
+        Assert.Equal(
+            [provider.TokenVariableName],
+            handler.GetProperty("allowedEnvVars").EnumerateArray().Select(static v => v.GetString()));
     }
 
     [Fact]
@@ -114,6 +163,40 @@ public sealed class HookSettingsProviderTests
 
         Assert.False(string.IsNullOrWhiteSpace(provider.TokenVariableName));
     }
+
+    [Fact]
+    public void Окружение_сессии_несёт_токен_вкладки_и_обход_прокси_для_loopback()
+    {
+        using var temp = new TempDirectory();
+        var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
+
+        var environment = provider.SessionEnvironment("tab-token");
+
+        Assert.Equal("tab-token", environment[provider.TokenVariableName]);
+
+        // Прежнее значение процесса сохраняется, loopback дописывается в конец.
+        Assert.EndsWith("127.0.0.1,localhost", environment["NO_PROXY"], StringComparison.Ordinal);
+        Assert.Equal(2, environment.Count);
+    }
+
+    [Theory]
+    [InlineData(null, "127.0.0.1,localhost")]
+    [InlineData("", "127.0.0.1,localhost")]
+    [InlineData("   ", "127.0.0.1,localhost")]
+    [InlineData("corp.local", "corp.local,127.0.0.1,localhost")]
+    [InlineData("corp.local,", "corp.local,127.0.0.1,localhost")]
+    public void Loopback_дописывается_к_NO_PROXY_без_потери_прежнего_значения(string? existing, string expected) =>
+        Assert.Equal(expected, HookSettingsProvider.LoopbackBypassingProxy(existing));
+
+    private static async Task<JsonElement> ReadHooks(HookSettingsProvider provider)
+    {
+        var path = await provider.EnsureSettingsFileAsync(Endpoint, CancellationToken.None);
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, CancellationToken.None));
+        return document.RootElement.GetProperty("hooks").Clone();
+    }
+
+    private static string[] PropertyNames(JsonElement element) =>
+        [.. element.EnumerateObject().Select(static p => p.Name).Order(StringComparer.Ordinal)];
 
     private static HookSettingsProvider CreateProvider(TempDirectory temp, string appData, out string claudeProjects)
     {
