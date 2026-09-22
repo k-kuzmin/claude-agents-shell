@@ -20,6 +20,7 @@ public sealed class HookListener : IHookListener
     private const int NoContent = 204;
 
     private readonly TimeProvider _timeProvider;
+    private readonly IHookLog _log;
     private readonly HttpListener _listener = new();
     private readonly CancellationTokenSource _cancellation = new();
 
@@ -28,10 +29,12 @@ public sealed class HookListener : IHookListener
     private bool _disposed;
 
     /// <inheritdoc cref="HookListener" />
-    public HookListener(TimeProvider timeProvider)
+    public HookListener(TimeProvider timeProvider, IHookLog log)
     {
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(log);
         _timeProvider = timeProvider;
+        _log = log;
     }
 
     /// <inheritdoc />
@@ -188,6 +191,9 @@ public sealed class HookListener : IHookListener
         var hookEvent = HookPayload.TryParse(body, token, _timeProvider.GetUtcNow());
         if (hookEvent is not null && !cancellationToken.IsCancellationRequested)
         {
+            // Журнал — до подписчиков: упавший подписчик не должен стоить строки о хуке,
+            // а сам журнал диска не ждёт и не бросает.
+            _log.Record(hookEvent);
             HookReceived?.Invoke(this, new HookEventArgs(hookEvent));
         }
     }
