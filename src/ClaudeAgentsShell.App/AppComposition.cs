@@ -67,6 +67,9 @@ internal static class AppComposition
         // Единственный источник состояния вкладок — хуки Claude Code (раздел 5.3 ТЗ).
         services.AddSingleton<SessionStateCoordinator>();
 
+        // Раскладка окна пишется по изменениям вкладок (issue #4).
+        services.AddSingleton<LayoutRecorder>();
+
         services.AddSingleton<ProjectListViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddSingleton<ShellShortcutHandler>();

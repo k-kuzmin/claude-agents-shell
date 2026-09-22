@@ -33,7 +33,9 @@ public sealed class ShellViewModelTests
             var list = new ProjectListViewModel(
                 Store, BranchReader, Watcher, Probe, Picker, Dialog, Prompt, Launcher, new InlineUiDispatcher());
             var sessionState = new SessionStateCoordinator(Hooks, Workspace, History, new InlineUiDispatcher());
-            Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher(), sessionState);
+            var layouts = new FakeLayoutStore();
+            Shell = new ShellViewModel(
+                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts, layouts.CreateRecorder());
         }
 
         public FakeProjectStore Store { get; } = new();

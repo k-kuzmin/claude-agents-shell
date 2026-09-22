@@ -205,6 +205,8 @@ public sealed class HookLogTests
 
         public string ProjectsFile => Path.Combine(appData, "projects.json");
 
+        public string LayoutFile => Path.Combine(appData, "layout.json");
+
         public string ClaudeProjects => Path.Combine(appData, "claude");
     }
 
@@ -225,6 +227,8 @@ public sealed class HookLogTests
         }
 
         public string ProjectsFile => throw new InvalidOperationException("путей нет");
+
+        public string LayoutFile => throw new InvalidOperationException("путей нет");
 
         public string ClaudeProjects => throw new InvalidOperationException("путей нет");
     }

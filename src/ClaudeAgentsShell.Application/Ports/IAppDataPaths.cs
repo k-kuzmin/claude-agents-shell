@@ -13,6 +13,12 @@ public interface IAppDataPaths
     string ProjectsFile { get; }
 
     /// <summary>
+    /// Полный путь к <c>layout.json</c> — раскладке окна, которую приложение поднимает при
+    /// следующем запуске (issue #4).
+    /// </summary>
+    string LayoutFile { get; }
+
+    /// <summary>
     /// Каталог с транскриптами сессий Claude Code (<c>~/.claude/projects</c>).
     /// Только для чтения: ни записи, ни удаления.
     /// </summary>

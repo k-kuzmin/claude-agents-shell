@@ -54,6 +54,10 @@ internal sealed class WindowShutdownSequence
     /// <summary>Источник записи в журнале: брошенное по потолку гашение упало уже в фоне.</summary>
     internal const string LateCrashSource = "WindowShutdownSequence.AfterDeadline";
 
+    /// <summary>Источник записи в журнале: раскладку окна перед гашением записать не удалось.</summary>
+    internal const string LayoutCrashSource = "WindowShutdownSequence.Layout";
+
+    private readonly Func<Task> _persistLayout;
     private readonly Func<Task> _shutdown;
     private readonly Action _hide;
     private readonly Action _close;
@@ -65,6 +69,11 @@ internal sealed class WindowShutdownSequence
     private bool _started;
     private bool _completed;
 
+    /// <param name="persistLayout">
+    /// Запись раскладки окна и её заморозка (issue #4). Зовётся на первой попытке закрытия
+    /// <b>до</b> гашения: гашение шлёт выход оболочек, и незамороженная раскладка записала бы
+    /// пустой набор вкладок. Синхронная часть делегата выполняется прямо внутри попытки.
+    /// </param>
     /// <param name="shutdown">Собственно гашение: освобождение вкладок и моста.</param>
     /// <param name="hide">Убрать окно с экрана — вызывается один раз, на первой попытке.</param>
     /// <param name="close">Закрыть окно — вызывается один раз, когда гашение кончилось или вышло за потолок.</param>
@@ -72,16 +81,22 @@ internal sealed class WindowShutdownSequence
     /// <param name="signal">Общий признак «гашение началось».</param>
     /// <param name="log">Журнал сбоев: туда уходит упавшее гашение — ждать его больше некому.</param>
     internal WindowShutdownSequence(
+        Func<Task> persistLayout,
         Func<Task> shutdown,
         Action hide,
         Action close,
         TimeProvider timeProvider,
         ShutdownSignal signal,
         ICrashLog log)
-        : this(shutdown, hide, close, timeProvider, signal, log, ShutdownDeadline)
+        : this(persistLayout, shutdown, hide, close, timeProvider, signal, log, ShutdownDeadline)
     {
     }
 
+    /// <param name="persistLayout">
+    /// Запись раскладки окна и её заморозка (issue #4). Зовётся на первой попытке закрытия
+    /// <b>до</b> гашения: гашение шлёт выход оболочек, и незамороженная раскладка записала бы
+    /// пустой набор вкладок. Синхронная часть делегата выполняется прямо внутри попытки.
+    /// </param>
     /// <param name="shutdown">Собственно гашение: освобождение вкладок и моста.</param>
     /// <param name="hide">Убрать окно с экрана — вызывается один раз, на первой попытке.</param>
     /// <param name="close">Закрыть окно — вызывается один раз, когда гашение кончилось или вышло за потолок.</param>
@@ -90,6 +105,7 @@ internal sealed class WindowShutdownSequence
     /// <param name="log">Журнал сбоев: туда уходит упавшее гашение — ждать его больше некому.</param>
     /// <param name="deadline">Потолок, отличный от <see cref="ShutdownDeadline"/>. Нужен тестам.</param>
     internal WindowShutdownSequence(
+        Func<Task> persistLayout,
         Func<Task> shutdown,
         Action hide,
         Action close,
@@ -98,6 +114,7 @@ internal sealed class WindowShutdownSequence
         ICrashLog log,
         TimeSpan deadline)
     {
+        ArgumentNullException.ThrowIfNull(persistLayout);
         ArgumentNullException.ThrowIfNull(shutdown);
         ArgumentNullException.ThrowIfNull(hide);
         ArgumentNullException.ThrowIfNull(close);
@@ -105,6 +122,7 @@ internal sealed class WindowShutdownSequence
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(log);
 
+        _persistLayout = persistLayout;
         _shutdown = shutdown;
         _hide = hide;
         _close = close;
@@ -145,18 +163,22 @@ internal sealed class WindowShutdownSequence
             // ошибке некому — включая сбой в самом Hide.
             _signal.MarkStarted();
 
+            // Раскладка снимается и замораживается раньше всего остального: до первого шага
+            // гашения и до того, как очередь интерфейса успеет выполнить хоть одно событие.
+            var persisting = StartPersistingLayout();
+
             // Окно уходит с экрана и с панели задач до того, как начнётся ожидание.
             // Оно остаётся открытым — спрятанное окно закрывается как обычное, и
             // ShutdownMode="OnMainWindowClose" сработает на его Close как всегда.
             _hide();
 
-            Running = RunAsync();
+            Running = RunAsync(persisting);
         }
 
         return true;
     }
 
-    private async Task RunAsync()
+    private async Task RunAsync(Task persisting)
     {
         // Возврат в очередь диспетчера до первого шага. Гашение, которое почему-то
         // закончилось синхронно, иначе позвало бы Close() прямо изнутри OnClosing — WPF
@@ -167,7 +189,7 @@ internal sealed class WindowShutdownSequence
         {
             // Запуск гашения внутри try: синхронный бросок из делегата иначе унёс бы
             // управление мимо finally и оставил бы окно спрятанным навсегда.
-            var shutdown = _shutdown();
+            var shutdown = PersistThenShutdownAsync(persisting);
 
             try
             {
@@ -199,6 +221,38 @@ internal sealed class WindowShutdownSequence
             _completed = true;
             _close();
         }
+    }
+
+    private Task StartPersistingLayout()
+    {
+        try
+        {
+            return _persistLayout();
+        }
+        catch (Exception exception)
+        {
+            // Сбой раскладки не повод оставить окно висеть: гашение идёт дальше.
+            Record(LayoutCrashSource, exception);
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Сначала дожидается записи раскладки, затем гасит. Оба шага — под общим потолком.
+    /// ConfigureAwait не ставится: гашение освобождает объекты потока интерфейса.
+    /// </summary>
+    private async Task PersistThenShutdownAsync(Task persisting)
+    {
+        try
+        {
+            await persisting;
+        }
+        catch (Exception exception)
+        {
+            Record(LayoutCrashSource, exception);
+        }
+
+        await _shutdown();
     }
 
     private void Observe(Task task) =>

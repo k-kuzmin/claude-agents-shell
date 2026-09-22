@@ -41,7 +41,14 @@ public partial class MainWindow : Window
         _shell = shell;
         _shortcuts = shortcuts;
         _runtimeMissingDialog = runtimeMissingDialog;
-        _shutdown = new WindowShutdownSequence(ReleaseAsync, Hide, Close, timeProvider, shutdownSignal, crashLog);
+        _shutdown = new WindowShutdownSequence(
+            () => _shell.PersistLayoutAndFreezeAsync(CancellationToken.None),
+            ReleaseAsync,
+            Hide,
+            Close,
+            timeProvider,
+            shutdownSignal,
+            crashLog);
 
         DataContext = _shell;
         TerminalHost.Children.Add(_bridge.Control);

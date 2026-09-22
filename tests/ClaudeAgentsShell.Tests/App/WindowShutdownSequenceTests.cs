@@ -86,6 +86,7 @@ public sealed class WindowShutdownSequenceTests
         var time = new ManualTimeProvider();
         var recorder = new Recorder();
         var sequence = new WindowShutdownSequence(
+            static () => Task.CompletedTask,
             recorder.ShutdownAsync,
             recorder.Hide,
             recorder.Close,
@@ -281,7 +282,7 @@ public sealed class WindowShutdownSequenceTests
         Create(recorder, new ShutdownSignal(), new FakeCrashLog());
 
     private static WindowShutdownSequence Create(Recorder recorder, ShutdownSignal signal, FakeCrashLog log) =>
-        new(recorder.ShutdownAsync, recorder.Hide, recorder.Close, new ManualTimeProvider(), signal, log, Deadline);
+        new(static () => Task.CompletedTask, recorder.ShutdownAsync, recorder.Hide, recorder.Close, new ManualTimeProvider(), signal, log, Deadline);
 
     /// <summary>
     /// Окно, сведённое к трём счётчикам, и гашение, которым управляет тест. Ожидания тут
