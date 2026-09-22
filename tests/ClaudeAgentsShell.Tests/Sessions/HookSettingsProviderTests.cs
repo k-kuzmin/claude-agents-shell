@@ -27,7 +27,7 @@ public sealed class HookSettingsProviderTests
     }
 
     [Fact]
-    public async Task Зарегистрированы_все_три_хука_и_каждый_зовёт_командный_файл()
+    public async Task Зарегистрированы_все_семь_хуков_и_каждый_зовёт_командный_файл()
     {
         using var temp = new TempDirectory();
         var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
@@ -37,7 +37,24 @@ public sealed class HookSettingsProviderTests
         using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, CancellationToken.None));
         var hooks = document.RootElement.GetProperty("hooks");
 
-        foreach (var name in new[] { "SessionStart", "Stop", "SessionEnd" })
+        // Семь зарегистрированных хуков — единственный источник состояния вкладки
+        // (раздел 7 CLAUDE.md), но не весь набор хуков Claude Code: Notification сознательно
+        // не регистрируется. Список точный и в обе стороны: лишнее имя Claude Code молча
+        // пропустит, а недостающее оставит вкладку без перехода.
+        string[] expected =
+        [
+            "SessionStart",
+            "UserPromptSubmit",
+            "Stop",
+            "StopFailure",
+            "SubagentStart",
+            "SubagentStop",
+            "SessionEnd",
+        ];
+
+        Assert.Equal(expected.Length, hooks.EnumerateObject().Count());
+
+        foreach (var name in expected)
         {
             var command = hooks.GetProperty(name)[0].GetProperty("hooks")[0];
 

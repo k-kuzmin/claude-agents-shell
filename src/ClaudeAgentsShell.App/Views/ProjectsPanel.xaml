@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:ClaudeAgentsShell.App.ViewModels"
+             xmlns:domain="clr-namespace:ClaudeAgentsShell.Domain;assembly=ClaudeAgentsShell.Domain"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
@@ -23,6 +24,72 @@
                         <Setter Property="Visibility" Value="Visible" />
                     </DataTrigger>
                 </Style.Triggers>
+            </Style>
+
+            <!-- Контекстное меню строки проекта. Стандартная отделка MenuItem светлая и на
+                 тёмной панели читается чужеродно, поэтому шаблон свой, на цветах Theme.xaml. -->
+            <Style x:Key="RowContextMenuStyle" TargetType="ContextMenu">
+                <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+                <Setter Property="FontSize" Value="12.5" />
+                <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ContextMenu">
+                            <Border Background="{StaticResource ChromeBackgroundBrush}"
+                                    BorderBrush="{StaticResource OutlineBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="4"
+                                    SnapsToDevicePixels="True">
+                                <StackPanel IsItemsHost="True"
+                                            KeyboardNavigation.DirectionalNavigation="Cycle" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="RowMenuItemStyle" TargetType="MenuItem">
+                <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+                <Setter Property="Padding" Value="10,6" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="MenuItem">
+                            <Border x:Name="MenuItemRoot"
+                                    Background="Transparent"
+                                    CornerRadius="6"
+                                    Padding="{TemplateBinding Padding}"
+                                    SnapsToDevicePixels="True">
+                                <ContentPresenter ContentSource="Header"
+                                                  VerticalAlignment="Center"
+                                                  RecognizesAccessKey="True" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter TargetName="MenuItemRoot" Property="Background"
+                                            Value="{StaticResource RowHoverBrush}" />
+                                    <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Foreground" Value="{StaticResource DisabledTextBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="RowMenuSeparatorStyle" TargetType="Separator">
+                <Setter Property="Height" Value="1" />
+                <Setter Property="Margin" Value="6,4" />
+                <Setter Property="Background" Value="{StaticResource SeparatorBrush}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Separator">
+                            <Border Background="{TemplateBinding Background}" Height="1" />
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
             <Style x:Key="RowRestingStyle" TargetType="FrameworkElement">
@@ -75,7 +142,27 @@
                                 Background="Transparent"
                                 BorderThickness="2,0,0,0"
                                 BorderBrush="Transparent"
-                                ToolTip="{Binding PathAndBranch}">
+                                ToolTip="{Binding PathAndBranch}"
+                                Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                            <!-- Меню живёт в своём визуальном дереве: команды берутся у корневой
+                                 ViewModel через Tag строки, а строка — у её же DataContext. -->
+                            <Border.ContextMenu>
+                                <ContextMenu Style="{StaticResource RowContextMenuStyle}">
+                                    <MenuItem Header="Открыть папку в проводнике"
+                                              Style="{StaticResource RowMenuItemStyle}"
+                                              Command="{Binding PlacementTarget.Tag.OpenProjectFolderCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <MenuItem Header="Настройки проекта…"
+                                              Style="{StaticResource RowMenuItemStyle}"
+                                              Command="{Binding PlacementTarget.Tag.ShowSettingsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <Separator Style="{StaticResource RowMenuSeparatorStyle}" />
+                                    <MenuItem Header="Убрать из списка"
+                                              Style="{StaticResource RowMenuItemStyle}"
+                                              Command="{Binding PlacementTarget.Tag.RemoveProjectCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                </ContextMenu>
+                            </Border.ContextMenu>
                             <Border.InputBindings>
                                 <MouseBinding MouseAction="LeftClick"
                                               Command="{Binding DataContext.SelectProjectCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
@@ -109,7 +196,13 @@
                                             VerticalAlignment="Center"
                                             Margin="0,0,8,0"
                                             Style="{StaticResource RowRestingStyle}">
-                                    <Ellipse Width="6" Height="6"
+                                    <!-- Точка состояния проекта: самое важное из состояний его вкладок
+                                         (MarkerState). Кисти те же, что у точек вкладок в TabStrip.xaml, —
+                                         два маркера одного состояния не должны различаться по цвету.
+                                         Состояние по умолчанию, TabState.Unknown, стоит здесь заливкой,
+                                         поэтому отдельного триггера у него нет. -->
+                                    <Ellipse x:Name="StateDot"
+                                             Width="6" Height="6"
                                              Margin="0,0,6,0"
                                              VerticalAlignment="Center"
                                              Fill="{StaticResource UnknownStateBrush}"
@@ -133,10 +226,15 @@
                                             CommandParameter="{Binding}"
                                             ToolTip="Новая сессия"
                                             AutomationProperties.Name="Новая сессия в проекте">
-                                        <Path Style="{StaticResource IconPathStyle}"
-                                              StrokeThickness="2.2"
-                                              Stroke="{StaticResource PrimaryTextBrush}"
-                                              Data="M7.5,3 L7.5,12 M3,7.5 L12,7.5" />
+                                        <!-- Сетка 15×15, как у остальных глифов: у Path со Stretch=None
+                                             размер равен правому-нижнему краю геометрии, поэтому без
+                                             Canvas отступ появляется только слева и сверху и знак
+                                             съезжает вправо-вниз относительно соседней кнопки. -->
+                                        <Canvas Width="15" Height="15">
+                                            <Path Style="{StaticResource IconPathStyle}"
+                                                  Stroke="{StaticResource PrimaryTextBrush}"
+                                                  Data="M7.5,3 L7.5,12 M3,7.5 L12,7.5" />
+                                        </Canvas>
                                     </Button>
                                     <!-- Окно истории приезжает в M3: кнопка на месте, но отключена. -->
                                     <Button Width="28" Height="28"
@@ -169,6 +267,22 @@
                                 <Setter TargetName="RowRoot" Property="Background" Value="{StaticResource RowHoverBrush}" />
                                 <Setter TargetName="RowRoot" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
                                 <Setter TargetName="ProjectName" Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                            </DataTrigger>
+                            <!-- Точка состояния проекта: свод по его вкладкам (раздел 6.2 ТЗ).
+                                 Кисти те же, что у точек вкладок в TabStrip.xaml, — один и тот же
+                                 TabState обязан выглядеть одинаково в обоих местах.
+                                 Unknown отдельного триггера не имеет: это заливка по умолчанию. -->
+                            <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.Idle}">
+                                <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource DisabledTextBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.Busy}">
+                                <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource CalmBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.AwaitingInput}">
+                                <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource AccentBrush}" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding MarkerState}" Value="{x:Static domain:TabState.BackgroundWork}">
+                                <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource BackgroundWorkBrush}" />
                             </DataTrigger>
                             <!-- Каталог исчез: строка недоступна, запуск заблокирован (раздел 8 ТЗ). -->
                             <DataTrigger Binding="{Binding IsAvailable}" Value="False">

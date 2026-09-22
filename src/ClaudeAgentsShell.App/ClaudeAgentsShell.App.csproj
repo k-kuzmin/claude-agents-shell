@@ -7,6 +7,10 @@
     <AssemblyName>ClaudeAgentsShell</AssemblyName>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Иконка вшивается в exe, поэтому её берут и панель задач, и alt-tab, и проводник.
+         Window.Icon при этом не задаётся: WPF сам подставляет иконку процесса, а отдельная
+         привязка на каждое окно разъезжалась бы с ней при первой же правке знака. -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
@@ -17,9 +21,11 @@
     <ProjectReference Include="..\ClaudeAgentsShell.Sessions\ClaudeAgentsShell.Sessions.csproj" />
   </ItemGroup>
 
-  <!-- Расчёт границ развёрнутого окна (WorkAreaPlacement) — чистая арифметика над
-       прямоугольниками монитора, и проверяется она тестом, а не запуском GUI.
-       Наружу класс при этом не выставляется. -->
+  <!-- Тестам видны два внутренних типа, и оба проверяются без запуска GUI.
+       WorkAreaPlacement — расчёт границ развёрнутого окна: чистая арифметика над
+       прямоугольниками монитора. AppComposition — список регистраций DI: забытую
+       регистрацию не ловит ни компилятор, ни тесты на ViewModel, зато она роняет
+       приложение на старте. Наружу сборки ни тот, ни другой не выставляется. -->
   <ItemGroup>
     <InternalsVisibleTo Include="ClaudeAgentsShell.Tests" />
   </ItemGroup>

@@ -573,8 +573,18 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         }
     }
 
+    /// <summary>
+    /// Страница отдала ввод — он безусловно уходит в stdin псевдоконсоли и больше никуда.
+    /// </summary>
+    /// <remarks>
+    /// Состояние вкладки отсюда не выводится: в этот же канал страница отдаёт ответы терминала
+    /// на запросы программы — отчёт о фокусе, Device Attributes, цвет, размер, — и переключение
+    /// вкладок выглядело бы вводом пользователя. Источник состояния — только хуки
+    /// (раздел 7 CLAUDE.md).
+    /// </remarks>
     private async void OnInputReceived(object? sender, TerminalInputEventArgs args)
     {
+        // У мёртвой вкладки помпы нет — писать некуда.
         if (!_pumps.TryGetValue(args.TerminalId.Value, out var pump))
         {
             return;

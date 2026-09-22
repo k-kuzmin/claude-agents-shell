@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 
@@ -13,22 +14,34 @@ public partial class MainWindow : Window
     private readonly WebView2TerminalBridge _bridge;
     private readonly ShellViewModel _shell;
     private readonly ShellShortcutHandler _shortcuts;
-
-    private bool _shutdownStarted;
-    private bool _shutdownCompleted;
+    private readonly IWebView2MissingDialog _runtimeMissingDialog;
+    private readonly WindowShutdownSequence _shutdown;
 
     /// <inheritdoc cref="MainWindow" />
-    public MainWindow(WebView2TerminalBridge bridge, ShellViewModel shell, ShellShortcutHandler shortcuts)
+    public MainWindow(
+        WebView2TerminalBridge bridge,
+        ShellViewModel shell,
+        ShellShortcutHandler shortcuts,
+        IWebView2MissingDialog runtimeMissingDialog,
+        TimeProvider timeProvider,
+        ShutdownSignal shutdownSignal,
+        ICrashLog crashLog)
     {
         ArgumentNullException.ThrowIfNull(bridge);
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(shortcuts);
+        ArgumentNullException.ThrowIfNull(runtimeMissingDialog);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(shutdownSignal);
+        ArgumentNullException.ThrowIfNull(crashLog);
 
         InitializeComponent();
 
         _bridge = bridge;
         _shell = shell;
         _shortcuts = shortcuts;
+        _runtimeMissingDialog = runtimeMissingDialog;
+        _shutdown = new WindowShutdownSequence(ReleaseAsync, Hide, Close, timeProvider, shutdownSignal, crashLog);
 
         DataContext = _shell;
         TerminalHost.Children.Add(_bridge.Control);
@@ -80,21 +93,13 @@ public partial class MainWindow : Window
     {
         ArgumentNullException.ThrowIfNull(e);
 
-        if (!_shutdownCompleted)
-        {
-            // Закрытие отменяется на КАЖДОЙ попытке, пока гашение не закончено, а не только
-            // на первой. Иначе повторный клик по крестику закрывал бы окно посреди гашения:
-            // App.OnExit освободил бы контейнер, чьи объекты уже помечены освобождёнными и
-            // вернулись бы мгновенно, не дождавшись первой цепочки, — и псевдоконсоли
-            // пережили бы процесс.
-            e.Cancel = true;
-
-            if (!_shutdownStarted)
-            {
-                _shutdownStarted = true;
-                _ = ShutdownAsync();
-            }
-        }
+        // Закрытие отменяется на КАЖДОЙ попытке, пока гашение не закончено, а не только
+        // на первой. Иначе повторный клик по крестику закрывал бы окно посреди гашения:
+        // App.OnExit освободил бы контейнер, чьи объекты уже помечены освобождёнными и
+        // вернулись бы мгновенно, не дождавшись первой цепочки, — и псевдоконсоли
+        // пережили бы процесс. Первая попытка при этом прячет окно, поэтому отменённое
+        // закрытие не выглядит неотреагировавшим крестиком.
+        e.Cancel = _shutdown.HandleCloseRequest();
 
         base.OnClosing(e);
     }
@@ -122,6 +127,15 @@ public partial class MainWindow : Window
         {
             await _shell.InitializeAsync(CancellationToken.None);
         }
+        catch (TerminalRuntimeMissingException exception)
+        {
+            // Единственный сбой старта, который пользователь чинит сам: показываем разговор
+            // со ссылкой на установщик, а не стек-трейс (раздел 8 ТЗ). Ветка обязана стоять
+            // выше общей: тип наследует TerminalBridgeUnavailableException, и в обратном
+            // порядке она молча никогда бы не выполнилась.
+            _runtimeMissingDialog.Show(exception);
+            Close();
+        }
         catch (Exception exception) when (exception is TerminalBridgeUnavailableException
                                              or ShellNotFoundException)
         {
@@ -134,22 +148,16 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task ShutdownAsync()
+    /// <summary>
+    /// Собственно гашение. Окно к этому моменту уже спрятано, но не закрыто: его
+    /// дескриптор жив, дочернее окно WebView2 вместе с ним, и мост освобождается
+    /// как обычно. Закрытием и потолком распоряжается <see cref="WindowShutdownSequence"/>.
+    /// </summary>
+    private async Task ReleaseAsync()
     {
-        try
-        {
-            // Помпы освобождаются раньше моста: им нужно дождаться подтверждений страницы.
-            // Набором вкладок владеет корневая ViewModel — она же его и гасит.
-            await _shell.DisposeAsync();
-            await _bridge.DisposeAsync();
-        }
-        finally
-        {
-            // Что бы ни случилось при освобождении, окно должно закрыться:
-            // иначе крестик перестанет работать совсем. Снятый флаг пропускает
-            // повторный вход в OnClosing без отмены.
-            _shutdownCompleted = true;
-            Close();
-        }
+        // Помпы освобождаются раньше моста: им нужно дождаться подтверждений страницы.
+        // Набором вкладок владеет корневая ViewModel — она же его и гасит.
+        await _shell.DisposeAsync();
+        await _bridge.DisposeAsync();
     }
 }

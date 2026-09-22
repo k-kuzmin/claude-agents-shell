@@ -7,9 +7,10 @@ namespace ClaudeAgentsShell.Sessions.History;
 /// <summary>
 /// Читает транскрипты Claude Code из <c>~/.claude/projects/&lt;slug&gt;</c> (раздел 5.2 ТЗ).
 /// <para>
-/// Файл читается потоково и чтение прекращается, как только найден заголовок: транскрипты
-/// вырастают до десятков мегабайт, а нужна из них одна строка. Разобранное кэшируется
-/// по ключу «путь, время изменения, размер».
+/// Файл читается потоково и чтение прекращается, как только найден заголовок, но не позже
+/// <see cref="SessionsOptions.TranscriptScanLimit"/>: транскрипты вырастают до десятков
+/// мегабайт, а нужна из них одна строка. Разобранное кэшируется по ключу «путь, время
+/// изменения, размер».
 /// </para>
 /// <para>
 /// Файлы только читаются: ни записи, ни удаления, ни создания каталога (раздел 7 CLAUDE.md).
@@ -23,13 +24,19 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
     private const int SessionIdLimit = 128;
 
     private readonly IAppDataPaths _paths;
+    private readonly long _scanLimit;
     private readonly ConcurrentDictionary<string, CachedSummary> _cache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <inheritdoc cref="SessionHistoryReader" />
-    public SessionHistoryReader(IAppDataPaths paths)
+    /// <param name="paths">Каталоги приложения и Claude Code.</param>
+    /// <param name="options">Настройки слоя; отсюда берётся предел просмотра транскрипта.</param>
+    public SessionHistoryReader(IAppDataPaths paths, SessionsOptions options)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(options);
+
         _paths = paths;
+        _scanLimit = options.TranscriptScanLimit;
     }
 
     /// <inheritdoc />
@@ -60,7 +67,10 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         var summaries = new List<SessionSummary>(files.Length);
         foreach (var file in files.OrderByDescending(static f => f.LastWriteTimeUtc))
         {
-            summaries.Add(await ReadFileAsync(file, cancellationToken).ConfigureAwait(false));
+            // Списку сводка нужна всегда: не дочитанный и не открывшийся файл всё равно
+            // показывается строкой «имя файла и дата» (раздел 8 ТЗ).
+            var parsed = await ReadFileAsync(file, cancellationToken).ConfigureAwait(false);
+            summaries.Add(parsed.Summary);
         }
 
         return summaries;
@@ -87,7 +97,12 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
                 return null;
             }
 
-            return await ReadFileAsync(file, cancellationToken).ConfigureAwait(false);
+            var parsed = await ReadFileAsync(file, cancellationToken).ConfigureAwait(false);
+
+            // Файл прочитан — сводка отдаётся даже без заголовка: это ответ «искали и не нашли»,
+            // по которому вызывающий перестаёт спрашивать. Не открылся или оборвался на середине —
+            // null, и тогда спросить позже имеет смысл.
+            return parsed.Readable || parsed.Summary.Title is not null ? parsed.Summary : null;
         }
         catch (Exception exception) when (exception is IOException
                                               or UnauthorizedAccessException
@@ -120,30 +135,32 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         return true;
     }
 
-    private async Task<SessionSummary> ReadFileAsync(FileInfo file, CancellationToken cancellationToken)
+    private async Task<ParsedTranscript> ReadFileAsync(FileInfo file, CancellationToken cancellationToken)
     {
         var modified = new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero);
         var size = file.Length;
 
         if (_cache.TryGetValue(file.FullName, out var cached) && cached.Matches(modified, size))
         {
-            return cached.Summary;
+            return cached.Parsed;
         }
 
-        var summary = await ParseAsync(file, modified, size, cancellationToken).ConfigureAwait(false);
-        _cache[file.FullName] = new CachedSummary(modified, size, summary);
-        return summary;
+        var parsed = await ParseAsync(file, modified, size, _scanLimit, cancellationToken).ConfigureAwait(false);
+        _cache[file.FullName] = new CachedSummary(modified, size, parsed);
+        return parsed;
     }
 
-    private static async Task<SessionSummary> ParseAsync(
+    private static async Task<ParsedTranscript> ParseAsync(
         FileInfo file,
         DateTimeOffset modified,
         long size,
+        long scanLimit,
         CancellationToken cancellationToken)
     {
         var sessionId = Path.GetFileNameWithoutExtension(file.Name);
         string? title = null;
         string? branch = null;
+        var readable = true;
 
         try
         {
@@ -157,6 +174,7 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
 
             using var reader = new StreamReader(stream);
 
+            var scanned = 0L;
             while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
             {
                 var parsed = TranscriptLineParser.Parse(line);
@@ -169,6 +187,18 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
                     // Заголовок найден — дальше файл не читаем, он может быть очень большим.
                     break;
                 }
+
+                // Предел просмотра: заголовок ищется повторно, по хуку Stop, и многомегабайтный
+                // проход недопустим. Считаются символы UTF-16, а не байты — на кириллице реально
+                // прочитанных байтов примерно вдвое больше (той же мерой снят и замер, на котором
+                // выбрано значение предела). Отсчёт идёт по уже прочитанному, поэтому одна
+                // аномально длинная строка предел перешагнёт: ограничить её длину, не потеряв
+                // заголовок из вставленного лога, нечем.
+                scanned += line.Length + 1;
+                if (scanned >= scanLimit)
+                {
+                    break;
+                }
             }
         }
         catch (Exception exception) when (exception is IOException
@@ -176,14 +206,26 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
                                               or ObjectDisposedException)
         {
             // Деградация до «имя файла и дата»: это допустимо, исключение наружу — нет.
+            // Но отличать «прочитали и не нашли» от «прочитать не смогли» обязательно:
+            // во втором случае спросить позже имеет смысл, в первом — нет.
+            readable = false;
         }
 
         // MessageCount остаётся null умышленно: чтобы его посчитать, пришлось бы дочитать файл
         // до конца, а это прямо противоречит требованию остановиться на заголовке.
-        return new SessionSummary(sessionId, file.FullName, modified, size, title, null, branch);
+        return new ParsedTranscript(
+            new SessionSummary(sessionId, file.FullName, modified, size, title, null, branch), readable);
     }
 
-    private readonly record struct CachedSummary(DateTimeOffset Modified, long Size, SessionSummary Summary)
+    /// <summary>Разобранный транскрипт и признак того, что файл удалось прочитать.</summary>
+    /// <param name="Summary">Сводка; без заголовка, если его не нашли или чтение сорвалось.</param>
+    /// <param name="Readable">
+    /// <c>false</c> — файл не открылся или чтение оборвалось. Отсутствие заголовка в этом случае
+    /// ничего не доказывает, и спросить позже имеет смысл.
+    /// </param>
+    private readonly record struct ParsedTranscript(SessionSummary Summary, bool Readable);
+
+    private readonly record struct CachedSummary(DateTimeOffset Modified, long Size, ParsedTranscript Parsed)
     {
         public bool Matches(DateTimeOffset modified, long size) => Modified == modified && Size == size;
     }

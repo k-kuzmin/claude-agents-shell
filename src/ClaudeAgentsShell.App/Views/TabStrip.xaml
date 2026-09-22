@@ -7,7 +7,14 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:ShellViewModel}"
-             Background="{DynamicResource ChromeBackgroundBrush}">
+             Background="{DynamicResource ChromeBackgroundBrush}"
+             AllowDrop="True"
+             PreviewMouseLeftButtonDown="OnTabPressed"
+             PreviewMouseLeftButtonUp="OnTabReleased"
+             PreviewMouseMove="OnTabPointerMoved"
+             DragOver="OnTabDragOver"
+             DragLeave="OnTabDragLeave"
+             Drop="OnTabDropped">
 
     <UserControl.Resources>
         <ResourceDictionary>
@@ -27,116 +34,185 @@
         <ScrollViewer Grid.Column="0"
                       HorizontalScrollBarVisibility="Hidden"
                       VerticalScrollBarVisibility="Disabled">
-            <StackPanel Orientation="Horizontal">
-                <ItemsControl ItemsSource="{Binding Tabs.Tabs}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="{x:Type vm:TabViewModel}">
-                            <Border x:Name="TabRoot"
-                                    MinWidth="200"
-                                    MaxWidth="260"
-                                    Padding="14,0,10,0"
-                                    Background="Transparent"
-                                    BorderThickness="0,2,1,0"
-                                    BorderBrush="{StaticResource SeparatorBrush}"
-                                    ToolTip="{Binding Title}">
-                                <Border.InputBindings>
-                                    <MouseBinding MouseAction="LeftClick"
-                                                  Command="{Binding DataContext.ActivateTabCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                  CommandParameter="{Binding}" />
-                                </Border.InputBindings>
+            <Grid>
+                <StackPanel Orientation="Horizontal" Background="Transparent">
+                    <ItemsControl x:Name="TabItems" ItemsSource="{Binding Tabs.Tabs}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:TabViewModel}">
+                                <Border x:Name="TabRoot"
+                                        MinWidth="200"
+                                        MaxWidth="260"
+                                        Padding="14,0,10,0"
+                                        Background="Transparent"
+                                        BorderThickness="0,2,1,0"
+                                        BorderBrush="{StaticResource SeparatorBrush}"
+                                        ToolTip="{Binding Title}">
+                                    <Border.InputBindings>
+                                        <MouseBinding MouseAction="LeftClick"
+                                                      Command="{Binding DataContext.ActivateTabCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                      CommandParameter="{Binding}" />
+                                    </Border.InputBindings>
 
-                                <Grid VerticalAlignment="Center">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
+                                    <Grid VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
 
-                                    <!-- Точка состояния. Источник состояния — хуки (M4);
-                                         до тех пор все вкладки в TabState.Unknown. -->
-                                    <Ellipse x:Name="StateDot"
-                                             Grid.Column="0"
-                                             Width="6" Height="6"
-                                             Margin="0,0,9,0"
-                                             VerticalAlignment="Center"
-                                             Fill="{StaticResource UnknownStateBrush}" />
+                                        <!-- Точка состояния. Единственный источник — хуки Claude Code. Клавиатура
+                                             источником быть не может: страница шлёт тем же каналом
+                                             ответы терминала. Хуки не подключились — TabState.Unknown. -->
+                                        <Ellipse x:Name="StateDot"
+                                                 Grid.Column="0"
+                                                 Width="6" Height="6"
+                                                 Margin="0,0,9,0"
+                                                 VerticalAlignment="Center"
+                                                 Fill="{StaticResource UnknownStateBrush}" />
 
-                                    <TextBlock x:Name="TabTitle"
-                                               Grid.Column="1"
-                                               Text="{Binding Title}"
-                                               VerticalAlignment="Center"
-                                               FontSize="12.5"
-                                               TextTrimming="CharacterEllipsis"
-                                               Foreground="{StaticResource MutedTextBrush}" />
+                                        <TextBlock x:Name="TabTitle"
+                                                   Grid.Column="1"
+                                                   Text="{Binding Title}"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="12.5"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Foreground="{StaticResource MutedTextBrush}" />
 
-                                    <Button Grid.Column="2"
-                                            Width="20" Height="20"
-                                            Style="{StaticResource FlatButtonStyle}"
-                                            Foreground="{StaticResource DisabledTextBrush}"
-                                            Command="{Binding DataContext.CloseTabCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                            CommandParameter="{Binding}"
-                                            ToolTip="Закрыть вкладку"
-                                            AutomationProperties.Name="Закрыть вкладку">
-                                        <Path Style="{StaticResource IconPathStyle}"
-                                              StrokeThickness="1.4"
-                                              Stroke="{StaticResource FaintTextBrush}"
-                                              Data="M2,2 L9,9 M9,2 L2,9" />
-                                    </Button>
-                                </Grid>
-                            </Border>
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <!-- Пометка о коде выхода (раздел 8 ТЗ): текстом, а не подсказкой —
+                                                 код должен быть виден, не наводя мышь. Пока процесс жив,
+                                                 пометки и кнопки «перезапустить» нет. Точка состояния при этом
+                                                 серая: координатор состояний снимает маркер умершей вкладки,
+                                                 и пометка с точкой друг другу не противоречат.
+                                                 Код не подрезается: длинный код падения Windows съест место
+                                                 у заголовка, но на мёртвой вкладке важен именно он, а заголовок
+                                                 и так сворачивается многоточием и целиком виден в подсказке. -->
+                                            <TextBlock x:Name="ExitBadge"
+                                                       VerticalAlignment="Center"
+                                                       Margin="4,0,6,0"
+                                                       FontSize="10.5"
+                                                       FontFamily="{StaticResource MonoFontFamily}"
+                                                       Foreground="{StaticResource FaintTextBrush}"
+                                                       Text="{Binding ExitBadgeText}"
+                                                       Visibility="{Binding HasExited, Converter={StaticResource BoolToVisibility}}"
+                                                       ToolTip="Процесс сессии завершился" />
 
-                            <DataTemplate.Triggers>
-                                <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                    <Setter TargetName="TabRoot" Property="Background" Value="{StaticResource WorkAreaBackgroundBrush}" />
-                                    <Setter TargetName="TabRoot" Property="MinWidth" Value="216" />
-                                    <Setter TargetName="TabTitle" Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.Idle}">
-                                    <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource DisabledTextBrush}" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.Busy}">
-                                    <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource CalmBrush}" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.AwaitingInput}">
-                                    <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource AccentBrush}" />
-                                </DataTrigger>
-                            </DataTemplate.Triggers>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                                            <!-- Перезапуск — это новая сессия в том же проекте соседней вкладкой:
+                                                 на мёртвой вкладке остаётся её вывод, ради которого она и живёт
+                                                 после выхода процесса. Кнопка не становится ручкой перетаскивания
+                                                 сама собой: TabStrip.DraggableTabAt отказывается тащить вкладку,
+                                                 если под указателем ButtonBase. -->
+                                            <Button x:Name="RestartButton"
+                                                    Width="20" Height="20"
+                                                    Style="{StaticResource FlatButtonStyle}"
+                                                    Foreground="{StaticResource DisabledTextBrush}"
+                                                    Visibility="{Binding HasExited, Converter={StaticResource BoolToVisibility}}"
+                                                    Command="{Binding DataContext.RestartTabCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Перезапустить: новая сессия в том же проекте"
+                                                    AutomationProperties.Name="Перезапустить сессию">
+                                                <Path x:Name="RestartIcon"
+                                                      Style="{StaticResource IconPathStyle}"
+                                                      StrokeThickness="1.3"
+                                                      Stroke="{StaticResource FaintTextBrush}"
+                                                      Data="M9.25,3.1 A4.5,4.5 0 1 1 4.75,3.1 M4.75,3.1 L3.55,5.2 M4.75,3.1 L2.35,3.1" />
+                                            </Button>
 
-                <Button Width="38"
-                        Style="{StaticResource FlatButtonStyle}"
-                        Command="{Binding NewSessionCommand}"
-                        ToolTip="Новая сессия в активном проекте (Ctrl+Shift+T)"
-                        AutomationProperties.Name="Новая вкладка">
-                    <Path Style="{StaticResource IconPathStyle}"
-                          StrokeThickness="2"
-                          Stroke="{StaticResource MutedTextBrush}"
-                          Data="M7,1.5 L7,12.5 M1.5,7 L12.5,7" />
-                </Button>
-            </StackPanel>
+                                            <Button Width="20" Height="20"
+                                                    Style="{StaticResource FlatButtonStyle}"
+                                                    Foreground="{StaticResource DisabledTextBrush}"
+                                                    Command="{Binding DataContext.CloseTabCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Закрыть вкладку"
+                                                    AutomationProperties.Name="Закрыть вкладку">
+                                                <Path Style="{StaticResource IconPathStyle}"
+                                                      StrokeThickness="1.4"
+                                                      Stroke="{StaticResource FaintTextBrush}"
+                                                      Data="M2,2 L9,9 M9,2 L2,9" />
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                        <Setter TargetName="TabRoot" Property="Background" Value="{StaticResource WorkAreaBackgroundBrush}" />
+                                        <Setter TargetName="TabRoot" Property="MinWidth" Value="216" />
+                                        <Setter TargetName="TabTitle" Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.Idle}">
+                                        <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource DisabledTextBrush}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.Busy}">
+                                        <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource CalmBrush}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.AwaitingInput}">
+                                        <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource AccentBrush}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding State}" Value="{x:Static domain:TabState.BackgroundWork}">
+                                        <Setter TargetName="StateDot" Property="Fill" Value="{StaticResource BackgroundWorkBrush}" />
+                                    </DataTrigger>
+                                    <!-- Штатный выход из оболочки (код 0) и падение — не одно и то же:
+                                         ненулевой код видно цветом, а не только цифрой. -->
+                                    <DataTrigger Binding="{Binding HasFailedExit}" Value="True">
+                                        <Setter TargetName="ExitBadge" Property="Foreground" Value="{StaticResource ExitFailureBrush}" />
+                                        <Setter TargetName="ExitBadge" Property="ToolTip" Value="Процесс сессии упал" />
+                                        <Setter TargetName="RestartIcon" Property="Stroke" Value="{StaticResource ExitFailureBrush}" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Button Width="38"
+                            Style="{StaticResource FlatButtonStyle}"
+                            Command="{Binding NewSessionCommand}"
+                            ToolTip="Новая сессия в активном проекте (Ctrl+Shift+T)"
+                            AutomationProperties.Name="Новая вкладка">
+                        <Path Style="{StaticResource IconPathStyle}"
+                              StrokeThickness="2"
+                              Stroke="{StaticResource MutedTextBrush}"
+                              Data="M7,1.5 L7,12.5 M1.5,7 L12.5,7" />
+                    </Button>
+                </StackPanel>
+
+                <!-- Куда встанет вкладка: полоска на границе между вкладками. Видна только
+                     во время перетаскивания, мышь не ловит. -->
+                <Rectangle x:Name="DropCaret"
+                           Width="2"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Stretch"
+                           Fill="{StaticResource AccentBrush}"
+                           IsHitTestVisible="False"
+                           Visibility="Collapsed" />
+            </Grid>
         </ScrollViewer>
 
-        <!-- Счётчик «N ждёт ввода». Разметка готова, данные приходят от хуков в M4,
-             поэтому пока счётчик всегда скрыт. -->
-        <StackPanel Grid.Column="1"
-                    Orientation="Horizontal"
-                    VerticalAlignment="Center"
-                    Margin="10,0,14,0"
-                    Visibility="{Binding Tabs.HasAwaitingInput, Converter={StaticResource BoolToVisibility}}">
-            <Ellipse Width="6" Height="6" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{StaticResource AccentBrush}" />
-            <TextBlock VerticalAlignment="Center"
-                       FontSize="11"
-                       FontFamily="{StaticResource MonoFontFamily}"
-                       Foreground="{StaticResource FaintTextBrush}">
-                <Run Text="{Binding Tabs.AwaitingInputCount, Mode=OneWay}" /><Run Text=" ждёт ввода" />
-            </TextBlock>
-        </StackPanel>
+        <!-- Счётчик «N ждёт ввода»: кнопка перехода на первую ждущую вкладку (раздел 6.3 ТЗ).
+             Считает вкладки всех проектов, поэтому переход меняет и выбранный проект.
+             Ждущих вкладок нет — кнопки не видно. -->
+        <Button Grid.Column="1"
+                VerticalAlignment="Center"
+                Margin="10,0,14,0"
+                Style="{StaticResource FlatButtonStyle}"
+                Command="{Binding ShowAwaitingTabCommand}"
+                Visibility="{Binding Tabs.HasAwaitingInput, Converter={StaticResource BoolToVisibility}}"
+                ToolTip="Перейти к первой сессии, которая ждёт ввода"
+                AutomationProperties.Name="Сессии, ждущие ввода">
+            <StackPanel Orientation="Horizontal">
+                <Ellipse Width="6" Height="6" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{StaticResource AccentBrush}" />
+                <TextBlock VerticalAlignment="Center"
+                           FontSize="11"
+                           FontFamily="{StaticResource MonoFontFamily}"
+                           Foreground="{StaticResource FaintTextBrush}">
+                    <Run Text="{Binding Tabs.AwaitingInputCount, Mode=OneWay}" /><Run Text=" ждёт ввода" />
+                </TextBlock>
+            </StackPanel>
+        </Button>
     </Grid>
 </UserControl>

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using ClaudeAgentsShell.Domain;
 
@@ -16,8 +16,10 @@ namespace ClaudeAgentsShell.App.ViewModels;
 /// </summary>
 public sealed class TabStripViewModel : ObservableObject
 {
-    // Все открытые вкладки в порядке открытия: счётчики на строках проектов, поиск по
-    // идентификатору терминала и гашение работают по этому списку, а не по видимой части.
+    // Все открытые вкладки в порядке полосы: сначала в порядке открытия, а после того как
+    // пользователь перетащил вкладку мышью — в том порядке, в каком он их расставил.
+    // Счётчики на строках проектов, поиск по идентификатору терминала и гашение работают
+    // по этому списку, а не по видимой части.
     private readonly List<TabViewModel> _all = [];
 
     // Вкладки выбранного проекта — то, что видит пользователь и по чему ходят Ctrl+Tab
@@ -31,11 +33,12 @@ public sealed class TabStripViewModel : ObservableObject
     private Guid? _projectId;
     private TabViewModel? _activeTab;
     private int _awaitingInputCount;
+    private int _stateRevision;
 
     /// <inheritdoc cref="TabStripViewModel" />
     public TabStripViewModel() => Tabs = new ReadOnlyObservableCollection<TabViewModel>(_visible);
 
-    /// <summary>Вкладки выбранного проекта в порядке открытия — содержимое полосы.</summary>
+    /// <summary>Вкладки выбранного проекта в порядке полосы — ровно то, что видит пользователь.</summary>
     public ReadOnlyObservableCollection<TabViewModel> Tabs { get; }
 
     /// <summary>
@@ -63,15 +66,18 @@ public sealed class TabStripViewModel : ObservableObject
     /// <summary>
     /// Сколько вкладок ждёт ввода. Считается по всем вкладкам, а не только по видимым:
     /// смысл счётчика — заметить, что тебя ждёт сессия, в том числе в другом проекте.
-    /// Источник состояния — хуки (M4); до тех пор счётчик равен нулю и в разметке скрыт.
-    /// Клик по счётчику (раздел 6.3 ТЗ) в M4 должен будет заодно переключать выбранный проект.
+    /// Источник состояния — хуки; пока состояние не пришло, счётчик равен нулю и в разметке скрыт.
+    /// Клик по счётчику (раздел 6.3 ТЗ) ведёт на <see cref="FirstAwaitingInput"/>.
     /// </summary>
     public int AwaitingInputCount
     {
         get => _awaitingInputCount;
         private set
         {
-            if (SetProperty(ref _awaitingInputCount, value))
+            // HasAwaitingInput — булев, и поднимать его на каждое изменение счётчика значит
+            // звать лишний реквери команд окна на переходах вида 1 → 2. Поднимаем на грани.
+            bool had = _awaitingInputCount > 0;
+            if (SetProperty(ref _awaitingInputCount, value) && had != value > 0)
             {
                 Raise(nameof(HasAwaitingInput));
             }
@@ -80,6 +86,23 @@ public sealed class TabStripViewModel : ObservableObject
 
     /// <summary>Счётчик показывается только когда есть кого считать.</summary>
     public bool HasAwaitingInput => AwaitingInputCount > 0;
+
+    /// <summary>
+    /// Растёт на единицу каждый раз, когда у любой открытой вкладки поменялось состояние.
+    /// Само число ничего не значит и на экране не показывается: это способ сказать наружу
+    /// «маркеры устарели», не подписывая слушателя на каждую вкладку по отдельности —
+    /// учёт подписок на вкладки живёт здесь и больше нигде.
+    /// <para>
+    /// Нужен строкам проектов: их точка состояния считается по вкладкам
+    /// (<see cref="MarkerStateFor" />), а состав вкладок при смене состояния не меняется,
+    /// и обычных уведомлений полосы для перекраски не хватает.
+    /// </para>
+    /// </summary>
+    public int StateRevision
+    {
+        get => _stateRevision;
+        private set => SetProperty(ref _stateRevision, value);
+    }
 
     /// <summary>
     /// Переключает полосу на вкладки проекта. <c>null</c> — проект не выбран, полоса пуста.
@@ -193,7 +216,40 @@ public sealed class TabStripViewModel : ObservableObject
     public int CountFor(Guid projectId) => _all.Count(tab => tab.ProjectId == projectId);
 
     /// <summary>
-    /// Активная вкладка проекта: последняя, на которой пользователь был, иначе первая открытая.
+    /// Состояние проекта одной точкой: самое важное среди состояний **всех** его вкладок,
+    /// а не только показанных в полосе. У проекта без вкладок — <see cref="TabState.Unknown" />.
+    /// <para>
+    /// Приоритет сверху вниз: <see cref="TabState.AwaitingInput" />, <see cref="TabState.Busy" />,
+    /// <see cref="TabState.BackgroundWork" />, <see cref="TabState.Idle" />,
+    /// <see cref="TabState.Unknown" />. Смысл: «меня ждут» важнее «идёт работа», а любая
+    /// известная работа важнее простоя.
+    /// </para>
+    /// </summary>
+    public TabState MarkerStateFor(Guid projectId)
+    {
+        var best = TabState.Unknown;
+        var bestRank = 0;
+
+        foreach (var tab in _all)
+        {
+            if (tab.ProjectId != projectId)
+            {
+                continue;
+            }
+
+            var rank = MarkerRank(tab.State);
+            if (rank > bestRank)
+            {
+                best = tab.State;
+                bestRank = rank;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Активная вкладка проекта: последняя, на которой пользователь был, иначе самая левая в полосе.
     /// <c>null</c>, если у проекта нет вкладок.
     /// </summary>
     public TabViewModel? ActiveTabFor(Guid projectId)
@@ -206,6 +262,63 @@ public sealed class TabStripViewModel : ObservableObject
         return _all.FirstOrDefault(tab => tab.ProjectId == projectId);
     }
 
+    /// <summary>
+    /// Первая вкладка, ждущая ввода, среди **всех** проектов; <c>null</c>, если таких нет.
+    /// Цель клика по счётчику «N ждёт ввода».
+    /// <para>
+    /// «Первая» — в порядке полосы, а **не** в порядке попадания в «ждёт ввода»: из двух
+    /// ждущих победит стоящая левее, даже если ждать она начала позже. Порядок полосы — это
+    /// порядок открытия до тех пор, пока пользователь не переставил вкладки мышью
+    /// (см. <see cref="Reorder" />); после перестановки — выбранный им порядок. Видимая полоса
+    /// строится фильтрацией того же списка с сохранением порядка, поэтому внутри проекта это
+    /// всегда ровно самая левая ждущая вкладка. Порядок не зависит от того, как пользователь
+    /// переставил проекты в панели, и не меняется от клика к клику.
+    /// </para>
+    /// </summary>
+    public TabViewModel? FirstAwaitingInput() => _all.FirstOrDefault(tab => tab.IsAwaitingInput);
+
+    /// <summary>
+    /// Переставляет вкладку в полосе: снимает её с текущего места и вставляет в промежуток
+    /// <paramref name="gapIndex" /> — перед вкладкой с этим номером в видимом порядке.
+    /// Промежуток, равный числу видимых вкладок, означает конец полосы; значения вне диапазона
+    /// подрезаются, поэтому бросок за край полосы ставит вкладку с краю, а не теряется.
+    /// <para>
+    /// Порядок в списке всех вкладок остаётся согласованным с видимым: вкладки выбранного
+    /// проекта раскладываются по своим же местам в общем списке в новом порядке, а вкладки
+    /// остальных проектов не сдвигаются вовсе. Поэтому видимая полоса и после перестановки
+    /// получается фильтрацией <see cref="AllTabs" /> с сохранением порядка, а возврат к проекту
+    /// показывает вкладки так, как их расставил пользователь.
+    /// </para>
+    /// </summary>
+    /// <param name="tab">Перетаскиваемая вкладка; вкладка не из полосы игнорируется.</param>
+    /// <param name="gapIndex">Промежуток полосы 0..<see cref="Tabs" />.Count, куда её вставить.</param>
+    /// <returns><c>true</c>, если порядок действительно изменился.</returns>
+    public bool Reorder(TabViewModel tab, int gapIndex)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+
+        var from = _visible.IndexOf(tab);
+        if (from < 0)
+        {
+            // Вкладка чужого проекта или уже закрытая: переставлять в полосе нечего.
+            return false;
+        }
+
+        var gap = Math.Clamp(gapIndex, 0, _visible.Count);
+
+        // Промежутки считаются по полосе вместе с самой перетаскиваемой вкладкой, а на новом
+        // месте её там уже нет: всё, что правее, съезжает на одну позицию влево.
+        var target = gap > from ? gap - 1 : gap;
+        if (target == from)
+        {
+            return false;
+        }
+
+        _visible.Move(from, target);
+        ReplayVisibleOrderIntoAll();
+        return true;
+    }
+
     /// <summary>Вкладка полосы по номеру 1..9; <c>null</c>, если столько вкладок не показано.</summary>
     public TabViewModel? ByNumber(int number) =>
         number >= 1 && number <= _visible.Count ? _visible[number - 1] : null;
@@ -215,6 +328,18 @@ public sealed class TabStripViewModel : ObservableObject
 
     /// <summary>Предыдущая вкладка полосы по кругу; <c>null</c>, если полоса пуста.</summary>
     public TabViewModel? Previous() => Shift(-1);
+
+    // Вес состояния для точки проекта. Порядок намеренно не совпадает с числовым порядком
+    // TabState: BackgroundWork объявлен последним, но по важности стоит ниже Busy, а выше
+    // всех — AwaitingInput. Поэтому сравнить состояния напрямую (Max) нельзя.
+    private static int MarkerRank(TabState state) => state switch
+    {
+        TabState.AwaitingInput => 4,
+        TabState.Busy => 3,
+        TabState.BackgroundWork => 2,
+        TabState.Idle => 1,
+        _ => 0,
+    };
 
     private bool IsVisible(TabViewModel tab) => _projectId is { } id && tab.ProjectId == id;
 
@@ -239,6 +364,21 @@ public sealed class TabStripViewModel : ObservableObject
         Raise(nameof(HasTabs));
     }
 
+    // Раскладывает вкладки выбранного проекта по их же местам в общем списке — в новом
+    // видимом порядке. Места вкладок остальных проектов при этом не трогаются, поэтому
+    // перестановка внутри одного проекта не двигает соседние.
+    private void ReplayVisibleOrderIntoAll()
+    {
+        var next = 0;
+        for (var i = 0; i < _all.Count; i++)
+        {
+            if (IsVisible(_all[i]))
+            {
+                _all[i] = _visible[next++];
+            }
+        }
+    }
+
     private TabViewModel? Shift(int delta)
     {
         if (_visible.Count == 0)
@@ -258,9 +398,16 @@ public sealed class TabStripViewModel : ObservableObject
 
     private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(TabViewModel.State) or nameof(TabViewModel.IsAwaitingInput))
+        // Только State: его сеттер поднимает и IsAwaitingInput, поэтому реакция на оба
+        // свойства давала бы два одинаковых прохода по списку на одно логическое изменение.
+        if (e.PropertyName is nameof(TabViewModel.State))
         {
             RecalculateAwaitingInput();
+
+            // Состав вкладок не изменился, а точки на строках проектов устарели: считаются
+            // они по состояниям вкладок. Уведомление наружу идёт отсюда, чтобы слушателю
+            // не подписываться на каждую вкладку самому.
+            StateRevision++;
         }
     }
 

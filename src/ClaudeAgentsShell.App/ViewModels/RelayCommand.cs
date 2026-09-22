@@ -17,10 +17,16 @@ public sealed class RelayCommand : ICommand
     }
 
     /// <summary>
-    /// Доступность перепроверяется вместе со всеми командами окна.
-    /// Своё событие здесь было бы мёртвым: возбуждать его неоткуда, и кнопка
-    /// навсегда застывала бы в том состоянии, которое вычислилось при привязке.
+    /// Доступность перепроверяется вместе со всеми командами окна, через
+    /// <see cref="CommandManager.RequerySuggested"/>.
     /// </summary>
+    /// <remarks>
+    /// Жесты пользователя возбуждают реквери сами. То, что меняется без жеста — состояние
+    /// вкладок от хуков, — реквери не вызывает, поэтому <c>ShellViewModel</c> зовёт
+    /// <see cref="CommandManager.InvalidateRequerySuggested"/> вручную на переходах
+    /// <c>HasAwaitingInput</c>. Этот вызов не мёртвый код: без него кнопка счётчика
+    /// «N ждёт ввода» застынет выключенной.
+    /// </remarks>
     public event EventHandler? CanExecuteChanged
     {
         add => CommandManager.RequerySuggested += value;

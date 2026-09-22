@@ -28,6 +28,14 @@
     <SolidColorBrush x:Key="AccentBrush" Color="#D97757" />
     <SolidColorBrush x:Key="CalmBrush" Color="#6FA8A0" />
     <SolidColorBrush x:Key="UnknownStateBrush" Color="#4A4640" />
+    <!-- Работа в фоне: сессия занята собственными сабагентами, от человека ничего не нужно.
+         Свой холодный тон, чтобы не путаться ни с «работает» (CalmBrush), ни с «ждёт ввода». -->
+    <SolidColorBrush x:Key="BackgroundWorkBrush" Color="#6E86B0" />
+    <!-- Пометка о ненулевом коде выхода: процесс сессии упал (раздел 8 ТЗ). Намеренно не
+         AccentBrush — тем же оранжевым горит точка «ждёт ввода», и на одной вкладке два
+         оранжевых знака читались бы как один. Приглушённый красный ни с чем не спорит.
+         Нулевой код — штатный выход, ему хватает FaintTextBrush, своей кисти он не требует. -->
+    <SolidColorBrush x:Key="ExitFailureBrush" Color="#C2564A" />
 
     <FontFamily x:Key="UiFontFamily">IBM Plex Sans, Segoe UI</FontFamily>
     <FontFamily x:Key="MonoFontFamily">JetBrains Mono, Cascadia Mono, Consolas</FontFamily>
@@ -89,6 +97,46 @@
         <Setter Property="StrokeStartLineCap" Value="Round" />
         <Setter Property="StrokeEndLineCap" Value="Round" />
         <Setter Property="StrokeLineJoin" Value="Round" />
+    </Style>
+
+    <!-- Знак приложения: скруглённый квадрат акцентного цвета с приглашением `>_`.
+         Нарисован в сетке 32×32 тремя фигурами — площадка, шеврон, подчёркивание.
+         EvenOdd превращает вторую и третью фигуры в вырезы: сквозь них видно фон
+         полосы заголовка (ChromeBackgroundBrush), отдельной заливки глифу не нужно.
+
+         Геометрии две, и сводить их обратно в одну нельзя.
+
+         Крупная идёт на кадры .ico от 24 px: шеврон нарисован честными диагоналями,
+         на этих размерах просвет между его гранями виден и знак читается как `>`.
+
+         Мелкая идёт на кадр 16 px и на полосу заголовка (Path 16×16). На сжатии 32→16
+         тот же просвет схлопывался сглаживанием диагоналей, и знак читался сплошной
+         стрелкой, а не `>`. Поэтому здесь диагонали выложены ступеньками по 2 единицы
+         сетки: на 16 px это ровно один пиксель, грани шеврона попадают в целые пиксели,
+         а просвет держится в целых два и размываться ему нечем. Подчёркивание по той же
+         причине без скруглений — прямоугольник 8×4 единиц, то есть 4×2 пикселя.
+
+         Площадка у обеих одинаковая: правка скругления вносится сразу в обе строки.
+
+         Обе геометрии — единственный источник для src/ClaudeAgentsShell.App/Assets/app.ico:
+         кадры .ico отрисованы из них, поэтому иконка в панели задач и знак в полосе
+         заголовка не могут разойтись. Менять знак — только здесь и с перегенерацией .ico. -->
+    <PathGeometry x:Key="AppMarkLargeGeometry"
+                  FillRule="EvenOdd"
+                  Figures="M7,0 L25,0 A7,7 0 0 1 32,7 L32,25 A7,7 0 0 1 25,32 L7,32 A7,7 0 0 1 0,25 L0,7 A7,7 0 0 1 7,0 Z M6,8 L14,16 L6,24 L6,19 L9,16 L6,13 Z M20,20 L24,20 A2,2 0 0 1 24,24 L20,24 A2,2 0 0 1 20,20 Z" />
+
+    <PathGeometry x:Key="AppMarkSmallGeometry"
+                  FillRule="EvenOdd"
+                  Figures="M7,0 L25,0 A7,7 0 0 1 32,7 L32,25 A7,7 0 0 1 25,32 L7,32 A7,7 0 0 1 0,25 L0,7 A7,7 0 0 1 7,0 Z M6,8 L10,8 L10,10 L12,10 L12,12 L14,12 L14,14 L16,14 L16,18 L14,18 L14,20 L12,20 L12,22 L10,22 L10,24 L6,24 L6,22 L8,22 L8,20 L10,20 L10,18 L12,18 L12,14 L10,14 L10,12 L8,12 L8,10 L6,10 Z M18,20 L26,20 L26,24 L18,24 Z" />
+
+    <!-- Знак в полосе заголовка: 16×16, поэтому геометрия мелкая. Намеренно не наследует
+         IconPathStyle: тот настраивает обводку, а знак — заливка без штриха. -->
+    <Style x:Key="AppMarkStyle" TargetType="Path">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="Stretch" Value="Uniform" />
+        <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Data" Value="{StaticResource AppMarkSmallGeometry}" />
     </Style>
 
     <BooleanToVisibilityConverter x:Key="BoolToVisibility" />

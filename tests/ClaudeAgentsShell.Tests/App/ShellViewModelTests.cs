@@ -1,4 +1,6 @@
+﻿using System.ComponentModel;
 using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
@@ -28,11 +30,17 @@ public sealed class ShellViewModelTests
                 Probe.Add(project.Path);
             }
 
-            var list = new ProjectListViewModel(Store, BranchReader, Watcher, Probe, Picker, new InlineUiDispatcher());
-            Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher());
+            var list = new ProjectListViewModel(
+                Store, BranchReader, Watcher, Probe, Picker, Dialog, Prompt, Launcher, new InlineUiDispatcher());
+            var sessionState = new SessionStateCoordinator(Hooks, Workspace, History, new InlineUiDispatcher());
+            Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher(), sessionState);
         }
 
         public FakeProjectStore Store { get; } = new();
+
+        public FakeHookListener Hooks { get; } = new();
+
+        public FakeSessionHistoryReader History { get; } = new();
 
         public FakeGitBranchReader BranchReader { get; } = new();
 
@@ -41,6 +49,10 @@ public sealed class ShellViewModelTests
         public FakeDirectoryProbe Probe { get; } = new();
 
         public FakeFolderPicker Picker { get; } = new();
+
+        public FakeProjectSettingsDialog Dialog { get; } = new();
+
+        public FakeShellLauncher Launcher { get; } = new();
 
         public FakeUserPrompt Prompt { get; } = new();
 
@@ -403,6 +415,7 @@ public sealed class ShellViewModelTests
         var harness = await StartedAsync();
         harness.Picker.NextFolder = @"D:\src\gamma";
         harness.Probe.Add(@"D:\src\gamma");
+        harness.Dialog.Edit = project => project;
         harness.Store.SaveFailure = new IOException("диск занят");
 
         await Assert.ThrowsAsync<IOException>(() => harness.Shell.AddProjectAsync(CancellationToken.None));
@@ -416,6 +429,7 @@ public sealed class ShellViewModelTests
         var harness = await StartedAsync();
         harness.Picker.NextFolder = @"D:\src\gamma";
         harness.Probe.Add(@"D:\src\gamma");
+        harness.Dialog.Edit = project => project;
 
         await harness.Shell.AddProjectAsync(CancellationToken.None);
         harness.Picker.NextFolder = @"D:\src\gamma";
@@ -472,6 +486,7 @@ public sealed class ShellViewModelTests
         harness.Picker.NextFolder = @"D:\src\gamma";
         harness.Probe.Add(@"D:\src\gamma");
         harness.BranchReader.Set(@"D:\src\gamma", "main");
+        harness.Dialog.Edit = project => project;
 
         await harness.Shell.AddProjectAsync(CancellationToken.None);
 
@@ -820,5 +835,713 @@ public sealed class ShellViewModelTests
         Assert.All(harness.Shell.Tabs.Tabs, tab => Assert.Equal(TabState.Unknown, tab.State));
         Assert.Equal(0, harness.Shell.Tabs.AwaitingInputCount);
         Assert.False(harness.Shell.Tabs.HasAwaitingInput);
+    }
+
+    [Fact]
+    public async Task Awaiting_input_counter_counts_tabs_of_every_project()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var alpha = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var beta = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+
+        alpha!.State = TabState.AwaitingInput;
+        beta!.State = TabState.AwaitingInput;
+
+        // Полоса показывает вкладки одного проекта, а счётчик считает все: смысл счётчика —
+        // заметить сессию, которая ждёт в проекте, который сейчас не на экране.
+        Assert.Single(harness.Shell.Tabs.Tabs);
+        Assert.Equal(2, harness.Shell.Tabs.AwaitingInputCount);
+        Assert.True(harness.Shell.Tabs.HasAwaitingInput);
+    }
+
+    [Fact]
+    public async Task Counter_recalculates_when_a_tab_changes_state()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        var changed = new List<string?>();
+        ((INotifyPropertyChanged)harness.Shell.Tabs).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        tab!.State = TabState.AwaitingInput;
+
+        Assert.Equal(1, harness.Shell.Tabs.AwaitingInputCount);
+        Assert.True(harness.Shell.Tabs.HasAwaitingInput);
+
+        // Без этих уведомлений счётчик в разметке застынет на значении, которое
+        // вычислилось при открытии вкладки.
+        Assert.Contains(nameof(TabStripViewModel.AwaitingInputCount), changed);
+        Assert.Contains(nameof(TabStripViewModel.HasAwaitingInput), changed);
+
+        tab.State = TabState.Busy;
+
+        Assert.Equal(0, harness.Shell.Tabs.AwaitingInputCount);
+        Assert.False(harness.Shell.Tabs.HasAwaitingInput);
+    }
+
+    [Fact]
+    public async Task Counter_command_is_disabled_until_a_tab_starts_waiting()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.False(harness.Shell.ShowAwaitingTabCommand.CanExecute(null));
+
+        tab!.State = TabState.AwaitingInput;
+
+        Assert.True(harness.Shell.ShowAwaitingTabCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task Counter_without_awaiting_tabs_leaves_everything_as_it_was()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+
+        Assert.Same(tab, harness.Shell.Tabs.ActiveTab);
+        Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+    }
+
+    [Fact]
+    public async Task Clicking_the_counter_switches_both_the_project_and_the_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var waiting = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+
+        // Возвращаемся в alpha: ждущая вкладка beta уходит из полосы.
+        await harness.Shell.ActivateProjectAsync(harness.Row(0), CancellationToken.None);
+        waiting!.State = TabState.AwaitingInput;
+        Assert.DoesNotContain(waiting, harness.Shell.Tabs.Tabs);
+
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+
+        // Переключиться обязано всё сразу: иначе команда «сработает», а на экране
+        // не изменится ничего.
+        Assert.Same(harness.Row(1), harness.Shell.ActiveProjectRow);
+        Assert.Same(waiting, harness.Shell.Tabs.ActiveTab);
+        Assert.Contains(waiting, harness.Shell.Tabs.Tabs);
+        Assert.Equal(waiting.TerminalId, harness.Workspace.VisibleTerminal);
+    }
+
+    [Fact]
+    public async Task Counter_leads_to_the_tab_that_was_opened_first_not_the_one_waiting_longest()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var first = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+
+        // Ждать начала вторая, но «первая» считается в порядке открытия: так цель клика
+        // не зависит от того, в каком порядке пришли события хуков.
+        second!.State = TabState.AwaitingInput;
+        first!.State = TabState.AwaitingInput;
+
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+
+        Assert.Same(first, harness.Shell.Tabs.ActiveTab);
+        Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+    }
+
+    [Fact]
+    public async Task Dead_tab_loses_its_marker_and_leaves_the_awaiting_counter()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        tab!.State = TabState.AwaitingInput;
+        Assert.Equal(1, harness.Shell.Tabs.AwaitingInputCount);
+
+        // Процесс оболочки убит извне: SessionEnd не придёт, и ввода у вкладки без помпы
+        // уже не будет — маркер обязан сняться здесь, иначе он останется до конца сеанса.
+        harness.Workspace.RaiseExited(tab.TerminalId, exitCode: 1);
+
+        Assert.False(tab.IsRunning);
+        Assert.Equal(TabState.Unknown, tab.State);
+        Assert.Equal(0, harness.Shell.Tabs.AwaitingInputCount);
+        Assert.False(harness.Shell.Tabs.HasAwaitingInput);
+    }
+
+    [Fact]
+    public async Task Context_menu_opens_the_project_folder_in_explorer()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+
+        await harness.Shell.OpenProjectFolderAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.Equal(PathA, Assert.Single(harness.Launcher.Opened));
+        Assert.Empty(harness.Prompt.Errors);
+    }
+
+    [Fact]
+    public async Task Folder_that_does_not_open_reports_an_error_instead_of_throwing()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        harness.Launcher.Result = false;
+
+        await harness.Shell.OpenProjectFolderAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.Contains(PathA, Assert.Single(harness.Prompt.Errors), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Saved_settings_update_the_row_and_the_stored_list()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+
+        // Диалог, который вдобавок «перепутал» идентификатор и порядок: и то и другое
+        // принадлежит списку, а не диалогу, и обязано уцелеть.
+        harness.Dialog.Edit = project => project with
+        {
+            Name = "omega",
+            Shell = ShellKind.Cmd,
+            Id = Guid.NewGuid(),
+            Order = 99,
+        };
+
+        await harness.Shell.ShowProjectSettingsAsync(row, CancellationToken.None);
+
+        Assert.Equal("omega", row.Name);
+        Assert.Same(row, harness.Row(0));
+
+        var saved = Assert.Single(harness.Store.Saved);
+        Assert.Equal("omega", saved.Name);
+        Assert.Equal(ShellKind.Cmd, saved.Shell);
+        Assert.Equal(row.Id, saved.Id);
+        Assert.Equal(0, saved.Order);
+    }
+
+    [Fact]
+    public async Task Cancelled_settings_dialog_changes_nothing()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+
+        // Edit не задан: диалог возвращает null — пользователь закрыл его отказом.
+        await harness.Shell.ShowProjectSettingsAsync(row, CancellationToken.None);
+
+        Assert.Single(harness.Dialog.Shown);
+        Assert.Equal("alpha", row.Name);
+        Assert.Equal(0, harness.Store.SaveCount);
+    }
+
+    [Fact]
+    public async Task Changed_project_path_moves_the_branch_watcher()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+
+        // Новый каталог существует и стоит на другой ветке.
+        harness.Probe.Add(PathB);
+        harness.BranchReader.Set(PathB, "release");
+        harness.Dialog.Edit = project => project with { Path = PathB };
+
+        await harness.Shell.ShowProjectSettingsAsync(row, CancellationToken.None);
+
+        Assert.Equal(PathB, row.Path);
+        Assert.Equal("release", row.Branch);
+        Assert.True(row.IsAvailable);
+        Assert.Equal(PathB, Assert.Single(harness.Watcher.Watched));
+    }
+
+    [Fact]
+    public async Task Settings_that_failed_to_save_leave_the_row_untouched()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+
+        harness.Dialog.Edit = project => project with { Name = "omega" };
+        harness.Store.SaveFailure = new InvalidOperationException("projects.json занят");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.Shell.ShowProjectSettingsAsync(row, CancellationToken.None));
+
+        Assert.Equal("alpha", row.Name);
+        Assert.Same(row, harness.Row(0));
+    }
+
+    [Fact]
+    public async Task Renaming_a_project_renames_the_titles_of_its_open_tabs()
+    {
+        var harness = await StartedAsync(
+            Project("alpha", PathA, 0),
+            Project("beta", PathB, 1));
+        var alpha = harness.Row(0);
+
+        var first = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        var stranger = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+        first!.ShortTitle = "почини сборку";
+
+        var titleChanges = 0;
+        first.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(TabViewModel.Title))
+            {
+                titleChanges++;
+            }
+        };
+
+        harness.Dialog.Edit = project => project with { Name = "omega" };
+        await harness.Shell.ShowProjectSettingsAsync(alpha, CancellationToken.None);
+
+        // Имя проекта — вещь отображаемая: на экране не должно остаться двух имён одного
+        // проекта — нового в панели и старого на вкладках (раздел 6.3 ТЗ).
+        Assert.Equal("omega", alpha.Name);
+        Assert.Equal("omega · почини сборку", first.Title);
+        Assert.Equal("omega · " + TabViewModel.NewSessionTitle, second!.Title);
+        Assert.Equal(1, titleChanges);
+
+        // Вкладка чужого проекта переименования не заметила.
+        Assert.Equal("beta · " + TabViewModel.NewSessionTitle, stranger!.Title);
+    }
+
+    [Fact]
+    public async Task Cancelled_settings_dialog_leaves_the_tab_titles_alone()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        // Edit не задан: диалог вернул null — менять заголовки не с чего.
+        await harness.Shell.ShowProjectSettingsAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.Equal("alpha · " + TabViewModel.NewSessionTitle, tab!.Title);
+    }
+
+    [Fact]
+    public async Task Moved_project_leaves_open_tabs_in_the_directory_they_started_in()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var opened = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+
+        harness.Probe.Add(PathB);
+        harness.Dialog.Edit = project => project with { Path = PathB };
+        await harness.Shell.ShowProjectSettingsAsync(row, CancellationToken.None);
+
+        ITabStateSink sink = harness.Shell;
+
+        // Псевдоконсоль работает там, где её запустили, и транскрипт сессии лежит в slug'е
+        // прежнего каталога. Отдай координатор новый путь — он не нашёл бы транскрипт,
+        // списал бы попытку из бюджета, и вкладка молча осталась бы «новой сессией».
+        Assert.True(sink.TryGetWorkingDirectory(opened!.TerminalId, out var directory));
+        Assert.Equal(PathA, directory);
+
+        // А сессия, открытая после переноса, стартует уже в новом каталоге.
+        var afterMove = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+        Assert.Equal(PathB, harness.Workspace.OpenedDirectories[^1]);
+        Assert.True(sink.TryGetWorkingDirectory(afterMove!.TerminalId, out var movedDirectory));
+        Assert.Equal(PathB, movedDirectory);
+    }
+
+    [Fact]
+    public async Task A_closed_tab_has_no_working_directory()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        await harness.Shell.CloseTabAsync(tab!, CancellationToken.None);
+
+        ITabStateSink sink = harness.Shell;
+        Assert.False(sink.TryGetWorkingDirectory(tab!.TerminalId, out var directory));
+        Assert.Equal(string.Empty, directory);
+    }
+
+    [Fact]
+    public void Project_settings_are_available_for_the_row_of_the_menu_even_with_nothing_selected()
+    {
+        var harness = new Harness(Project("alpha", PathA, 0));
+
+        // Параметр приезжает привязкой к PlacementTarget и на первом вычислении может быть
+        // ещё не разрешён. Проверяется не он, а строка: переданная либо выбранная.
+        Assert.Null(harness.Shell.ActiveProjectRow);
+        Assert.False(harness.Shell.ShowSettingsCommand.CanExecute(null));
+        Assert.True(harness.Shell.ShowSettingsCommand.CanExecute(new ProjectRowViewModel(
+            Project("alpha", PathA, 0))));
+    }
+
+    [Fact]
+    public async Task Project_settings_without_a_parameter_follow_the_selected_project()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+
+        // Кнопка в заголовке окна параметра не передаёт: без выбранной строки настраивать
+        // нечего и пункт выключен, с выбранной — доступен.
+        Assert.False(harness.Shell.ShowSettingsCommand.CanExecute(null));
+
+        await harness.Shell.ActivateProjectAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.True(harness.Shell.ShowSettingsCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task Removing_a_project_drops_the_row_and_renumbers_the_rest()
+    {
+        var harness = await StartedAsync(
+            Project("alpha", PathA, 0),
+            Project("beta", PathB, 1));
+        var alpha = harness.Row(0);
+
+        var removed = await harness.Shell.RemoveProjectAsync(alpha, CancellationToken.None);
+
+        Assert.True(removed);
+        Assert.Equal("beta", Assert.Single(harness.Shell.Projects.Rows).Name);
+
+        var saved = Assert.Single(harness.Store.Saved);
+        Assert.Equal("beta", saved.Name);
+
+        // Порядок оставшихся пересчитан: дыр в Order не остаётся ни в файле, ни в строке.
+        Assert.Equal(0, saved.Order);
+        Assert.Equal(0, harness.Row(0).Project.Order);
+    }
+
+    [Fact]
+    public async Task Declined_removal_keeps_the_project_in_the_list()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        harness.Prompt.ConfirmResult = false;
+
+        var removed = await harness.Shell.RemoveProjectAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.False(removed);
+        Assert.Single(harness.Shell.Projects.Rows);
+        Assert.Equal(0, harness.Store.SaveCount);
+        Assert.Single(harness.Prompt.Confirmations);
+    }
+
+    [Fact]
+    public async Task Removing_a_project_closes_its_live_tabs()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+
+        var first = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+
+        await harness.Shell.RemoveProjectAsync(row, CancellationToken.None);
+
+        // Число сессий названо в подтверждении: закрытие вкладок не должно быть сюрпризом.
+        Assert.Contains("2", Assert.Single(harness.Prompt.Confirmations), StringComparison.Ordinal);
+
+        Assert.Equal([first!.TerminalId, second!.TerminalId], harness.Workspace.Closed);
+        Assert.Empty(harness.Shell.Tabs.AllTabs);
+        Assert.Empty(harness.Shell.Tabs.Tabs);
+        Assert.Null(harness.Shell.Tabs.ActiveTab);
+
+        // Выбранной строки больше нет: на месте терминала заглушка.
+        Assert.Null(harness.Shell.ActiveProjectRow);
+        Assert.False(harness.Shell.IsTerminalVisible);
+    }
+
+    [Fact]
+    public async Task Removing_an_unselected_project_leaves_the_other_project_alone()
+    {
+        var harness = await StartedAsync(
+            Project("alpha", PathA, 0),
+            Project("beta", PathB, 1));
+        var alpha = harness.Row(0);
+        var beta = harness.Row(1);
+
+        var doomed = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        var kept = await harness.Shell.OpenSessionAsync(beta, CancellationToken.None);
+
+        await harness.Shell.RemoveProjectAsync(alpha, CancellationToken.None);
+
+        Assert.Equal(doomed!.TerminalId, Assert.Single(harness.Workspace.Closed));
+        Assert.Same(kept, Assert.Single(harness.Shell.Tabs.AllTabs));
+
+        // Выбор не сдвинулся: убрали не тот проект, на который смотрит полоса.
+        Assert.Same(beta, harness.Shell.ActiveProjectRow);
+        Assert.True(beta.IsCurrent);
+        Assert.Same(kept, harness.Shell.Tabs.ActiveTab);
+        Assert.Equal(1, beta.SessionCount);
+    }
+
+    [Fact]
+    public async Task Removal_that_failed_to_save_keeps_both_the_row_and_its_tabs()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var tab = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+
+        harness.Store.SaveFailure = new InvalidOperationException("projects.json занят");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.Shell.RemoveProjectAsync(row, CancellationToken.None));
+
+        Assert.Same(row, Assert.Single(harness.Shell.Projects.Rows));
+        Assert.Same(tab, Assert.Single(harness.Shell.Tabs.AllTabs));
+        Assert.Empty(harness.Workspace.Closed);
+    }
+
+    [Fact]
+    public async Task A_tab_that_refused_to_close_does_not_strand_the_rest_of_the_project()
+    {
+        var harness = await StartedAsync(
+            Project("alpha", PathA, 0),
+            Project("beta", PathB, 1));
+        var alpha = harness.Row(0);
+        var beta = harness.Row(1);
+
+        var kept = await harness.Shell.OpenSessionAsync(beta, CancellationToken.None);
+        var first = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+
+        harness.Workspace.CloseFailure = (first!.TerminalId, new InvalidOperationException("страница ушла"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => harness.Shell.RemoveProjectAsync(alpha, CancellationToken.None));
+
+        // Закрытие дошло до обеих вкладок: сбой на первой не отменяет закрытия второй.
+        Assert.Equal([first.TerminalId, second!.TerminalId], harness.Workspace.Closed);
+
+        // Строки проекта в списке уже нет, поэтому и вкладок его не осталось: иначе они
+        // жили бы с псевдоконсолями и без способа выбрать их проект.
+        Assert.Same(kept, Assert.Single(harness.Shell.Tabs.AllTabs));
+        Assert.Same(beta, Assert.Single(harness.Shell.Projects.Rows));
+        Assert.Null(harness.Shell.Tabs.ActiveTab);
+        Assert.Null(harness.Shell.ActiveProjectRow);
+
+        // Счётчики пересчитаны и на сбое: у уцелевшего проекта своя вкладка на месте.
+        Assert.Equal(1, beta.SessionCount);
+    }
+
+    [Fact]
+    public async Task Removing_the_project_of_the_active_tab_leaves_no_active_tab()
+    {
+        var harness = await StartedAsync(
+            Project("alpha", PathA, 0),
+            Project("beta", PathB, 1));
+        var alpha = harness.Row(0);
+
+        var stranger = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+        var doomed = await harness.Shell.OpenSessionAsync(alpha, CancellationToken.None);
+        Assert.Same(doomed, harness.Shell.Tabs.ActiveTab);
+
+        await harness.Shell.RemoveProjectAsync(alpha, CancellationToken.None);
+
+        // Выбор не остаётся на закрытой вкладке: соседней в убранном проекте не осталось,
+        // а вкладка чужого проекта активной не становится сама.
+        Assert.Null(harness.Shell.Tabs.ActiveTab);
+        Assert.False(doomed!.IsActive);
+        Assert.False(stranger!.IsActive);
+        Assert.Same(stranger, Assert.Single(harness.Shell.Tabs.AllTabs));
+    }
+
+    [Fact]
+    public async Task A_shell_that_exited_normally_is_marked_with_a_zero_code()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        harness.Workspace.RaiseExited(tab!.TerminalId, exitCode: 0);
+
+        // Вкладка остаётся на экране с пометкой о коде (раздел 8 ТЗ), но это штатный выход
+        // из оболочки: падением он не считается и красным не красится.
+        Assert.Same(tab, Assert.Single(harness.Shell.Tabs.Tabs));
+        Assert.True(tab.HasExited);
+        Assert.False(tab.IsRunning);
+        Assert.Equal(0, tab.ExitCode);
+        Assert.False(tab.HasFailedExit);
+        Assert.Equal("код 0", tab.ExitBadgeText);
+    }
+
+    [Fact]
+    public async Task A_shell_that_crashed_is_marked_with_its_exit_code()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        var changed = new List<string?>();
+        tab!.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        // Оболочку сняли по Ctrl+C: код падения у Windows отрицательный, и пометка обязана
+        // показать его как есть, а не «упал».
+        harness.Workspace.RaiseExited(tab.TerminalId, exitCode: -1073741510);
+
+        Assert.True(tab.HasFailedExit);
+        Assert.Equal(-1073741510, tab.ExitCode);
+        Assert.Equal("код -1073741510", tab.ExitBadgeText);
+
+        // Без уведомления об этих свойствах пометка и кнопка не появились бы на живой полосе.
+        Assert.Contains(nameof(TabViewModel.HasExited), changed);
+        Assert.Contains(nameof(TabViewModel.ExitBadgeText), changed);
+        Assert.Contains(nameof(TabViewModel.HasFailedExit), changed);
+    }
+
+    [Fact]
+    public async Task A_live_tab_has_no_badge_and_no_restart()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.False(tab!.HasExited);
+        Assert.Null(tab.ExitCode);
+        Assert.Equal(string.Empty, tab.ExitBadgeText);
+        Assert.False(harness.Shell.RestartTabCommand.CanExecute(tab));
+
+        // Перезапускать живую сессию нечего: второй вкладки не появляется.
+        Assert.Null(await harness.Shell.RestartTabAsync(tab, CancellationToken.None));
+        Assert.Same(tab, Assert.Single(harness.Shell.Tabs.Tabs));
+    }
+
+    [Fact]
+    public async Task Restart_opens_a_working_session_next_to_the_dead_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        Assert.True(harness.Shell.RestartTabCommand.CanExecute(dead));
+        var restarted = await harness.Shell.RestartTabAsync(dead, CancellationToken.None);
+
+        // Мёртвая вкладка не заменяется: её вывод пользователь ещё не прочитал.
+        Assert.NotNull(restarted);
+        Assert.NotSame(dead, restarted);
+        Assert.Equal([dead, restarted], harness.Shell.Tabs.Tabs);
+        Assert.True(dead.HasExited);
+
+        // Новая сессия живая, видимая и в том же проекте.
+        Assert.True(restarted!.IsRunning);
+        Assert.Same(restarted, harness.Shell.Tabs.ActiveTab);
+        Assert.Equal(restarted.TerminalId, harness.Workspace.VisibleTerminal);
+        Assert.Equal(dead.ProjectId, restarted.ProjectId);
+        Assert.Equal([PathA, PathA], harness.Workspace.OpenedDirectories);
+        Assert.Equal(2, harness.Row(0).SessionCount);
+        Assert.Empty(harness.Prompt.Errors);
+    }
+
+    [Fact]
+    public async Task Restart_into_a_vanished_folder_is_blocked_and_keeps_the_dead_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        // Каталог исчез, пока вкладка лежала мёртвой (раздел 8 ТЗ).
+        harness.Probe.Remove(PathA);
+
+        var restarted = await harness.Shell.RestartTabAsync(dead, CancellationToken.None);
+
+        // Запуск заблокирован той же проверкой доступности, что и обычное открытие сессии:
+        // пользователь видит сообщение, а не исключение.
+        Assert.Null(restarted);
+        Assert.Contains(PathA, Assert.Single(harness.Prompt.Errors));
+        Assert.False(harness.Row(0).IsAvailable);
+        Assert.Same(dead, Assert.Single(harness.Shell.Tabs.Tabs));
+        Assert.Equal([PathA], harness.Workspace.OpenedDirectories);
+    }
+
+    [Fact]
+    public async Task Restart_of_a_tab_whose_project_is_gone_does_nothing()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        // Строку убрали из списка вместе с вкладкой: запускать не в чем, но и падать не за что.
+        await harness.Shell.RemoveProjectAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.Null(await harness.Shell.RestartTabAsync(dead, CancellationToken.None));
+        Assert.Empty(harness.Shell.Tabs.AllTabs);
+    }
+
+    [Fact]
+    public async Task Closing_a_dead_tab_works_as_usual()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var alive = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        Assert.True(await harness.Shell.CloseTabAsync(dead, CancellationToken.None));
+
+        // Ни вопроса (процесса под вкладкой уже нет), ни следов в полосе и на строке проекта.
+        Assert.Empty(harness.Prompt.Confirmations);
+        Assert.Equal(dead.TerminalId, Assert.Single(harness.Workspace.Closed));
+        Assert.Same(alive, Assert.Single(harness.Shell.Tabs.Tabs));
+        Assert.Equal(1, harness.Row(0).SessionCount);
+    }
+
+    [Fact]
+    public async Task A_row_without_tabs_keeps_its_marker_unknown()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+
+        Assert.Equal(TabState.Unknown, harness.Row(0).MarkerState);
+    }
+
+    [Fact]
+    public async Task Row_marker_repaints_when_a_hook_changes_the_state_of_an_open_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var tab = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+
+        var changed = new List<string?>();
+        ((INotifyPropertyChanged)row).PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        // Состав вкладок не меняется — меняется только состояние. Точка на строке обязана
+        // перекраситься без переоткрытия вкладок, иначе она застынет на значении,
+        // вычисленном при открытии сессии.
+        tab!.State = TabState.Busy;
+
+        Assert.Equal(TabState.Busy, row.MarkerState);
+        Assert.Contains(nameof(ProjectRowViewModel.MarkerState), changed);
+
+        tab.State = TabState.AwaitingInput;
+
+        Assert.Equal(TabState.AwaitingInput, row.MarkerState);
+    }
+
+    [Fact]
+    public async Task Row_marker_of_a_project_that_is_not_shown_repaints_too()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var beta = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+        await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        beta!.State = TabState.AwaitingInput;
+
+        // На экране вкладки alpha, но точка beta должна загореться: ради этого маркер
+        // и нужен — увидеть проект, до которого ещё не дошли.
+        Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+        Assert.Equal(TabState.AwaitingInput, harness.Row(1).MarkerState);
+        Assert.Equal(TabState.Unknown, harness.Row(0).MarkerState);
+    }
+
+    [Fact]
+    public async Task Row_marker_sums_up_the_tabs_of_the_project()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var idle = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+        var busy = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+
+        idle!.State = TabState.Idle;
+        busy!.State = TabState.Busy;
+
+        Assert.Equal(TabState.Busy, row.MarkerState);
+
+        busy.State = TabState.AwaitingInput;
+
+        Assert.Equal(TabState.AwaitingInput, row.MarkerState);
+    }
+
+    [Fact]
+    public async Task Closing_the_last_tab_of_a_project_returns_the_marker_to_unknown()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var row = harness.Row(0);
+        var tab = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+        tab!.State = TabState.AwaitingInput;
+        Assert.Equal(TabState.AwaitingInput, row.MarkerState);
+
+        await harness.Shell.CloseTabAsync(tab, CancellationToken.None);
+
+        // Вкладок не осталось — светиться нечему, и точка в разметке всё равно скрыта.
+        Assert.Equal(TabState.Unknown, row.MarkerState);
+        Assert.False(row.HasSessions);
     }
 }

@@ -1,5 +1,6 @@
-using System.Windows.Input;
+﻿using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Domain;
 using Xunit;
@@ -20,8 +21,18 @@ public sealed class ShellShortcutHandlerTests
             Probe.Add(project.Path);
 
             var list = new ProjectListViewModel(
-                Store, new FakeGitBranchReader(), new FakeGitBranchWatcher(), Probe, new FakeFolderPicker(), new InlineUiDispatcher());
-            Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher());
+                Store,
+                new FakeGitBranchReader(),
+                new FakeGitBranchWatcher(),
+                Probe,
+                new FakeFolderPicker(),
+                new FakeProjectSettingsDialog(),
+                Prompt,
+                new FakeShellLauncher(),
+                new InlineUiDispatcher());
+            var sessionState = new SessionStateCoordinator(
+                new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
+            Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher(), sessionState);
             Handler = new ShellShortcutHandler(Shell, Prompt);
         }
 

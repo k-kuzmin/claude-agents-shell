@@ -98,10 +98,25 @@ public sealed class HookSettingsProvider : IHookSettingsProvider
         var matcher = new HookMatcherDto { Hooks = [command] };
         var document = new HookSettingsDto
         {
+            // Семь зарегистрированных хуков: начало и конец сессии, отправка промпта, конец хода
+            // агента в двух видах (штатный и оборванный) и пара хуков сабагентов. Состояние
+            // вкладки выводится только из них (раздел 7 CLAUDE.md), но набором всех хуков
+            // Claude Code они не являются: тот же Notification с notification_type
+            // (permission_prompt, idle_prompt, agent_needs_input) означал бы настоящее ожидание
+            // человека. Он сознательно не регистрируется — это отдельное решение пользователя.
+            // Имена точные: незнакомое имя Claude Code молча пропустит, и вкладка останется
+            // без маркера.
+            // Матчер у SessionStart не сужается до отдельных source: сжатие контекста приходит
+            // тем же хуком, и решение «это не граница хода» принимает координатор. Получить
+            // событие и осознанно ничего не сделать надёжнее, чем его не увидеть.
             Hooks = new Dictionary<string, List<HookMatcherDto>>(StringComparer.Ordinal)
             {
                 ["SessionStart"] = [matcher],
+                ["UserPromptSubmit"] = [matcher],
                 ["Stop"] = [matcher],
+                ["StopFailure"] = [matcher],
+                ["SubagentStart"] = [matcher],
+                ["SubagentStop"] = [matcher],
                 ["SessionEnd"] = [matcher],
             },
         };

@@ -16,6 +16,9 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     private readonly IGitBranchWatcher _branchWatcher;
     private readonly IDirectoryProbe _directoryProbe;
     private readonly IFolderPicker _folderPicker;
+    private readonly IProjectSettingsDialog _settingsDialog;
+    private readonly IUserPrompt _prompt;
+    private readonly IShellLauncher _shellLauncher;
     private readonly IUiDispatcher _dispatcher;
     private readonly ObservableCollection<ProjectRowViewModel> _rows = [];
 
@@ -33,6 +36,9 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         IGitBranchWatcher branchWatcher,
         IDirectoryProbe directoryProbe,
         IFolderPicker folderPicker,
+        IProjectSettingsDialog settingsDialog,
+        IUserPrompt prompt,
+        IShellLauncher shellLauncher,
         IUiDispatcher dispatcher)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -40,6 +46,9 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(branchWatcher);
         ArgumentNullException.ThrowIfNull(directoryProbe);
         ArgumentNullException.ThrowIfNull(folderPicker);
+        ArgumentNullException.ThrowIfNull(settingsDialog);
+        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(shellLauncher);
         ArgumentNullException.ThrowIfNull(dispatcher);
 
         _store = store;
@@ -47,6 +56,9 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         _branchWatcher = branchWatcher;
         _directoryProbe = directoryProbe;
         _folderPicker = folderPicker;
+        _settingsDialog = settingsDialog;
+        _prompt = prompt;
+        _shellLauncher = shellLauncher;
         _dispatcher = dispatcher;
 
         Rows = new ReadOnlyObservableCollection<ProjectRowViewModel>(_rows);
@@ -86,12 +98,18 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Добавляет проект: диалог выбора папки, имя по умолчанию — имя папки.
-    /// Полноценный диалог настроек — этап M5.
+    /// Добавляет проект в два шага (раздел 6.5 ТЗ): сначала выбор папки, затем диалог
+    /// настроек с подставленными умолчаниями — имя по папке, оболочка <c>pwsh</c>.
+    /// Отказ на любом из шагов не создаёт ничего.
     /// </summary>
+    /// <remarks>
+    /// Выбор папки идёт первым, а не полем внутри диалога: это привычный жест кнопки «плюс»,
+    /// и он позволяет узнать близнеца по каталогу до того, как пользователь потратит время
+    /// на настройки.
+    /// </remarks>
     /// <returns>
     /// Добавленная строка, уже имеющаяся строка того же каталога либо <c>null</c>,
-    /// если пользователь отказался от выбора.
+    /// если пользователь отказался.
     /// </returns>
     public async Task<ProjectRowViewModel?> AddProjectAsync(CancellationToken cancellationToken)
     {
@@ -103,12 +121,12 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
 
         // Тот же каталог второй строкой — почти наверняка промах в диалоге: показываем
         // пользователю уже существующую строку вместо близнеца, который путал бы счётчики.
-        if (_rows.FirstOrDefault(existing => ProjectNaming.SamePath(existing.Path, path)) is { } duplicate)
+        if (FindByPath(path) is { } duplicate)
         {
             return duplicate;
         }
 
-        var project = new ProjectDefinition(
+        var draft = new ProjectDefinition(
             Guid.NewGuid(),
             ProjectNaming.DefaultNameFor(path),
             path,
@@ -116,6 +134,30 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
             PreLaunch: null,
             ExtraArgs: [],
             Order: _rows.Count);
+
+        var confirmed = await _settingsDialog
+            .ShowAsync(draft, ProjectSettingsPurpose.Add, cancellationToken)
+            .ConfigureAwait(true);
+        if (confirmed is null)
+        {
+            return null;
+        }
+
+        // Путь мог измениться прямо в диалоге — проверяем близнеца ещё раз, уже по итоговому.
+        if (FindByPath(confirmed.Path) is { } twin)
+        {
+            // Здесь, в отличие от проверки по выбранной папке, пользователь уже заполнил
+            // имя, оболочку и аргументы: молча выбросить их — то же, что не отработавшая
+            // кнопка. Называем проект, который занимает каталог, чтобы было куда смотреть.
+            _prompt.ShowError(
+                "Проект не добавлен",
+                $"Каталог «{twin.Path}» уже открыт проектом «{twin.Name}». "
+                + "Два проекта на один каталог развели бы счётчики сессий, поэтому второй не добавлен.");
+            return twin;
+        }
+
+        // Идентификатор и место в списке принадлежат списку, а не диалогу.
+        var project = confirmed with { Id = draft.Id, Order = _rows.Count };
 
         // Сначала запись, потом строка на экране: иначе сорвавшееся сохранение оставило бы
         // в списке проект, которого нет в файле.
@@ -130,6 +172,96 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         _rows.Add(added);
         await AttachAsync(added, cancellationToken).ConfigureAwait(true);
         return added;
+    }
+
+    /// <summary>
+    /// Открывает каталог строки в проводнике. Действие над строкой панели, поэтому живёт
+    /// здесь, а не в корневой ViewModel: с вкладками оно не связано никак.
+    /// </summary>
+    /// <returns><c>false</c>, если открыть не удалось; исключения порт не бросает.</returns>
+    public Task<bool> OpenFolderAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        return _shellLauncher.OpenFolderAsync(row.Path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Показывает диалог настроек проекта (раздел 6.5 ТЗ) и, если пользователь согласился,
+    /// записывает список и обновляет строку. Отказ от диалога не меняет ничего.
+    /// </summary>
+    /// <returns><c>true</c>, если настройки сохранены.</returns>
+    public async Task<bool> EditProjectAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var edited = await _settingsDialog
+            .ShowAsync(row.Project, ProjectSettingsPurpose.Edit, cancellationToken)
+            .ConfigureAwait(true);
+        if (edited is null)
+        {
+            return false;
+        }
+
+        // Идентификатор и место в списке принадлежат списку, а не диалогу: к идентификатору
+        // привязаны открытые вкладки, а порядок строк диалог не видит вовсе.
+        var updated = edited with { Id = row.Id, Order = row.Project.Order };
+        var previousPath = row.Path;
+
+        // Сначала запись, потом строка на экране: сорвавшееся сохранение оставило бы
+        // на экране настройки, которых нет в файле.
+        var projects = Renumber(candidate => ReferenceEquals(candidate, row) ? updated : candidate.Project);
+        await _store.SaveAsync(projects, cancellationToken).ConfigureAwait(true);
+
+        row.Update(updated);
+
+        if (!ProjectNaming.SamePath(previousPath, updated.Path))
+        {
+            // Каталог переехал: прежнему наблюдателю следить не за чем, а ветку и доступность
+            // нужно перечитать у нового каталога.
+            Unwatch(previousPath);
+            row.Branch = null;
+            await AttachAsync(row, cancellationToken).ConfigureAwait(true);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Убирает проект из списка. Каталог пользователя не трогается ничем: удаляется только
+    /// строка <c>projects.json</c> — приложение в проект не пишет (раздел 7 CLAUDE.md).
+    /// </summary>
+    /// <returns><c>true</c>, если строка убрана; <c>false</c>, если такой строки уже нет.</returns>
+    public async Task<bool> RemoveProjectAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var index = _rows.IndexOf(row);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var projects = _rows
+            .Where(candidate => !ReferenceEquals(candidate, row))
+            .Select((candidate, order) => candidate.Project with { Order = order })
+            .ToList();
+
+        // Сначала запись, потом экран: не удалось записать — список в памяти остаётся целым,
+        // а сообщение об ошибке показывает вызывающий.
+        await _store.SaveAsync(projects, cancellationToken).ConfigureAwait(true);
+
+        _rows.RemoveAt(index);
+        Unwatch(row.Path);
+
+        // Порядок оставшихся пересчитан: без этого в Order осталась бы дыра, и следующий
+        // добавленный проект встал бы в списке не туда.
+        for (var i = 0; i < _rows.Count; i++)
+        {
+            _rows[i].Update(projects[i]);
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -168,6 +300,24 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
         row.Branch = await _branchReader.ReadAsync(row.Path, cancellationToken).ConfigureAwait(true);
         await _branchWatcher.WatchAsync(row.Path, cancellationToken).ConfigureAwait(true);
         _watched.Add(row.Path);
+    }
+
+    // Список для записи: порядок строк на экране и есть порядок в файле.
+    private List<ProjectDefinition> Renumber(Func<ProjectRowViewModel, ProjectDefinition> select) =>
+        _rows.Select((row, order) => select(row) with { Order = order }).ToList();
+
+    // Строка того же каталога, если она уже есть в списке.
+    private ProjectRowViewModel? FindByPath(string path) =>
+        _rows.FirstOrDefault(existing => ProjectNaming.SamePath(existing.Path, path));
+
+    private void Unwatch(string path)
+    {
+        // Наблюдателя снимаем ровно один раз: путь мог быть в списке только если каталог
+        // существовал в момент подключения строки.
+        if (_watched.Remove(path))
+        {
+            _branchWatcher.Unwatch(path);
+        }
     }
 
     private void UnwatchAll()

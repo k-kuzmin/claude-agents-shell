@@ -1,0 +1,169 @@
+<Window x:Class="ClaudeAgentsShell.App.Views.ConfirmationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Claude Agents Shell"
+        Width="440"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True">
+
+    <!--
+        Вопрос «точно?» перед необратимым действием. Системный MessageBox отвечал на него
+        светлым окном посреди тёмного приложения и не давал ни своих подписей, ни отступов.
+        Ресурсы темы подключаются прямо здесь — App.xaml их не держит, и без явного слияния
+        окно отрисовалось бы стандартным диалогом.
+        Ширина меньше, чем у диалога настроек (440 против 560): там форма с полями, здесь
+        одна фраза, и растягивать её на всю ширину — значит заставлять глаз ехать по пустоте.
+    -->
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Theme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <Style x:Key="DialogButtonStyle" TargetType="Button" BasedOn="{StaticResource OutlinedButtonStyle}">
+                <Setter Property="Height" Value="32" />
+                <Setter Property="MinWidth" Value="104" />
+                <Setter Property="FontSize" Value="12.5" />
+            </Style>
+
+            <!-- Подтверждающее действие: та же акцентная заливка, что у главной кнопки
+                 диалога настроек, чтобы у приложения была одна кнопка «да», а не две разные. -->
+            <Style x:Key="DialogPrimaryButtonStyle" TargetType="Button">
+                <Setter Property="Height" Value="32" />
+                <Setter Property="MinWidth" Value="104" />
+                <Setter Property="FontSize" Value="12.5" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="Foreground" Value="{StaticResource WorkAreaBackgroundBrush}" />
+                <Setter Property="SnapsToDevicePixels" Value="True" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Root"
+                                    Background="{StaticResource AccentBrush}"
+                                    CornerRadius="6"
+                                    Padding="14,0">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Root" Property="Opacity" Value="0.88" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Border BorderBrush="{StaticResource OutlineBrush}"
+            BorderThickness="1"
+            Background="{StaticResource WindowBackgroundBrush}"
+            TextElement.FontFamily="{StaticResource UiFontFamily}"
+            TextElement.Foreground="{StaticResource PrimaryTextBrush}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="38" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- полоса заголовка: та же, что у главного окна, чтобы окно читалось как его часть -->
+            <Border Grid.Row="0"
+                    Background="{StaticResource ChromeBackgroundBrush}"
+                    BorderBrush="{StaticResource SeparatorBrush}"
+                    BorderThickness="0,0,0,1"
+                    MouseLeftButtonDown="OnCaptionBarMouseLeftButtonDown">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Заголовок живёт в своей колонке, а не в горизонтальной панели:
+                         панель даёт тексту бесконечную ширину, и длинная формулировка
+                         уехала бы под кнопку закрытия вместо многоточия. -->
+                    <Grid Grid.Column="0" Margin="12,0,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                Width="16"
+                                Height="16"
+                                CornerRadius="4"
+                                VerticalAlignment="Center"
+                                Background="{StaticResource AccentBrush}" />
+                        <TextBlock x:Name="CaptionText"
+                                   Grid.Column="1"
+                                   Margin="10,0,8,0"
+                                   VerticalAlignment="Center"
+                                   FontSize="12.5"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                    </Grid>
+
+                    <!-- Не IsCancel: эта роль занята кнопкой «Отмена» в подвале, а два
+                         элемента на одну клавишу Esc заставили бы их чередоваться.
+                         Close() без DialogResult читается как отказ — ShowDialog вернёт null. -->
+                    <Button Grid.Column="1"
+                            Style="{StaticResource CaptionButtonStyle}"
+                            Margin="0,0,4,0"
+                            Click="OnCloseClick"
+                            ToolTip="Закрыть"
+                            AutomationProperties.Name="Закрыть">
+                        <Path Style="{StaticResource IconPathStyle}"
+                              StrokeThickness="1.3"
+                              Stroke="{StaticResource MutedTextBrush}"
+                              Data="M2.5,2.5 L11.5,11.5 M11.5,2.5 L2.5,11.5" />
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Формулировку вопроса целиком приносит вызывающий: окно не выбирает слова,
+                 иначе одна и та же мысль жила бы в двух местах. -->
+            <TextBlock x:Name="MessageText"
+                       Grid.Row="1"
+                       Margin="20,18,20,18"
+                       FontSize="12.5"
+                       LineHeight="20"
+                       TextWrapping="Wrap"
+                       Foreground="{StaticResource SecondaryTextBrush}" />
+
+            <Border Grid.Row="2"
+                    Background="{StaticResource ChromeBackgroundBrush}"
+                    BorderBrush="{StaticResource SeparatorBrush}"
+                    BorderThickness="0,1,0,0"
+                    Padding="20,14">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <!-- IsCancel даёт Esc и закрытие с отказом бесплатно. Эта же кнопка
+                         получает фокус при открытии: у прежнего MessageBox кнопкой по
+                         умолчанию стояла «Отмена», и подтверждение не должно оказаться
+                         в одном нажатии Enter от необратимого действия. -->
+                    <Button x:Name="CancelButton"
+                            Content="Отмена"
+                            IsCancel="True"
+                            Style="{StaticResource DialogButtonStyle}" />
+
+                    <Button x:Name="ConfirmButton"
+                            Content="Подтвердить"
+                            Margin="10,0,0,0"
+                            IsDefault="True"
+                            Style="{StaticResource DialogPrimaryButtonStyle}"
+                            Click="OnConfirmClick" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

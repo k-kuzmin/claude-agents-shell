@@ -12,6 +12,7 @@ public sealed class ProjectRowViewModel : ObservableObject
     private bool _isAvailable = true;
     private int _sessionCount;
     private bool _isCurrent;
+    private TabState _markerState = TabState.Unknown;
 
     /// <inheritdoc cref="ProjectRowViewModel" />
     public ProjectRowViewModel(ProjectDefinition project)
@@ -21,7 +22,28 @@ public sealed class ProjectRowViewModel : ObservableObject
     }
 
     /// <summary>Проект, который показывает строка.</summary>
-    public ProjectDefinition Project { get; }
+    public ProjectDefinition Project { get; private set; }
+
+    /// <summary>
+    /// Заменяет описание проекта: диалог настроек вернул отредактированное либо сместился
+    /// порядок после удаления соседней строки. Идентификатор строки при этом не меняется,
+    /// поэтому вкладки, открытые в этом проекте, остаются привязанными к ней.
+    /// </summary>
+    public void Update(ProjectDefinition project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        if (Project == project)
+        {
+            return;
+        }
+
+        Project = project;
+        Raise(nameof(Project));
+        Raise(nameof(Name));
+        Raise(nameof(Path));
+        Raise(nameof(PathAndBranch));
+    }
 
     /// <summary>Идентификатор проекта.</summary>
     public Guid Id => Project.Id;
@@ -78,6 +100,18 @@ public sealed class ProjectRowViewModel : ObservableObject
     public string SessionCountText => HasSessions
         ? SessionCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
         : "—";
+
+    /// <summary>
+    /// Состояние точки слева от числа сессий (раздел 6.2 ТЗ). Значение приходит не от хуков
+    /// напрямую, а сводится по вкладкам проекта: хук меняет состояние конкретной вкладки,
+    /// а строка показывает самое важное из состояний всех её вкладок
+    /// (<see cref="TabStripViewModel.MarkerStateFor" />). Вкладок нет — <see cref="TabState.Unknown" />.
+    /// </summary>
+    public TabState MarkerState
+    {
+        get => _markerState;
+        set => SetProperty(ref _markerState, value);
+    }
 
     /// <summary>Проект активной вкладки — строка подсвечена.</summary>
     public bool IsCurrent
