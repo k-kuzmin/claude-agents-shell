@@ -462,6 +462,12 @@ internal sealed class FakeTabStateSink : ITabStateSink
         workingDirectory = string.Empty;
         return false;
     }
+
+    /// <summary>Все вызовы <see cref="SetSessionContext"/> по порядку.</summary>
+    public List<(TerminalId Terminal, string? SessionId, string? CurrentDirectory, bool? SessionEnded)> SessionContextLog { get; } = [];
+
+    public void SetSessionContext(TerminalId terminalId, string? sessionId, string? currentDirectory, bool? sessionEnded) =>
+        SessionContextLog.Add((terminalId, sessionId, currentDirectory, sessionEnded));
 }
 
 /// <summary>

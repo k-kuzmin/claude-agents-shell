@@ -660,6 +660,30 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         return false;
     }
 
+    /// <inheritdoc />
+    void ITabStateSink.SetSessionContext(TerminalId terminalId, string? sessionId, string? currentDirectory, bool? sessionEnded)
+    {
+        if (Tabs.Find(terminalId) is not { } tab)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            tab.SessionId = sessionId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentDirectory))
+        {
+            tab.CurrentDirectory = currentDirectory;
+        }
+
+        if (sessionEnded is { } ended)
+        {
+            tab.SessionEnded = ended;
+        }
+    }
+
     // Строка, к которой относится команда: явно переданная либо выбранная. Кнопка настроек
     // в заголовке окна параметра не передаёт — там подразумевается выбранный проект.
     private ProjectRowViewModel? RowOf(object? parameter) =>

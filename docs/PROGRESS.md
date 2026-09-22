@@ -12,13 +12,17 @@
 | **M3** — история и `--resume` | **отложен пользователем**: «выбор и восстановление сессий пока не так важно» |
 | **M4** — состояние сессий | **смержен в `main`** (PR #2, `1302b63`); гейты пройдены (ревью четыре круга, аудит три), приёмка 21.09 частичная, остаток — раздел F сквозного списка |
 | **M5** — доводка | **смержен в `main`** (PR #2, `1302b63`); гейты пройдены (ревью два круга + круг по дельте 21.09, аудит два), приёмка 21.09 частичная, остаток — раздел F |
-| **M6** — issue #1 и #3 | ветка `stage/m6-indication`; код готов, ревью (два круга) и аудит пройдены, **ждёт живой проверки** — раздел «M6» |
+| **M6** — issue #1 и #3 | **смержен в `main`** (`c818c8b`), ветка удалена |
+| **M7** — восстановление сессий (#4) и diff (#5) | ветка `stage/m7-restore-diff`; контракты зафиксированы, блоки B1–B5 в работе — раздел «M7» |
 
-Сборка 0 ошибок / 0 предупреждений, тесты **609 зелёных**.
-Ветка одна — `main`: этапные ветки удалены после мержа PR #2. Релиз `v0.2.1` собран и опубликован.
+Сборка 0 ошибок / 0 предупреждений, тесты **693 зелёных** (контракты M7).
+Ветки: `main` и `stage/m7-restore-diff`. Релиз `v0.2.1` собран и опубликован.
 **Сквозной приёмочный список — в разделе «План приёмки». Это точка входа для новой сессии.**
 Репозиторий: https://github.com/k-kuzmin/claude-agents-shell (public).
 **Открытые задачи:** issue #1 и #3 чинятся в M6 (`stage/m6-indication`), см. раздел «M6».
+**M7 в работе:** #4 — восстановление открытых сессий при запуске (отступление от ТЗ 4.2:
+автоматически, только живые вкладки, с порядком); #5 — встроенный diff и MCP-инструмент
+`show_diff`. **План, решения и разбор проблем — в самих issue, опираться на них.**
 
 **Слитые ветки удаляются сразу** — локально и на remote, это часть процедуры мержа.
 
@@ -165,6 +169,62 @@ working set 321 МБ без роста. WebView2 — 430 МБ в шести пр
 **Известное замечание, не правленное:** в `ConfirmationWindow` перехват Enter закреплён только
 для фокуса на «Отмена». Если дойти Tab'ом до крестика в полосе заголовка и нажать Enter,
 сработает кнопка по умолчанию, то есть подтверждение. Для «убрать проект» путь стоит закрыть.
+
+## M7 — восстановление сессий (#4) и diff (#5), с 22.09.2026
+
+**Источник требований — issue #4 и #5, а не память.** Там решения пользователя, модель свёртки
+(как у GitHub), таблица проблем объёмного diff и приёмка.
+
+### Контракты (коммит контрактов M7)
+
+- Domain: `WorkspaceLayout`/`ProjectLayout`/`TabLayout`, `SessionIntegration`,
+  `Diff.cs` (`DiffRequest`, `DiffIndex`, `DiffFileEntry`, `DiffCollapseReason`, `DiffContext`,
+  `FileDiff`, `GitWorktree`, `DiffFailure`).
+- Ports: `ILayoutStore`, `IGitDiffReader` (+ `DiffUnavailableException`), `IDiffView`,
+  `IShowDiffHandler` (+ `ShowDiffRequest`, `ShowDiffOutcome`).
+- Склейка сделана сразу: `TabViewModel.SessionId`/`CurrentDirectory`/`SessionEnded`/`HasPendingDiff`,
+  `ITabStateSink.SetSessionContext`. **Координатор передаёт только хуки главного потока**
+  (`agent_id` пуст): у сабагента `cwd` его собственного worktree.
+- Изменения **существующих** интерфейсов делает блок-владелец (иначе коммит контрактов не собрался бы):
+  `ISessionCommandBuilder.Build(project, launch, SessionIntegration)` и `IHookListener` (адрес MCP) — B4;
+  `IAppDataPaths.LayoutFile` — B1.
+
+### Протокол моста — сообщения `diff.*`
+
+C# → страница:
+```
+{"type":"diff.pending","id":"t1"}
+{"type":"diff.index","id":"t1","root":"D:/r","base":"origin/main","mergeBase":"<sha>","ws":false,
+ "note":"…"|null,"expand":["a.cs"],"worktrees":[{"path":"…","branch":"…"|null,"current":true}],
+ "files":[{"p":"src/a.cs","o":null,"k":"M|A|D|R|U","a":12,"d":3,"c":"none|large|generated|binary"}]}
+{"type":"diff.file","id":"t1","path":"src/a.cs","ctx":"hunks|full","part":0,"last":true,"truncated":false,"text":"…"}
+{"type":"diff.error","id":"t1","path":null|"src/a.cs","message":"…"}
+{"type":"diff.stale","id":"t1"}
+{"type":"diff.close","id":"t1"}
+```
+Страница → C#:
+```
+{"type":"diff.refresh","id":"t1","dir":null|"…","base":null|"…","ws":false}
+{"type":"diff.file.request","id":"t1","path":"src/a.cs","ctx":"hunks|full"}
+{"type":"diff.closed","id":"t1"}
+```
+Бюджет автораскрытия (2000 строк / 50 файлов) и фильтр по расширению считает **страница**
+по видимому набору; причину свёртки (`c`) — C#.
+
+### Блоки и владение файлами
+
+Блоки идут параллельно, каждый в своём git worktree. Общие файлы — только у владельца.
+
+| Блок | Владеет | Суть |
+|---|---|---|
+| B1 | `Sessions/Storage`, `App/State/Layout*`, `ShellViewModel`, `WindowShutdownSequence` | `layout.json`, запись по изменениям, заморозка при закрытии, восстановление |
+| B2 | `Sessions/Git/Diff*` (новые файлы) | `GitDiffReader`, `DiffCollapsePolicy` |
+| B3 | `web/`, `Terminal/Protocol`, `WebView2TerminalBridge` | Панель, виртуализация, `IDiffView` на мосту |
+| B4 | `Sessions/Hooks`, `Sessions/Mcp`, `Sessions/Launch`, `Terminal/TerminalWorkspace` | `/mcp`, `show_diff`, `--mcp-config`, разрешение заранее |
+| B5 | `App/Diff` | `DiffCoordinator`: `IShowDiffHandler`, события `IDiffView`, значок, «устарело» |
+
+Оркестратор после блоков: DI (`AppComposition`), сочетание `Ctrl+Shift+D` в **обоих** списках
+(`ShellShortcutMap` и `isWindowShortcut`), значок в `TabStrip.xaml`, вызов `DiffCoordinator` из `ShellViewModel`.
 
 ## M6 — индикация (issue #1) и дубликат пути (issue #3), 22.09.2026
 
@@ -671,6 +731,9 @@ the field rolls out».
   не описывает; без номера пачки странице нечего вернуть, а встречный счётчик обнуляется при
   перезагрузке страницы.
 - **M3 отложен**, восстановление раскладки из M5 — тоже.
+- **Раскладка восстанавливается автоматически** (issue #4), вопреки разделу 4.2 ТЗ («не восстанавливает,
+  показывает в недавних»). Решение пользователя 22.09.2026: поднимаются все **живые** вкладки через
+  `--resume`, в прежнем порядке. **ТЗ не правлен.**
 
 ## Техника
 
