@@ -693,8 +693,10 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task PostToolBatch_главного_потока_снимает_разрешение_сабагента()
+    public async Task PostToolBatch_главного_потока_не_снимает_диалог_сабагента()
     {
+        // Главный поток работает дальше, но диалог сабагента всё ещё на экране. Пачка главного
+        // потока меняет только место возврата: после ответа сабагенту вкладка — «работает».
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
@@ -703,12 +705,40 @@ public sealed class SessionStateCoordinatorTests
         harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
         harness.RaiseHook(HookKind.PostToolBatch, tab);
 
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
         Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
     }
 
     [Fact]
-    public async Task Повторный_запрос_разрешения_не_затирает_состояние_до_диалога()
+    public async Task Пачка_другого_сабагента_диалог_не_снимает()
     {
+        // a1 ждёт разрешения, a3 тем временем работает: его пачка ничего не говорит об ответе a1.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent", "subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        var before = harness.Sink.StateLog.Count;
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a3");
+
+        Assert.Equal(before, harness.Sink.StateLog.Count);
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Два_диалога_снимаются_каждый_своим_сабагентом()
+    {
+        // Вкладка ждёт ввода, пока открыт хоть один диалог. Место возврата общее и не затирается
+        // вторым запросом.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
@@ -718,7 +748,62 @@ public sealed class SessionStateCoordinatorTests
         harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a2");
         harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
 
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a2");
+
         Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Stop_главного_потока_не_снимает_диалог_сабагента_при_двух_диалогах()
+    {
+        // Отказ главному потоку закрывает только его диалог; диалог сабагента остаётся.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task SubagentStop_сабагента_с_открытым_диалогом_снимает_диалог()
+    {
+        // Сабагент закончился, не дождавшись ответа (прерван, упал) — его диалога больше нет.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent", "subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task SubagentStop_последнего_учтённого_сабагента_с_диалогом_будит_вкладку()
+    {
+        // Откат без background_tasks: сабагент с открытым диалогом был последним живым —
+        // диалог снят, главный агент продолжит сам.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.SubagentStart, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.Stop, tab);
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SubagentStop, tab, agentId: "a1");
+
+        Assert.Equal(TabState.Busy, harness.Sink.States[tab]);
     }
 
     [Theory]

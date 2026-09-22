@@ -4,7 +4,7 @@ namespace ClaudeAgentsShell.App.State;
 
 /// <summary>
 /// Что известно об одной вкладке прямо сейчас и как очередной хук меняет её состояние
-/// (раздел 5.3 ТЗ): выставленное состояние, живые сабагенты и открытый диалог разрешения.
+/// (раздел 5.3 ТЗ): выставленное состояние, живые сабагенты и открытые диалоги разрешения.
 /// </summary>
 /// <remarks>
 /// Отделён от <see cref="SessionStateCoordinator"/>, чтобы тот оставался склейкой портов —
@@ -28,21 +28,34 @@ namespace ClaudeAgentsShell.App.State;
 /// запуск с остановкой нечем.
 /// </para>
 /// <para>
-/// <b>Диалог разрешения</b> ведётся явным признаком, а не угадывается по состоянию:
-/// <c>PermissionRequest</c> запоминает, где вкладка была без диалога, и выставляет «ждёт
-/// ввода»; любой следующий <c>PostToolBatch</c> — инструмент уже выполнился, значит, ответ
-/// дан — снимает признак. Всё, что меняет ход (промпт, граница сессии, конец хода главного
-/// потока), снимает его тоже, чтобы поздний <c>PostToolBatch</c> не поднял устаревшее
-/// состояние.
+/// <b>Диалоги разрешения</b> ведутся явно, по ключу того, кто спросил: <c>agent_id</c>
+/// сабагента или отдельный ключ главного потока. Вкладка «ждёт ввода», пока открыт хоть один
+/// диалог; место возврата — где вкладка была бы без диалогов — общее. Диалог снимает только
+/// его хозяин: <c>PostToolBatch</c> того же агента (инструмент выполнился — ответ дан),
+/// <c>SubagentStop</c> того же сабагента (диалог ушёл вместе с ним), а диалог главного
+/// потока — ещё и конец его хода. Промпт и граница сессии снимают все диалоги: ход сменился,
+/// и поздний <c>PostToolBatch</c> не должен поднять устаревшее состояние.
 /// </para>
 /// </remarks>
 internal sealed class TabActivity
 {
+    /// <summary>
+    /// Ключ диалога главного потока. С настоящим <c>agent_id</c> не совпадёт: пустой
+    /// <c>agent_id</c> как раз и означает главный поток.
+    /// </summary>
+    private const string MainThreadKey = "";
+
     /// <summary>Живые сабагенты по <c>agent_id</c> — откат на случай, когда <c>background_tasks</c> нет.</summary>
     private readonly HashSet<string> _liveAgents = new(StringComparer.Ordinal);
 
-    /// <summary>Открытый диалог разрешения; <see langword="null"/> — диалога нет.</summary>
-    private PendingPermission? _permission;
+    /// <summary>Открытые диалоги разрешения по ключу того, кто спросил.</summary>
+    private readonly HashSet<string> _openDialogs = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Куда вернуть вкладку, когда закроется последний диалог. Имеет смысл, только пока
+    /// <see cref="_openDialogs"/> не пуст.
+    /// </summary>
+    private TabState _resume;
 
     /// <summary>Состояние, выставленное вкладке последним; до первого хука — <c>Unknown</c>.</summary>
     public TabState State { get; private set; } = TabState.Unknown;
@@ -98,11 +111,12 @@ internal sealed class TabActivity
     /// и посреди фоновой работы: человек дописывает его прямо из «занята своей работой»,
     /// а Claude Code шлёт этот хук ещё и сам — по /loop, по расписанию и на машинные
     /// сообщения. Очистка стёрла бы живых сабагентов, и следующий Stop без
-    /// <c>background_tasks</c> дал бы ложное «ждёт ввода».
+    /// <c>background_tasks</c> дал бы ложное «ждёт ввода». Диалоги, наоборот, снимаются:
+    /// промпт отправлен — значит, диалога на экране уже нет.
     /// </remarks>
     private TabState? OnPromptSubmitted()
     {
-        _permission = null;
+        _openDialogs.Clear();
         return Publish(TabState.Busy);
     }
 
@@ -111,23 +125,16 @@ internal sealed class TabActivity
     /// на оборванном ходе Stop может не прийти вовсе. Если фоновые задачи живы, от человека
     /// сейчас ничего не нужно — сессия продолжится сама.
     /// <para>
-    /// Диалог сабагента ход главного потока не закрывает: он всё ещё на экране, поэтому
-    /// вкладка остаётся «ждёт ввода», а итог этого Stop запоминается как место возврата.
-    /// Диалог главного потока, наоборот, закрыт — иначе ход бы не кончился.
+    /// Конец хода закрывает только диалог главного потока: пока он открыт, ход кончиться
+    /// не может, значит, был отказ. Диалоги сабагентов всё ещё на экране — вкладка остаётся
+    /// «ждёт ввода», а итог этого Stop запоминается как место возврата.
     /// </para>
     /// </remarks>
     private TabState? OnTurnEnded(IReadOnlyList<BackgroundTask>? backgroundTasks)
     {
         var next = ResolveTurnEnd(backgroundTasks);
-
-        if (_permission is { FromMainThread: false } permission)
-        {
-            _permission = permission with { Resume = next };
-            return null;
-        }
-
-        _permission = null;
-        return Publish(next);
+        var closed = _openDialogs.Remove(MainThreadKey);
+        return Settle(next, closed, publishWhenNoDialogs: true);
     }
 
     /// <summary>Куда уходит вкладка в конце хода — см. раздел «Конец хода» в описании класса.</summary>
@@ -169,33 +176,32 @@ internal sealed class TabActivity
     /// только остановка сабагента, который действительно был в учёте, и только из «занята
     /// своей работой»: задвоенный или незнакомый SubagentStop иначе сбил бы «ждёт ввода»,
     /// которого ждёт пользователь, или разбудил бы вкладку, которую держит фоновая команда.
-    /// При открытом диалоге пробуждение откладывается до ответа на него.
+    /// Открытый диалог этого сабагента уходит вместе с ним; пока открыты чужие, пробуждение
+    /// откладывается до ответа на них.
     /// </remarks>
     private TabState? OnSubagentStopped(string? agentId)
     {
-        if (string.IsNullOrWhiteSpace(agentId) || !_liveAgents.Remove(agentId) || _liveAgents.Count > 0)
+        if (string.IsNullOrWhiteSpace(agentId))
         {
             return null;
         }
 
-        if (_permission is { } permission)
-        {
-            if (permission.Resume == TabState.BackgroundWork)
-            {
-                _permission = permission with { Resume = TabState.Busy };
-            }
+        // Пробуждение решается от состояния «без диалогов», а не от показанного «ждёт ввода».
+        var baseline = CurrentWithoutDialogs();
+        var wakes = _liveAgents.Remove(agentId)
+            && _liveAgents.Count == 0
+            && baseline == TabState.BackgroundWork;
+        var closed = _openDialogs.Remove(agentId);
 
-            return null;
-        }
-
-        return State == TabState.BackgroundWork ? Publish(TabState.Busy) : null;
+        return Settle(wakes ? TabState.Busy : baseline, closed, publishWhenNoDialogs: wakes);
     }
 
     /// <remarks>
     /// Пачка инструментов главного потока — доказательство, что главный агент работает,
     /// как бы ни начался ход: промпт, <c>!</c>-команда (она хуков не даёт вовсе) или
     /// пробуждение по фоновой задаче. Пачка сабагента этого не доказывает и вкладку не будит.
-    /// Любая пачка закрывает диалог разрешения: инструмент выполнился, значит, ответ дан.
+    /// Пачка закрывает только диалог своего агента: инструмент выполнился, значит, ответ дан.
+    /// Об ответе на чужой диалог она ничего не говорит.
     /// </remarks>
     private TabState? OnToolBatch(string? agentId)
     {
@@ -205,21 +211,21 @@ internal sealed class TabActivity
             return null;
         }
 
-        var permission = _permission;
-        _permission = null;
-
         if (string.IsNullOrWhiteSpace(agentId))
         {
-            return Publish(TabState.Busy);
+            var mainClosed = _openDialogs.Remove(MainThreadKey);
+            return Settle(TabState.Busy, mainClosed, publishWhenNoDialogs: true);
         }
 
-        return permission is { } pending ? Publish(pending.Resume) : null;
+        var baseline = CurrentWithoutDialogs();
+        var closed = _openDialogs.Remove(agentId);
+        return Settle(baseline, closed, publishWhenNoDialogs: false);
     }
 
     /// <remarks>
     /// Диалог разрешения — от главного потока или от сабагента — показывается как «ждёт
-    /// ввода». Повторный запрос, пока диалог открыт, место возврата не трогает: иначе оно
-    /// затёрлось бы самим «ждёт ввода».
+    /// ввода». Место возврата запоминает первый диалог; следующие его не трогают, иначе
+    /// оно затёрлось бы самим «ждёт ввода».
     /// </remarks>
     private TabState? OnPermissionRequested(string? agentId)
     {
@@ -229,15 +235,16 @@ internal sealed class TabActivity
             return null;
         }
 
-        var fromMainThread = string.IsNullOrWhiteSpace(agentId);
+        var key = string.IsNullOrWhiteSpace(agentId) ? MainThreadKey : agentId;
 
-        if (_permission is { } permission)
+        if (_openDialogs.Count > 0)
         {
-            _permission = permission with { FromMainThread = permission.FromMainThread || fromMainThread };
+            _openDialogs.Add(key);
             return null;
         }
 
-        _permission = new PendingPermission(fromMainThread, State);
+        _resume = State;
+        _openDialogs.Add(key);
         return Publish(TabState.AwaitingInput);
     }
 
@@ -248,11 +255,34 @@ internal sealed class TabActivity
         return Publish(TabState.Unknown);
     }
 
-    /// <summary>Снимает всё, что принадлежало сессии: учёт сабагентов и открытый диалог.</summary>
+    /// <summary>Где вкладка была бы, не будь открытых диалогов.</summary>
+    private TabState CurrentWithoutDialogs() => _openDialogs.Count > 0 ? _resume : State;
+
+    /// <summary>
+    /// Сводит изменение с открытыми диалогами: пока открыт хоть один, вкладка остаётся
+    /// «ждёт ввода», а <paramref name="next"/> становится местом возврата.
+    /// </summary>
+    /// <param name="next">Где вкладка была бы без диалогов.</param>
+    /// <param name="dialogClosed">Этим хуком закрыт диалог — показ обязан смениться.</param>
+    /// <param name="publishWhenNoDialogs">
+    /// Хук меняет состояние сам по себе, даже если диалогов не было.
+    /// </param>
+    private TabState? Settle(TabState next, bool dialogClosed, bool publishWhenNoDialogs)
+    {
+        if (_openDialogs.Count > 0)
+        {
+            _resume = next;
+            return null;
+        }
+
+        return dialogClosed || publishWhenNoDialogs ? Publish(next) : null;
+    }
+
+    /// <summary>Снимает всё, что принадлежало сессии: учёт сабагентов и открытые диалоги.</summary>
     private void ForgetSession()
     {
         _liveAgents.Clear();
-        _permission = null;
+        _openDialogs.Clear();
     }
 
     /// <summary>Запоминает состояние как выставленное и возвращает его для показа.</summary>
@@ -261,12 +291,4 @@ internal sealed class TabActivity
         State = state;
         return state;
     }
-
-    /// <summary>Открытый диалог разрешения.</summary>
-    /// <param name="FromMainThread">
-    /// Диалог просил главный поток. Такой диалог закрывается концом хода: пока он открыт,
-    /// ход кончиться не может.
-    /// </param>
-    /// <param name="Resume">Куда вернуть вкладку после ответа, если ответ дал сабагент.</param>
-    private readonly record struct PendingPermission(bool FromMainThread, TabState Resume);
 }
