@@ -79,7 +79,7 @@ public sealed class ProjectSettingsWindowDialog : IProjectSettingsDialog
     }
 
     // Владелец берётся у приложения, а не хранится ссылкой: иначе порт диалога держал бы
-    // главное окно живым. Тот же приём, что у MessageBoxUserPrompt.
+    // главное окно живым. Тот же приём, что у DialogUserPrompt.
     private static Window Owner() =>
         System.Windows.Application.Current?.MainWindow
         ?? throw new InvalidOperationException("Главное окно ещё не создано.");

@@ -48,7 +48,7 @@ internal static class AppComposition
         // Порты уровня оболочки: всё, что ViewModel нужно от WPF и файловой системы.
         // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.
         services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
-        services.AddSingleton<IUserPrompt, MessageBoxUserPrompt>();
+        services.AddSingleton<IUserPrompt, DialogUserPrompt>();
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
         services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
         services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
