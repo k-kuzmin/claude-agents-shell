@@ -15,14 +15,12 @@ public sealed class BridgeDiffMessageWriterTests
     [Theory]
     [InlineData("diff.pending")]
     [InlineData("diff.stale")]
-    [InlineData("diff.close")]
     public void Простые_сообщения_несут_тип_и_вкладку(string type)
     {
         string json = type switch
         {
             "diff.pending" => _writer.DiffPending(Id),
-            "diff.stale" => _writer.DiffStale(Id),
-            _ => _writer.DiffClose(Id),
+            _ => _writer.DiffStale(Id),
         };
 
         using var document = JsonDocument.Parse(json);

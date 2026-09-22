@@ -9,6 +9,13 @@
   var AUTO_MAX_FILES = 50;
   var LONG_LINE = 2000;
 
+  // «Показать целиком»: потолок символов в окне строки. Мегабайтный <pre> — сотни мс раскладки.
+  var OVERLAY_LINE = 256 * 1024;
+
+  // Содержимое файла длиннее этого (в символах diff) при скрытии вкладки выгружается,
+  // остальное остаётся, чтобы переключение вкладок не перезапрашивало файлы.
+  var HIDDEN_KEEP_CHARS = 512 * 1024;
+
   // Виды строк разобранного diff.
   var ROW_HUNK = 'h';    // @@ -a,b +c,d @@
   var ROW_CONTEXT = 'c'; // ' '
@@ -223,6 +230,11 @@
     return { text: text.slice(0, limit), cut: true };
   }
 
+  // Оставить ли загруженное содержимое файла, когда вкладку скрыли.
+  function keepWhenHidden(textLength) {
+    return typeof textLength === 'number' && textLength <= HIDDEN_KEEP_CHARS;
+  }
+
   // Раскладка для виртуализации: блоки подряд идущих строк (по блоку на файл).
   // starts[i] — номер первой строки блока i, total — всего строк.
   function buildLayout(sizes) {
@@ -273,6 +285,9 @@
     AUTO_MAX_LINES: AUTO_MAX_LINES,
     AUTO_MAX_FILES: AUTO_MAX_FILES,
     LONG_LINE: LONG_LINE,
+    OVERLAY_LINE: OVERLAY_LINE,
+    HIDDEN_KEEP_CHARS: HIDDEN_KEEP_CHARS,
+    keepWhenHidden: keepWhenHidden,
     ROW_HUNK: ROW_HUNK,
     ROW_CONTEXT: ROW_CONTEXT,
     ROW_ADD: ROW_ADD,

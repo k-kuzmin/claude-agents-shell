@@ -30,9 +30,6 @@ public sealed partial class BridgeMessageWriter
     public string DiffStale(TerminalId terminalId) => Simple("diff.stale", terminalId);
 
     /// <inheritdoc />
-    public string DiffClose(TerminalId terminalId) => Simple("diff.close", terminalId);
-
-    /// <inheritdoc />
     public string DiffError(TerminalId terminalId, string? path, string message)
     {
         ArgumentNullException.ThrowIfNull(message);
