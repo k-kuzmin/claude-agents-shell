@@ -43,7 +43,7 @@ public sealed class LayoutRestoreTests
             var sessionState = new SessionStateCoordinator(
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             Shell = new ShellViewModel(
-                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, Layouts, Layouts.CreateRecorder(Time),
+                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, Layouts.CreateService(Time),
                 Diff.Coordinator, Diff.Tracker);
         }
 

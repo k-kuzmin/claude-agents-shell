@@ -70,6 +70,7 @@ internal static class AppComposition
 
         // Раскладка окна пишется по изменениям вкладок (issue #4).
         services.AddSingleton<LayoutRecorder>();
+        services.AddSingleton<WorkspaceLayoutService>();
 
         // Diff вкладок (issue #5). Координатор — одновременно обработчик show_diff (его получает
         // инструмент MCP-маршрута приёмника хуков) и приёмник сигнала «устарело». Набор вкладок он получает в Start,

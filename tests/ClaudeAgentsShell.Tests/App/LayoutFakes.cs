@@ -38,6 +38,9 @@ internal sealed class FakeLayoutStore : ILayoutStore
     /// <summary>Регистратор поверх этого хранилища; время по умолчанию стоит на месте.</summary>
     public LayoutRecorder CreateRecorder(TimeProvider? time = null, IUiDispatcher? dispatcher = null) =>
         new(this, time ?? new ManualTimeProvider(), dispatcher ?? new InlineUiDispatcher(), new FakeCrashLog());
+
+    /// <summary>Сервис раскладки поверх этого хранилища и нового регистратора.</summary>
+    public WorkspaceLayoutService CreateService(TimeProvider? time = null) => new(this, CreateRecorder(time));
 }
 
 /// <summary>Набор терминалов, который запоминает режим запуска каждой вкладки.</summary>
