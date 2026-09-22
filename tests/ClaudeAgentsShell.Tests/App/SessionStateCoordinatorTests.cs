@@ -807,26 +807,84 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Theory]
-    [InlineData(HookKind.Stop)]
-    [InlineData(HookKind.UserPromptSubmit)]
-    [InlineData(HookKind.SessionStart)]
-    public async Task Ожидание_разрешения_снимается_сменой_хода(HookKind next)
+    [InlineData(HookKind.Stop, TabState.BackgroundWork)]
+    [InlineData(HookKind.UserPromptSubmit, TabState.Busy)]
+    [InlineData(HookKind.SessionStart, TabState.Idle)]
+    public async Task Диалог_главного_потока_снимается_сменой_хода(HookKind next, TabState expected)
     {
-        // Диалог закрыт отказом, отменой или новым ходом — признак «ждёт разрешения» уходит
-        // вместе с ним, и поздний PostToolBatch сабагента не поднимет устаревшее состояние.
+        // Диалог главного потока закрыт отказом, отменой или новым ходом: вкладка уходит
+        // из «ждёт ввода», и поздний PostToolBatch сабагента не поднимет устаревшее состояние.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.UserPromptSubmit, tab);
         harness.RaiseHook(HookKind.PermissionRequest, tab);
-        harness.RaiseHook(next, tab, backgroundTasks: next == HookKind.Stop ? NoTasks : null);
-        var stateAfter = harness.Sink.States[tab];
+        harness.RaiseHook(next, tab, backgroundTasks: next == HookKind.Stop ? Tasks("shell") : null);
+
+        Assert.Equal(expected, harness.Sink.States[tab]);
         var before = harness.Sink.StateLog.Count;
 
         harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
 
         Assert.Equal(before, harness.Sink.StateLog.Count);
-        Assert.Equal(stateAfter, harness.Sink.States[tab]);
+        Assert.Equal(expected, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Машинный_промпт_диалог_сабагента_не_снимает()
+    {
+        // Человек при открытом диалоге промпт отправить не может: UserPromptSubmit в этот
+        // момент шлёт сам Claude Code — по /loop, расписанию или на машинное сообщение.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "system");
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Ход_после_машинного_промпта_диалог_сабагента_не_прячет()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, source: "loop_wakeup");
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+
+        Assert.Equal(TabState.AwaitingInput, harness.Sink.States[tab]);
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(TabState.BackgroundWork, harness.Sink.States[tab]);
+    }
+
+    [Fact]
+    public async Task Граница_сессии_снимает_диалог_сабагента()
+    {
+        // Сессия поднялась заново: диалогов прежней на экране нет, и поздняя пачка a1
+        // вкладку из «простаивает» не уводит.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab);
+        harness.RaiseHook(HookKind.Stop, tab, backgroundTasks: Tasks("subagent"));
+        harness.RaiseHook(HookKind.PermissionRequest, tab, agentId: "a1");
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "startup");
+
+        Assert.Equal(TabState.Idle, harness.Sink.States[tab]);
+        var before = harness.Sink.StateLog.Count;
+
+        harness.RaiseHook(HookKind.PostToolBatch, tab, agentId: "a1");
+
+        Assert.Equal(before, harness.Sink.StateLog.Count);
+        Assert.Equal(TabState.Idle, harness.Sink.States[tab]);
     }
 
     [Fact]
