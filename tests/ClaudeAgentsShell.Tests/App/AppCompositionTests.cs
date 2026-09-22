@@ -2,6 +2,7 @@ using ClaudeAgentsShell.App;
 using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
+using ClaudeAgentsShell.Sessions.Mcp;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -44,12 +45,16 @@ public sealed class AppCompositionTests
             {
                 Assert.NotNull(provider.GetRequiredService<ShellViewModel>());
 
-                // Фабрика Lazy<IShowDiffHandler> проверкой плана не обходится: только
-                // настоящее разрешение показывает, что show_diff дойдёт до того же координатора,
-                // что слушает панель, и что цикла нет.
+                // Приёмник хуков создаётся целиком: маршрут /mcp → инструмент show_diff →
+                // координатор diff. Цикл в этой цепочке здесь и упал бы. Инструмент обязан
+                // получить тот же координатор, что слушает панель.
+                Assert.NotNull(provider.GetRequiredService<IHookListener>());
                 var coordinator = provider.GetRequiredService<DiffCoordinator>();
-                Assert.Same(coordinator, provider.GetRequiredService<Lazy<IShowDiffHandler>>().Value);
+                Assert.Same(coordinator, provider.GetRequiredService<IShowDiffHandler>());
                 Assert.Same(coordinator, provider.GetRequiredService<IDiffChangeSink>());
+                Assert.Contains(
+                    provider.GetServices<IMcpTool>(),
+                    static tool => tool is ShowDiffTool && tool.Name == "show_diff");
             });
     }
 
