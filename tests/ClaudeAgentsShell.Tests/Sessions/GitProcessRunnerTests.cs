@@ -123,6 +123,45 @@ public sealed class GitProcessRunnerTests
         Assert.True(version.Succeeded);
     }
 
+    [Fact]
+    public async Task Гонка_отмены_с_завершением_процесса_не_даёт_чужих_исключений()
+    {
+        using var temp = new TempDirectory();
+        var runner = CreateRunner(new GitDiffOptions());
+        var random = new Random(7);
+        var completed = 0;
+        var cancelled = 0;
+
+        for (var i = 0; i < 60; i++)
+        {
+            using var cancellation = new CancellationTokenSource();
+            var run = runner.RunAsync(temp.Path, ["--version"], null, null, cancellation.Token);
+
+            // Отмена приходит до, во время и после завершения git.
+            var delay = random.Next(0, 40);
+            if (delay > 0)
+            {
+                await Task.Delay(delay);
+            }
+
+            await cancellation.CancelAsync();
+            try
+            {
+                await run;
+                completed++;
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled++;
+            }
+        }
+
+        // Снятия из пула, поставленные на уже освобождённые процессы, должны отработать тихо.
+        await Task.Delay(200);
+        Assert.Equal(60, completed + cancelled);
+        Assert.DoesNotContain(ProcessTree.Descendants(Environment.ProcessId), static pid => GitFamily.Contains(Path.GetFileNameWithoutExtension(ProcessTree.NameOf(pid))));
+    }
+
     private static GitProcessRunner CreateRunner(GitDiffOptions options) =>
         new(options, new GitProcessGate(options.MaxConcurrentProcesses));
 
