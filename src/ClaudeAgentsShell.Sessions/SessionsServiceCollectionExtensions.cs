@@ -35,6 +35,10 @@ public static class SessionsServiceCollectionExtensions
 
         services.TryAddSingleton<IGitBranchReader, GitBranchReader>();
         services.TryAddSingleton<IGitBranchWatcher, GitBranchWatcher>();
+        services.TryAddSingleton(new GitDiffOptions());
+        services.TryAddSingleton<GitProcessRunner>();
+        services.TryAddSingleton<DiffCollapsePolicy>();
+        services.TryAddSingleton<IGitDiffReader, GitDiffReader>();
 
         services.TryAddSingleton<ISessionCommandBuilder, SessionCommandBuilder>();
 
