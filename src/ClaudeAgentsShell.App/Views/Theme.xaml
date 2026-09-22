@@ -99,6 +99,29 @@
         <Setter Property="StrokeLineJoin" Value="Round" />
     </Style>
 
+    <!-- Знак приложения: скруглённый квадрат акцентного цвета с приглашением `>_`.
+         Нарисован в сетке 32×32 тремя фигурами — площадка, шеврон, подчёркивание.
+         Координаты глифа чётные: на 16×16 сетка делится ровно пополам, и края шеврона
+         и подчёркивания ложатся на границы пикселей, а не размываются между ними.
+         EvenOdd превращает вторую и третью фигуры в вырезы: сквозь них видно фон
+         полосы заголовка (ChromeBackgroundBrush), отдельной заливки глифу не нужно.
+         Эта же геометрия — единственный источник для src/ClaudeAgentsShell.App/Assets/app.ico:
+         кадры .ico отрисованы из неё, поэтому иконка в панели задач и знак в полосе
+         заголовка не могут разойтись. Менять знак — только здесь и с перегенерацией .ico. -->
+    <PathGeometry x:Key="AppMarkGeometry"
+                  FillRule="EvenOdd"
+                  Figures="M7,0 L25,0 A7,7 0 0 1 32,7 L32,25 A7,7 0 0 1 25,32 L7,32 A7,7 0 0 1 0,25 L0,7 A7,7 0 0 1 7,0 Z M6,8 L14,16 L6,24 L6,19 L9,16 L6,13 Z M20,20 L24,20 A2,2 0 0 1 24,24 L20,24 A2,2 0 0 1 20,20 Z" />
+
+    <!-- Знак в полосе заголовка. Намеренно не наследует IconPathStyle: тот настраивает
+         обводку, а знак — заливка без штриха. Uniform масштабирует сетку 32×32 в 16×16. -->
+    <Style x:Key="AppMarkStyle" TargetType="Path">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="Stretch" Value="Uniform" />
+        <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Data" Value="{StaticResource AppMarkGeometry}" />
+    </Style>
+
     <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
 
     <Style x:Key="SectionCaptionStyle" TargetType="TextBlock">

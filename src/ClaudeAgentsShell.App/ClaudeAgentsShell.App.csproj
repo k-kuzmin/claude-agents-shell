@@ -7,6 +7,10 @@
     <AssemblyName>ClaudeAgentsShell</AssemblyName>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Иконка вшивается в exe, поэтому её берут и панель задач, и alt-tab, и проводник.
+         Window.Icon при этом не задаётся: WPF сам подставляет иконку процесса, а отдельная
+         привязка на каждое окно разъезжалась бы с ней при первой же правке знака. -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
