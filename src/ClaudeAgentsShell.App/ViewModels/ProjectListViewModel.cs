@@ -149,10 +149,7 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
             // Здесь, в отличие от проверки по выбранной папке, пользователь уже заполнил
             // имя, оболочку и аргументы: молча выбросить их — то же, что не отработавшая
             // кнопка. Называем проект, который занимает каталог, чтобы было куда смотреть.
-            _prompt.ShowError(
-                "Проект не добавлен",
-                $"Каталог «{twin.Path}» уже открыт проектом «{twin.Name}». "
-                + "Два проекта на один каталог развели бы счётчики сессий, поэтому второй не добавлен.");
+            _prompt.ShowError("Проект не добавлен", DuplicatePathMessage(twin));
             return twin;
         }
 
@@ -188,7 +185,8 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Показывает диалог настроек проекта (раздел 6.5 ТЗ) и, если пользователь согласился,
-    /// записывает список и обновляет строку. Отказ от диалога не меняет ничего.
+    /// записывает список и обновляет строку. Отказ от диалога не меняет ничего; путь,
+    /// уже занятый другой строкой, тоже не сохраняется — с сообщением, какой проект его занял.
     /// </summary>
     /// <returns><c>true</c>, если настройки сохранены.</returns>
     public async Task<bool> EditProjectAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
@@ -200,6 +198,15 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
             .ConfigureAwait(true);
         if (edited is null)
         {
+            return false;
+        }
+
+        // Правило «один проект на один каталог» то же, что у добавления: иначе запрещённое
+        // одним путём разрешалось бы другим. Саму строку из поиска исключаем — проект,
+        // которому путь не меняли, не должен отказывать сам себе.
+        if (FindByPath(edited.Path, except: row) is { } twin)
+        {
+            _prompt.ShowError("Настройки не сохранены", DuplicatePathMessage(twin));
             return false;
         }
 
@@ -306,9 +313,17 @@ public sealed class ProjectListViewModel : ObservableObject, IDisposable
     private List<ProjectDefinition> Renumber(Func<ProjectRowViewModel, ProjectDefinition> select) =>
         _rows.Select((row, order) => select(row) with { Order = order }).ToList();
 
-    // Строка того же каталога, если она уже есть в списке.
-    private ProjectRowViewModel? FindByPath(string path) =>
-        _rows.FirstOrDefault(existing => ProjectNaming.SamePath(existing.Path, path));
+    // Строка того же каталога, если она уже есть в списке; except — строка, которую
+    // не считать близнецом (сама редактируемая).
+    private ProjectRowViewModel? FindByPath(string path, ProjectRowViewModel? except = null) =>
+        _rows.FirstOrDefault(existing =>
+            !ReferenceEquals(existing, except) && ProjectNaming.SamePath(existing.Path, path));
+
+    // Отказ по близнецу — один текст для добавления и редактирования, чтобы формулировки
+    // не разъехались. Называет проект, который занимает каталог: пользователю есть куда смотреть.
+    private static string DuplicatePathMessage(ProjectRowViewModel twin) =>
+        $"Каталог «{twin.Path}» уже открыт проектом «{twin.Name}». "
+        + "Два проекта на один каталог развели бы счётчики сессий.";
 
     private void Unwatch(string path)
     {
