@@ -431,6 +431,11 @@
 
     if (message.truncated === true) {
       entry.state = 'truncated';
+    } else if (!this.visible && !M.keepWhenHidden(text.length)) {
+      // Крупный файл догрузился уже после скрытия вкладки: держать его скрытой панели
+      // нельзя (то же правило, что в setVisible). Разбирать не нужно — выгружаем сразу,
+      // желание «раскрыт» остаётся, при показе requestWanted запросит файл заново.
+      unload(entry);
     } else {
       var parsed = M.parseUnified(text);
       entry.rows = parsed.rows;
