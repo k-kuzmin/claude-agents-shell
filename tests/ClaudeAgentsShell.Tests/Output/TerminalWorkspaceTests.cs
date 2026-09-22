@@ -826,6 +826,9 @@ internal sealed class FakeHookSettingsProvider(string? path = @"C:\data\hooks.js
 {
     public string TokenVariableName => "CLAUDE_AGENTS_SHELL_TAB";
 
+    public IReadOnlyDictionary<string, string> SessionEnvironment(string token) =>
+        new Dictionary<string, string> { [TokenVariableName] = token };
+
     /// <summary>Сколько раз просили файл: по этому счётчику видно, что он готовится один раз.</summary>
     public int Calls { get; private set; }
 

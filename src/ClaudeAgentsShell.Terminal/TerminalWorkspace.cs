@@ -142,18 +142,19 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
         // локальный процесс переключал бы состояние чужой вкладки.
         string token = NewCorrelationToken();
 
-        var startInfo = new PtyStartInfo(
-            shell,
-            project.Path,
-            TerminalSize.Default,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                // Окружение процесса наследуется от приложения; здесь только то, что
-                // добавляется поверх. TERM обязателен — без него TUI рисует рамки псевдографикой.
-                ["TERM"] = "xterm-256color",
-                [_hooks.TokenVariableName] = token,
-                ["NO_PROXY"] = LoopbackBypassingProxy(Environment.GetEnvironmentVariable("NO_PROXY")),
-            });
+        // Окружение процесса наследуется от приложения; здесь только то, что добавляется
+        // поверх. TERM обязателен — без него TUI рисует рамки псевдографикой. Переменные хуков
+        // (токен вкладки и то, что нужно их транспорту) отдаёт слой хуков.
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TERM"] = "xterm-256color",
+        };
+        foreach (var (name, value) in _hooks.SessionEnvironment(token))
+        {
+            environment[name] = value;
+        }
+
+        var startInfo = new PtyStartInfo(shell, project.Path, TerminalSize.Default, environment);
 
         _pending[terminalId.Value] = new PendingTerminal(startInfo, startupInput);
         _tokens[token] = terminalId;
@@ -649,15 +650,4 @@ public sealed class TerminalWorkspace : ITerminalWorkspace
     /// в её stdin, когда придёт <c>ready</c>.
     /// </summary>
     private readonly record struct PendingTerminal(PtyStartInfo StartInfo, IReadOnlyList<string> StartupInput);
-
-    /// <summary>
-    /// Дописывает loopback к <c>NO_PROXY</c>: HTTP-хуки Claude Code иначе уйдут в прокси
-    /// из окружения и не доедут до приёмника на 127.0.0.1. Существующее значение сохраняется.
-    /// Ключ один: словарь окружения и Windows регистр имён не различают.
-    /// </summary>
-    internal static string LoopbackBypassingProxy(string? existing)
-    {
-        const string loopback = "127.0.0.1,localhost";
-        return string.IsNullOrWhiteSpace(existing) ? loopback : $"{existing.TrimEnd(',')},{loopback}";
-    }
 }

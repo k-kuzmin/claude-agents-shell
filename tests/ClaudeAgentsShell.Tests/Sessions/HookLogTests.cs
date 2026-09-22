@@ -1,3 +1,4 @@
+using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
 using ClaudeAgentsShell.Sessions.Hooks;
 using ClaudeAgentsShell.Sessions.Storage;
@@ -140,8 +141,93 @@ public sealed class HookLogTests
         log.Record(new HookEvent(HookKind.Stop, "s", null, null, Moment));
     }
 
+    [Fact]
+    public async Task Неожиданное_исключение_путей_теряет_пачку_но_не_цикл_записи()
+    {
+        using var temp = new TempDirectory();
+        var paths = new ThrowingOncePaths(temp.Combine("appdata"));
+
+        var log = new HookLog(paths, new UtcTimeProvider());
+        log.Record(new HookEvent(HookKind.Stop, "потерянный", null, null, Moment));
+
+        // Первая пачка упёрлась в исключение вне списка ввода-вывода.
+        await paths.Thrown.WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None);
+
+        log.Record(new HookEvent(HookKind.Stop, "дошедший", null, null, Moment));
+        await log.DisposeAsync();
+
+        var line = Assert.Single(await File.ReadAllLinesAsync(
+            Path.Combine(temp.Combine("appdata"), HookLog.FileName),
+            CancellationToken.None));
+        Assert.Contains("session=дошедший", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Закрытие_не_пробрасывает_сбой_записи()
+    {
+        var paths = new AlwaysThrowingPaths();
+
+        var log = new HookLog(paths, new UtcTimeProvider());
+        log.Record(new HookEvent(HookKind.Stop, "s", null, null, Moment));
+        log.Record(new HookEvent(HookKind.SessionEnd, "s", null, null, Moment));
+
+        var failure = await Record.ExceptionAsync(() => log.DisposeAsync().AsTask());
+
+        Assert.Null(failure);
+        Assert.True(paths.Calls > 0);
+    }
+
     private static HookLog CreateLog(TempDirectory temp, string appData) =>
         new(new AppDataPaths(appData, temp.Combine("claude", "projects")), new UtcTimeProvider());
+
+    /// <summary>Каталог данных, который в первый раз бросает не-IO исключение, а дальше работает.</summary>
+    private sealed class ThrowingOncePaths(string appData) : IAppDataPaths
+    {
+        private readonly TaskCompletionSource _thrown = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _calls;
+
+        public Task Thrown => _thrown.Task;
+
+        public string AppData
+        {
+            get
+            {
+                if (Interlocked.Increment(ref _calls) == 1)
+                {
+                    _thrown.TrySetResult();
+                    throw new InvalidOperationException("пути ещё не готовы");
+                }
+
+                Directory.CreateDirectory(appData);
+                return appData;
+            }
+        }
+
+        public string ProjectsFile => Path.Combine(appData, "projects.json");
+
+        public string ClaudeProjects => Path.Combine(appData, "claude");
+    }
+
+    /// <summary>Каталог данных, который бросает всегда.</summary>
+    private sealed class AlwaysThrowingPaths : IAppDataPaths
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public string AppData
+        {
+            get
+            {
+                Interlocked.Increment(ref _calls);
+                throw new InvalidOperationException("путей нет");
+            }
+        }
+
+        public string ProjectsFile => throw new InvalidOperationException("путей нет");
+
+        public string ClaudeProjects => throw new InvalidOperationException("путей нет");
+    }
 
     private sealed class UtcTimeProvider : TimeProvider
     {

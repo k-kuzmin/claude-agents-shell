@@ -31,6 +31,9 @@ public sealed class HookSettingsProvider : IHookSettingsProvider
 
     private const string TempSuffix = ".tmp";
 
+    private const string NoProxyVariableName = "NO_PROXY";
+    private const string LoopbackHosts = "127.0.0.1,localhost";
+
     // Command-хук ждёт запуска cmd.exe и curl.exe, HTTP-хук — только ответа приёмника.
     private const int CommandTimeoutSeconds = 5;
     private const int HttpTimeoutSeconds = 3;
@@ -50,8 +53,35 @@ public sealed class HookSettingsProvider : IHookSettingsProvider
         _paths = paths;
     }
 
-    /// <inheritdoc />
+    /// <summary>Имя переменной окружения псевдоконсоли, через которую вкладка передаёт токен в хуки.</summary>
     public string TokenVariableName => HookProtocol.TokenVariableName;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Кроме токена — <c>NO_PROXY</c> с дописанным loopback: HTTP-хуки Claude Code иначе
+    /// уйдут в прокси из окружения и не доедут до приёмника на 127.0.0.1. Существующее
+    /// значение сохраняется. Ключ один: окружение Windows регистр имён не различает.
+    /// </remarks>
+    public IReadOnlyDictionary<string, string> SessionEnvironment(string token)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(token);
+
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [HookProtocol.TokenVariableName] = token,
+            [NoProxyVariableName] = LoopbackBypassingProxy(
+                Environment.GetEnvironmentVariable(NoProxyVariableName)
+                ?? Environment.GetEnvironmentVariable("no_proxy")),
+        };
+    }
+
+    /// <summary>
+    /// Значение <c>NO_PROXY</c> для сессии: существующее с дописанным <c>127.0.0.1,localhost</c>,
+    /// либо только loopback, если своего значения нет.
+    /// </summary>
+    /// <param name="existing">Значение <c>NO_PROXY</c> процесса приложения, если есть.</param>
+    public static string LoopbackBypassingProxy(string? existing) =>
+        string.IsNullOrWhiteSpace(existing) ? LoopbackHosts : $"{existing.TrimEnd(',')},{LoopbackHosts}";
 
     /// <inheritdoc />
     public async Task<string> EnsureSettingsFileAsync(Uri endpoint, CancellationToken cancellationToken)

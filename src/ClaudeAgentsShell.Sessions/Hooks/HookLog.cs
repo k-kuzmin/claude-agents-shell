@@ -107,6 +107,10 @@ public sealed class HookLog : IHookLog, IAsyncDisposable
         {
             // Диск не ответил вовремя — недописанные строки теряются, выход не ждёт.
         }
+        catch (Exception)
+        {
+            // Сбой задачи записи — не повод ронять выход приложения: IHookLog не бросает.
+        }
     }
 
     /// <summary>Строка журнала: время, хук, source, session_id, agent_id, фоновые задачи, начало токена.</summary>
@@ -213,14 +217,12 @@ public sealed class HookLog : IHookLog, IAsyncDisposable
             RotateIfFull(path);
             File.AppendAllText(path, text, Utf8);
         }
-        catch (Exception exception) when (exception is IOException
-                                              or UnauthorizedAccessException
-                                              or System.Security.SecurityException
-                                              or NotSupportedException
-                                              or ArgumentException)
+        catch (Exception)
         {
-            // Диск заполнен, файл занят чужим процессом, профиль недоступен: пачка теряется,
-            // приёмник хуков и следующие пачки живут дальше.
+            // Диск заполнен, файл занят чужим процессом, профиль недоступен, реализация путей
+            // бросила что-то своё: пачка теряется, цикл записи и следующие пачки живут дальше.
+            // Перечислять типы здесь нельзя — любое неперечисленное исключение уронило бы
+            // задачу записи, и журнал молча замолчал бы до конца работы приложения.
         }
     }
 

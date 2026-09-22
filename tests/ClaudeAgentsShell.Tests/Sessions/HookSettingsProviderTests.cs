@@ -164,6 +164,30 @@ public sealed class HookSettingsProviderTests
         Assert.False(string.IsNullOrWhiteSpace(provider.TokenVariableName));
     }
 
+    [Fact]
+    public void Окружение_сессии_несёт_токен_вкладки_и_обход_прокси_для_loopback()
+    {
+        using var temp = new TempDirectory();
+        var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
+
+        var environment = provider.SessionEnvironment("tab-token");
+
+        Assert.Equal("tab-token", environment[provider.TokenVariableName]);
+
+        // Прежнее значение процесса сохраняется, loopback дописывается в конец.
+        Assert.EndsWith("127.0.0.1,localhost", environment["NO_PROXY"], StringComparison.Ordinal);
+        Assert.Equal(2, environment.Count);
+    }
+
+    [Theory]
+    [InlineData(null, "127.0.0.1,localhost")]
+    [InlineData("", "127.0.0.1,localhost")]
+    [InlineData("   ", "127.0.0.1,localhost")]
+    [InlineData("corp.local", "corp.local,127.0.0.1,localhost")]
+    [InlineData("corp.local,", "corp.local,127.0.0.1,localhost")]
+    public void Loopback_дописывается_к_NO_PROXY_без_потери_прежнего_значения(string? existing, string expected) =>
+        Assert.Equal(expected, HookSettingsProvider.LoopbackBypassingProxy(existing));
+
     private static async Task<JsonElement> ReadHooks(HookSettingsProvider provider)
     {
         var path = await provider.EnsureSettingsFileAsync(Endpoint, CancellationToken.None);
