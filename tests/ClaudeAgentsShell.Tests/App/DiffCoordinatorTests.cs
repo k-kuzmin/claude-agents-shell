@@ -374,7 +374,9 @@ public sealed class DiffCoordinatorTests
         harness.Git.ReadFile = null;
         await harness.Coordinator.OpenForTabAsync(tab.TerminalId, CancellationToken.None);
 
-        Assert.True(fileToken.IsCancellationRequested);
+        // Отмена загрузки связана с отменой поколения, а колбэки поколения исполняются в пуле —
+        // поэтому до загрузки она доходит чуть позже; показ отсекает синхронная сверка поколения.
+        await WaitUntilAsync(() => fileToken.IsCancellationRequested);
         blocked.SetResult(new FileDiff("src/a.cs", DiffContext.Hunks, "old", false));
         await harness.Coordinator.WhenIdleAsync().WaitAsync(Timeout);
 
@@ -648,7 +650,99 @@ public sealed class DiffCoordinatorTests
         Assert.False(harness.View.HasSubscribers);
     }
 
+    [Fact]
+    public async Task Закрытие_панели_не_исполняет_колбэки_отмены_на_вызывающем_потоке()
+    {
+        await using var harness = new Harness();
+        var tab = harness.AddTab("t1", active: true);
+
+        var probe = new CancellationProbe();
+        var slow = new TaskCompletionSource<DiffIndex>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Git.ListChanges = (_, token) =>
+        {
+            probe.Watch(token);
+            return slow.Task.WaitAsync(token);
+        };
+
+        var building = harness.Coordinator.OpenForTabAsync(tab.TerminalId, CancellationToken.None);
+        probe.Run(() => harness.View.RaiseClosed(tab.TerminalId));
+
+        // Токен отменён сразу — сверка поколения от колбэков не зависит.
+        Assert.True(probe.Token.IsCancellationRequested);
+        await probe.CallbackRan.WaitAsync(Timeout);
+        Assert.False(probe.RanInline);
+
+        await building.WaitAsync(Timeout);
+        Assert.Empty(harness.View.CallsOf("index"));
+    }
+
+    [Fact]
+    public async Task Повторный_запрос_пути_не_исполняет_колбэки_отмены_на_вызывающем_потоке()
+    {
+        await using var harness = new Harness();
+        var tab = await harness.OpenAsync("t1");
+
+        var probe = new CancellationProbe();
+        var blocked = new TaskCompletionSource<FileDiff>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Git.ReadFile = (_, _, token) =>
+        {
+            probe.Watch(token);
+            return blocked.Task.WaitAsync(token);
+        };
+
+        harness.View.RaiseFile(tab.TerminalId, "src/a.cs");
+        harness.Git.ReadFile = null;
+        probe.Run(() => harness.View.RaiseFile(tab.TerminalId, "src/a.cs", DiffContext.FullFile));
+
+        Assert.True(probe.Token.IsCancellationRequested);
+        await probe.CallbackRan.WaitAsync(Timeout);
+        Assert.False(probe.RanInline);
+
+        await harness.Coordinator.WhenIdleAsync().WaitAsync(Timeout);
+        Assert.Equal(DiffContext.FullFile, Assert.Single(harness.View.CallsOf("file")).File!.Context);
+        Assert.Empty(harness.View.CallsOf("error"));
+    }
+
     private static ShowDiffRequest Request() => new(null, null, [], null);
+
+    /// <summary>
+    /// Колбэк отмены вместо процесса git: запоминает, исполнился ли он прямо внутри вызова,
+    /// который отменял работу (в приложении это был бы поток интерфейса).
+    /// </summary>
+    private sealed class CancellationProbe
+    {
+        private readonly TaskCompletionSource _ran = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _runningThread = -1;
+
+        public CancellationToken Token { get; private set; }
+
+        public bool RanInline { get; private set; }
+
+        public Task CallbackRan => _ran.Task;
+
+        public void Watch(CancellationToken token)
+        {
+            Token = token;
+            token.Register(() =>
+            {
+                RanInline = Volatile.Read(ref _runningThread) == Environment.CurrentManagedThreadId;
+                _ran.TrySetResult();
+            });
+        }
+
+        public void Run(Action cancel)
+        {
+            Volatile.Write(ref _runningThread, Environment.CurrentManagedThreadId);
+            try
+            {
+                cancel();
+            }
+            finally
+            {
+                Volatile.Write(ref _runningThread, -1);
+            }
+        }
+    }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {

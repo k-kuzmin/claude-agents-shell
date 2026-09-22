@@ -92,6 +92,13 @@ internal sealed class DiffGeneration
     }
 
     /// <summary>Списывает поколение: отменяет его работу. Повторный вызов ничего не делает.</summary>
+    /// <remarks>
+    /// Токен помечается отменённым сразу, а колбэки отмены — снятие процесса git
+    /// (<c>Kill(entireProcessTree)</c>, ~13 мс на процесс) — исполняются в пуле: списание
+    /// приходит из потока интерфейса (<c>Esc</c>, «Обновить», <c>-w</c>), и рывок ему ни к чему.
+    /// Устаревший ответ всё равно не долетит: сверка поколения при отправке синхронна
+    /// и от колбэков не зависит.
+    /// </remarks>
     public void Retire()
     {
         lock (_sync)
@@ -104,9 +111,17 @@ internal sealed class DiffGeneration
             _retired = true;
         }
 
-        // Отмена — вне замка: её колбэки исполняются синхронно и могут сами дойти до Exit.
-        _cancellation.Cancel();
+        _cancellation.CancelAsync().ContinueWith(
+            static (_, state) => ((DiffGeneration)state!).OnCancelled(),
+            this,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
 
+    /// <summary>Колбэки отмены отработали — ресурсы можно освободить, когда уйдёт последняя задача.</summary>
+    private void OnCancelled()
+    {
         lock (_sync)
         {
             _cancelled = true;
