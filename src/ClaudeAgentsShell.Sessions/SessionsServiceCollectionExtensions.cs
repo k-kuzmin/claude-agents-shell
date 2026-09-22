@@ -50,10 +50,8 @@ public static class SessionsServiceCollectionExtensions
         services.TryAddSingleton<IHookSettingsProvider, HookSettingsProvider>();
 
         // MCP-сервер show_diff на том же приёмнике (issue #5). Обработчик IShowDiffHandler
-        // регистрирует приложение; отложенное разрешение разрывает цикл графа
-        // «приёмник → инструмент → обработчик → вкладки → набор терминалов → приёмник».
+        // регистрирует приложение.
         services.TryAddSingleton<IMcpConfigProvider, McpConfigProvider>();
-        services.TryAddSingleton(static sp => new Lazy<IShowDiffHandler>(sp.GetRequiredService<IShowDiffHandler>));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMcpTool, ShowDiffTool>());
         services.TryAddSingleton<McpJsonRpcHandler>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoopbackRoute, McpRoute>());

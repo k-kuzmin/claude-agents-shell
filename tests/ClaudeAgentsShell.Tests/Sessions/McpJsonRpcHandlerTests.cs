@@ -234,21 +234,6 @@ public sealed class McpJsonRpcHandlerTests
         Assert.True(document.RootElement.GetProperty("result").GetProperty("isError").GetBoolean());
     }
 
-    [Fact]
-    public async Task Незарегистрированный_обработчик_даёт_ошибку_инструмента()
-    {
-        var tool = new ShowDiffTool(new Lazy<IShowDiffHandler>(
-            static () => throw new InvalidOperationException("No service for IShowDiffHandler")));
-        var handler = new McpJsonRpcHandler([tool]);
-
-        var reply = await handler.HandleAsync(
-            Token, """{"method":"tools/call","params":{"name":"show_diff"},"jsonrpc":"2.0","id":6}""",
-            CancellationToken.None);
-
-        using var document = Parse(reply);
-        Assert.True(document.RootElement.GetProperty("result").GetProperty("isError").GetBoolean());
-    }
-
     [Theory]
     [InlineData("""{"base":5}""")]
     [InlineData("""{"files":"a.cs"}""")]
@@ -328,7 +313,7 @@ public sealed class McpJsonRpcHandlerTests
         Exception? failure = null)
     {
         var diff = new RecordingShowDiffHandler(outcome ?? new ShowDiffOutcome.Shown("shown"), failure);
-        var tool = new ShowDiffTool(new Lazy<IShowDiffHandler>(() => diff));
+        var tool = new ShowDiffTool(diff);
         return (new McpJsonRpcHandler([tool]), diff);
     }
 

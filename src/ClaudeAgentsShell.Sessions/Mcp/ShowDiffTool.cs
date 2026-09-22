@@ -7,11 +7,6 @@ namespace ClaudeAgentsShell.Sessions.Mcp;
 /// Инструмент <c>show_diff</c> (issue #5): разбирает аргументы агента и передаёт их приложению
 /// через <see cref="IShowDiffHandler"/>. Сам ничего не строит и ответа человека не ждёт.
 /// </summary>
-/// <remarks>
-/// Обработчик приходит отложенно: его реализация в приложении знает вкладки, а вкладки через
-/// набор терминалов зависят от приёмника хуков, на котором живёт этот инструмент. Прямая
-/// зависимость в конструкторе замкнула бы граф контейнера в цикл.
-/// </remarks>
 public sealed class ShowDiffTool : IMcpTool
 {
     /// <summary>Текст ошибки, когда токен не соответствует ни одной вкладке.</summary>
@@ -58,11 +53,11 @@ public sealed class ShowDiffTool : IMcpTool
 
     private static readonly JsonElement Schema = ParseSchema();
 
-    private readonly Lazy<IShowDiffHandler> _handler;
+    private readonly IShowDiffHandler _handler;
 
     /// <inheritdoc cref="ShowDiffTool" />
-    /// <param name="handler">Обработчик приложения, разрешается при первом вызове инструмента.</param>
-    public ShowDiffTool(Lazy<IShowDiffHandler> handler)
+    /// <param name="handler">Обработчик приложения: знает вкладки и панель diff.</param>
+    public ShowDiffTool(IShowDiffHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
         _handler = handler;
@@ -91,7 +86,7 @@ public sealed class ShowDiffTool : IMcpTool
         ShowDiffOutcome outcome;
         try
         {
-            outcome = await _handler.Value.HandleAsync(correlationToken, request, cancellationToken).ConfigureAwait(false);
+            outcome = await _handler.HandleAsync(correlationToken, request, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -100,8 +95,7 @@ public sealed class ShowDiffTool : IMcpTool
         catch (Exception)
         {
             // Сбой приложения не должен выглядеть для агента как упавший сервер: ему достаточно
-            // знать, что diff не показан. Обработчика может не быть вовсе, если его не
-            // зарегистрировали, — это та же ситуация.
+            // знать, что diff не показан.
             return McpToolResult.Error(InternalErrorText);
         }
 

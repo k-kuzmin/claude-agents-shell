@@ -178,7 +178,7 @@ public sealed class McpRouteTests
     {
         var recording = new RecordingShowDiffHandler(new ShowDiffOutcome.Shown("shown"));
         diff = recording;
-        var handler = new McpJsonRpcHandler([new ShowDiffTool(new Lazy<IShowDiffHandler>(() => recording))]);
+        var handler = new McpJsonRpcHandler([new ShowDiffTool(recording)]);
         return new HookListener(TimeProvider.System, new NullHookLog(), [new McpRoute(handler)]);
     }
 
