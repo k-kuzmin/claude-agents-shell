@@ -16,8 +16,10 @@ namespace ClaudeAgentsShell.App;
 /// Единственное место в приложении, которое знает про WebView2. Ровно один контрол на окно:
 /// страница держит N экземпляров xterm.js, переключение вкладки — смена видимости контейнера.
 /// Ассеты страницы отдаются через <c>SetVirtualHostNameToFolderMapping</c>; CDN не используется.
+/// Панель diff (<see cref="IDiffView"/>) живёт на той же странице, поэтому её тоже обслуживает мост:
+/// отдельного WebView2 под неё нет и быть не может (раздел 7 CLAUDE.md).
 /// </summary>
-public sealed class WebView2TerminalBridge : ITerminalBridge
+public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
 {
     private const string VirtualHost = "app.local";
     private const string PageUrl = "https://app.local/index.html";
@@ -83,6 +85,15 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
 
     /// <inheritdoc />
     public event EventHandler<TerminalReadyEventArgs>? TerminalReady;
+
+    /// <inheritdoc />
+    public event EventHandler<DiffRefreshRequestedEventArgs>? RefreshRequested;
+
+    /// <inheritdoc />
+    public event EventHandler<DiffFileRequestedEventArgs>? FileRequested;
+
+    /// <inheritdoc />
+    public event EventHandler<DiffClosedEventArgs>? Closed;
 
     /// <summary>Контрол, который окно кладёт в свою разметку. Больше о WebView2 никто не знает.</summary>
     public FrameworkElement Control => _webView;
@@ -227,6 +238,51 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
             ReleaseAcknowledgements(terminalId.Value);
         }
     }
+
+    /// <inheritdoc />
+    public ValueTask ShowPendingAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
+        PostAsync(_writer.DiffPending(terminalId), cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask ShowIndexAsync(
+        TerminalId terminalId,
+        DiffIndex index,
+        IReadOnlyList<GitWorktree> worktrees,
+        string? note,
+        IReadOnlyList<string> expandFiles,
+        CancellationToken cancellationToken) =>
+        PostAsync(_writer.DiffIndex(terminalId, index, worktrees, note, expandFiles), cancellationToken);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Каждая часть уходит отдельным заходом в диспетчер с фоновым приоритетом — даже если
+    /// вызвали с потока интерфейса. Иначе быстрый путь <see cref="PostAsync"/> отправил бы
+    /// все части за один такт и нарезка потеряла бы смысл. Части собираются по одной,
+    /// на вызывающем потоке; ничего не кэшируется.
+    /// </remarks>
+    public async ValueTask ShowFileAsync(TerminalId terminalId, FileDiff file, CancellationToken cancellationToken)
+    {
+        foreach (string part in _writer.DiffFile(terminalId, file))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await _dispatcher
+                .InvokeAsync(() => Post(part), DispatcherPriority.Background, cancellationToken)
+                .Task.ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask ShowErrorAsync(TerminalId terminalId, string? path, string message, CancellationToken cancellationToken) =>
+        PostAsync(_writer.DiffError(terminalId, path, message), cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask MarkStaleAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
+        PostAsync(_writer.DiffStale(terminalId), cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask CloseAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
+        PostAsync(_writer.DiffClose(terminalId), cancellationToken);
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
@@ -383,6 +439,19 @@ public sealed class WebView2TerminalBridge : ITerminalBridge
 
             case InboundBridgeMessage.Ack ack:
                 CompleteAcknowledgement(ack.TerminalId.Value, ack.Sequence);
+                break;
+
+            case InboundBridgeMessage.DiffRefresh refresh:
+                RefreshRequested?.Invoke(this, new DiffRefreshRequestedEventArgs(
+                    refresh.TerminalId, refresh.Directory, refresh.BaseRef, refresh.IgnoreWhitespace));
+                break;
+
+            case InboundBridgeMessage.DiffFileRequest request:
+                FileRequested?.Invoke(this, new DiffFileRequestedEventArgs(request.TerminalId, request.Path, request.Context));
+                break;
+
+            case InboundBridgeMessage.DiffClosed closed:
+                Closed?.Invoke(this, new DiffClosedEventArgs(closed.TerminalId));
                 break;
         }
     }

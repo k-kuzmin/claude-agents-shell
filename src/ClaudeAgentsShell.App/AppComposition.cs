@@ -44,6 +44,7 @@ internal static class AppComposition
         // Мост — единственное место, где приложение знает про WebView2.
         services.AddSingleton<WebView2TerminalBridge>();
         services.AddSingleton<ITerminalBridge>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
+        services.AddSingleton<IDiffView>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
 
         // Порты уровня оболочки: всё, что ViewModel нужно от WPF и файловой системы.
         // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.

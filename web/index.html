@@ -7,6 +7,7 @@
   <!-- Только локальные файлы: ни одного обращения в сеть, включая шрифты. -->
   <link rel="stylesheet" href="vendor/xterm.css" />
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="diff.css" />
 </head>
 <body>
   <!-- Контейнер на N терминалов: переключение вкладки — смена display у дочернего узла. -->
@@ -16,6 +17,9 @@
   <script src="vendor/addon-fit.js"></script>
   <script src="vendor/addon-webgl.js"></script>
   <script src="vendor/addon-unicode11.js"></script>
+  <!-- Панель diff — до app.js: он в конце разбирает сообщения, скопленные до его загрузки. -->
+  <script src="diff-model.js"></script>
+  <script src="diff-panel.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
