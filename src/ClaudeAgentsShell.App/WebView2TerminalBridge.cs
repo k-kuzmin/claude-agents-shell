@@ -266,6 +266,12 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Та же защита, что в PostAsync: после освобождения в диспетчер ничего не ставим.
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
             await _dispatcher
                 .InvokeAsync(() => Post(part), DispatcherPriority.Background, cancellationToken)
                 .Task.ConfigureAwait(false);
@@ -279,10 +285,6 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
     /// <inheritdoc />
     public ValueTask MarkStaleAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
         PostAsync(_writer.DiffStale(terminalId), cancellationToken);
-
-    /// <inheritdoc />
-    public ValueTask CloseAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
-        PostAsync(_writer.DiffClose(terminalId), cancellationToken);
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()

@@ -1,6 +1,6 @@
 // Панель diff поверх области терминала (issue #5). Своя на каждую вкладку, в том же WebView2.
 // Протокол — раздел M7 docs/PROGRESS.md:
-//   из C#:  diff.pending | diff.index | diff.file | diff.error | diff.stale | diff.close
+//   из C#:  diff.pending | diff.index | diff.file | diff.error | diff.stale
 //   в C#:   diff.refresh | diff.file.request | diff.closed
 //
 // Разбор, фильтры и бюджет — в diff-model.js (чистый модуль с node-тестом), здесь только DOM.
@@ -234,7 +234,11 @@
     this.overlayNode = el('div', 'diff-overlay hidden');
     var overlayBox = el('div', 'diff-overlay-box');
     var overlayHead = el('div', 'diff-overlay-head', 'Строка целиком');
+    this.overlayNote = el('span', 'diff-overlay-note', '');
+    this.overlayCopy = button('diff-btn', 'Копировать целиком', 'overlay-copy');
     var overlayClose = button('diff-btn', 'Закрыть', 'overlay-close');
+    overlayHead.appendChild(this.overlayNote);
+    overlayHead.appendChild(this.overlayCopy);
     overlayHead.appendChild(overlayClose);
     this.overlayText = el('pre', 'diff-overlay-text');
     overlayBox.appendChild(overlayHead);
@@ -295,10 +299,15 @@
     this.root.classList.toggle('hidden', !visible);
 
     if (!visible) {
-      // Скрытой панели остаётся только оглавление: содержимое файлов выгружается,
-      // желание «раскрыт» запоминается и при показе запрашивается заново.
+      // Обычное содержимое скрытой панели остаётся: иначе каждое переключение вкладки
+      // перезапрашивало бы до 50+ файлов. Выгружаются только крупные файлы
+      // (M.keepWhenHidden) — желание «раскрыт» у них запоминается, при показе они
+      // запрашиваются заново. Начатые загрузки доигрываются и принимаются.
       for (var i = 0; i < this.entries.length; i++) {
-        unload(this.entries[i]);
+        var entry = this.entries[i];
+        if (entry.state === 'loaded' && !M.keepWhenHidden(entry.textLength)) {
+          unload(entry);
+        }
       }
       this.closeOverlay();
       return;
@@ -395,8 +404,9 @@
 
   Panel.prototype.onFile = function (message) {
     var entry = this.byPath.get(message.path);
-    if (!entry || entry.state !== 'loading' || entry.ctx !== message.ctx || !this.visible) {
-      // Ответ на запрос, который уже не нужен: свернули, переключили контекст, скрыли вкладку.
+    if (!entry || entry.state !== 'loading' || entry.ctx !== message.ctx) {
+      // Ответ на запрос, который уже не нужен: свернули, переключили контекст.
+      // Скрытая панель части принимает — загрузка уже шла, выбрасывать её дороже.
       return;
     }
 
@@ -425,6 +435,7 @@
       var parsed = M.parseUnified(text);
       entry.rows = parsed.rows;
       entry.maxLen = parsed.maxLen;
+      entry.textLength = text.length;
       entry.state = 'loaded';
     }
 
@@ -520,6 +531,7 @@
     entry.parts = null;
     entry.rows = null;
     entry.maxLen = 0;
+    entry.textLength = 0;
     entry.error = '';
   }
 
@@ -568,13 +580,33 @@
     this.requestWanted();
   };
 
+  // Строка может весить мегабайты (minified, base64): в <pre> кладётся не больше
+  // M.OVERLAY_LINE символов — раскладка многомегабайтного текста останавливала бы и все
+  // терминалы страницы. Полная строка доступна кнопкой «Копировать целиком».
   Panel.prototype.openOverlay = function (text) {
-    this.overlayText.textContent = text;
+    var shown = M.clipLine(text, M.OVERLAY_LINE);
+    this.overlayFull = text;
+    this.overlayText.textContent = shown.text;
+    this.overlayNote.textContent = shown.cut
+      ? 'показаны первые ' + shown.text.length + ' из ' + text.length + ' символов'
+      : '';
+    this.overlayCopy.textContent = 'Копировать целиком';
     this.overlayNode.classList.remove('hidden');
-    var closeButton = this.overlayNode.querySelector('button');
-    if (closeButton) {
-      closeButton.focus();
+    this.overlayCopy.focus();
+  };
+
+  Panel.prototype.copyOverlay = function () {
+    var self = this;
+    var text = this.overlayFull;
+    if (typeof text !== 'string' || !navigator.clipboard) {
+      return;
     }
+
+    navigator.clipboard.writeText(text).then(function () {
+      self.overlayCopy.textContent = 'Скопировано';
+    }).catch(function () {
+      self.overlayCopy.textContent = 'Не удалось скопировать';
+    });
   };
 
   Panel.prototype.closeOverlay = function () {
@@ -584,6 +616,7 @@
 
     this.overlayNode.classList.add('hidden');
     this.overlayText.textContent = '';
+    this.overlayFull = null;
     this.root.focus();
     return true;
   };
@@ -633,6 +666,11 @@
 
     if (action === 'refresh') {
       this.requestRefresh(null, this.ws);
+      return;
+    }
+
+    if (action === 'overlay-copy') {
+      this.copyOverlay();
       return;
     }
 
@@ -1001,7 +1039,9 @@
     }
   };
 
-  Manager.prototype.close = function (id, byUser) {
+  // Закрывает панель по Esc или кнопке и сообщает C#. Со стороны C# панель не закрывается:
+  // такого сообщения в протоколе нет.
+  Manager.prototype.closeByUser = function (id) {
     var panel = this.panels.get(id);
     if (!panel) {
       return;
@@ -1011,46 +1051,38 @@
     this.panels.delete(id);
     panel.destroy();
 
-    if (byUser) {
-      this.post({ type: 'diff.closed', id: id });
-    }
-
+    this.post({ type: 'diff.closed', id: id });
     this.onClosed(id, wasVisible);
-  };
-
-  Manager.prototype.closeByUser = function (id) {
-    this.close(id, true);
   };
 
   Manager.prototype.handle = function (message) {
     var id = message.id;
 
+    // Панель создаёт только diff.pending (координатор всегда шлёт его первым). Всё остальное
+    // для несуществующей панели игнорируется: иначе запоздалый diff.index поднял бы панель,
+    // которую человек уже закрыл, а C# вкладку уже забыл — «Загрузка…» навсегда.
+    if (message.type === 'diff.pending') {
+      this.ensure(id).onPending();
+      return;
+    }
+
+    var panel = this.panels.get(id);
+    if (!panel) {
+      return;
+    }
+
     switch (message.type) {
-      case 'diff.pending':
-        this.ensure(id).onPending();
-        break;
       case 'diff.index':
-        this.ensure(id).onIndex(message);
+        panel.onIndex(message);
         break;
       case 'diff.error':
-        if (message.path === null || message.path === undefined) {
-          this.ensure(id).onError(message);
-        } else if (this.panels.has(id)) {
-          this.panels.get(id).onError(message);
-        }
+        panel.onError(message);
         break;
       case 'diff.file':
-        if (this.panels.has(id)) {
-          this.panels.get(id).onFile(message);
-        }
+        panel.onFile(message);
         break;
       case 'diff.stale':
-        if (this.panels.has(id)) {
-          this.panels.get(id).onStale();
-        }
-        break;
-      case 'diff.close':
-        this.close(id, false);
+        panel.onStale();
         break;
       default:
         break;

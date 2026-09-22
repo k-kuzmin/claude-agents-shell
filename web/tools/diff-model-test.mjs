@@ -181,6 +181,20 @@ test('обрезка длинной строки', () => {
   assert.equal(M.clipLine('x'.repeat(2000)).cut, false);
 });
 
+test('скрытая вкладка оставляет обычные файлы и выгружает крупные', () => {
+  assert.equal(M.keepWhenHidden(0), true);
+  assert.equal(M.keepWhenHidden(M.HIDDEN_KEEP_CHARS), true);
+  assert.equal(M.keepWhenHidden(M.HIDDEN_KEEP_CHARS + 1), false);
+  assert.equal(M.keepWhenHidden(undefined), false);
+});
+
+test('окно строки целиком ограничено', () => {
+  const huge = 'x'.repeat(4_000_000);
+  const shown = M.clipLine(huge, M.OVERLAY_LINE);
+  assert.equal(shown.text.length, 256 * 1024);
+  assert.equal(shown.cut, true);
+});
+
 test('раскладка и поиск блока по строке', () => {
   const layout = M.buildLayout([3, 1, 0, 5]);
   assert.deepEqual(layout.starts, [0, 3, 4, 4]);

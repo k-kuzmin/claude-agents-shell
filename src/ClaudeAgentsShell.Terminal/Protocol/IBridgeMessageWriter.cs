@@ -68,7 +68,4 @@ public interface IBridgeMessageWriter
 
     /// <summary><c>{"type":"diff.stale","id":"t1"}</c> — плашка «есть изменения — обновить».</summary>
     string DiffStale(TerminalId terminalId);
-
-    /// <summary><c>{"type":"diff.close","id":"t1"}</c> — закрыть панель со стороны приложения.</summary>
-    string DiffClose(TerminalId terminalId);
 }

@@ -202,9 +202,6 @@ internal sealed class FakeDiffView : IDiffView
     public ValueTask MarkStaleAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
         Record(new DiffViewCall("stale", terminalId));
 
-    public ValueTask CloseAsync(TerminalId terminalId, CancellationToken cancellationToken) =>
-        Record(new DiffViewCall("close", terminalId));
-
     private ValueTask Record(DiffViewCall call)
     {
         lock (_sync)

@@ -436,10 +436,17 @@
 .diff-overlay-head {
   display: flex;
   align-items: center;
+  gap: 8px;
   justify-content: space-between;
   padding: 8px 12px;
   color: #E9E6E0;
   border-bottom: 1px solid #2B2825;
+}
+
+.diff-overlay-note {
+  flex: 1 1 auto;
+  color: #8A857C;
+  font-size: 11px;
 }
 
 .diff-overlay-text {

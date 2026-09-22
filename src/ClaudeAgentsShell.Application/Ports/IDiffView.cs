@@ -96,7 +96,4 @@ public interface IDiffView
 
     /// <summary>Плашка «есть изменения — обновить»: агент что-то поменял, пока панель открыта.</summary>
     ValueTask MarkStaleAsync(TerminalId terminalId, CancellationToken cancellationToken);
-
-    /// <summary>Закрывает панель вкладки со стороны приложения.</summary>
-    ValueTask CloseAsync(TerminalId terminalId, CancellationToken cancellationToken);
 }
