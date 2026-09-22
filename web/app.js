@@ -103,8 +103,9 @@
   // и запрещён — он ничего не даёт WPF и отнимает событие у остальной страницы.
   //
   // Условия повторяют ShellShortcutMap один в один: без Alt и Win, обязательный Ctrl,
-  // Ctrl+Shift+T / Ctrl+Shift+W, Ctrl+Tab с любым Shift, Ctrl+цифра только без Shift.
-  // Голые Ctrl+T и Ctrl+W сюда не попадают намеренно — они уходят в оболочку.
+  // Ctrl+Shift+T / Ctrl+Shift+W / Ctrl+Shift+D, Ctrl+Tab с любым Shift, Ctrl+цифра только
+  // без Shift. Голые Ctrl+T, Ctrl+W и Ctrl+D сюда не попадают намеренно — они уходят в
+  // оболочку (Ctrl+D — конец ввода).
   function isWindowShortcut(event) {
     if (!event.ctrlKey || event.altKey || event.metaKey) {
       return false;
@@ -117,7 +118,7 @@
     }
 
     if (event.shiftKey) {
-      return code === 'KeyT' || code === 'KeyW';
+      return code === 'KeyT' || code === 'KeyW' || code === 'KeyD';
     }
 
     // Цифровой ряд и цифровая клавиатура — одна и та же физическая цифра.

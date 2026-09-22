@@ -20,4 +20,7 @@ public enum ShellShortcut
 
     /// <summary>Вкладка по номеру (<c>Ctrl+1..9</c>).</summary>
     SelectTab = 5,
+
+    /// <summary>Панель diff активной вкладки (<c>Ctrl+Shift+D</c>, issue #5).</summary>
+    ShowDiff = 6,
 }

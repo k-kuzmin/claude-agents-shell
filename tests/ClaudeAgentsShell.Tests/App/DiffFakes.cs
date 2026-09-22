@@ -215,3 +215,21 @@ internal sealed class FakeDiffView : IDiffView
         return ValueTask.CompletedTask;
     }
 }
+
+/// <summary>Координатор diff и его сигнал «устарело» на подделках — для тестов корневой ViewModel.</summary>
+internal sealed class ShellDiffParts
+{
+    public ShellDiffParts(IHookListener? hooks = null)
+    {
+        Coordinator = new DiffCoordinator(Git, View, new InlineUiDispatcher());
+        Tracker = new DiffStaleTracker(hooks ?? new FakeHookListener(), new InlineUiDispatcher(), Coordinator);
+    }
+
+    public FakeGitDiffReader Git { get; } = new();
+
+    public FakeDiffView View { get; } = new();
+
+    public DiffCoordinator Coordinator { get; }
+
+    public DiffStaleTracker Tracker { get; }
+}

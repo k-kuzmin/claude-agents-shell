@@ -1,3 +1,4 @@
+using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.State;
@@ -69,6 +70,15 @@ internal static class AppComposition
 
         // Раскладка окна пишется по изменениям вкладок (issue #4).
         services.AddSingleton<LayoutRecorder>();
+
+        // Diff вкладок (issue #5). Координатор — одновременно обработчик show_diff (его ждёт
+        // Lazy<IShowDiffHandler> слоя Sessions: ленивость разрывает цикл приёмник → инструмент →
+        // обработчик) и приёмник сигнала «устарело». Набор вкладок он получает в Start,
+        // а не из контейнера: иначе корневая ViewModel и координатор зависели бы друг от друга.
+        services.AddSingleton<DiffCoordinator>();
+        services.AddSingleton<IShowDiffHandler>(static sp => sp.GetRequiredService<DiffCoordinator>());
+        services.AddSingleton<IDiffChangeSink>(static sp => sp.GetRequiredService<DiffCoordinator>());
+        services.AddSingleton<DiffStaleTracker>();
 
         services.AddSingleton<ProjectListViewModel>();
         services.AddSingleton<ShellViewModel>();

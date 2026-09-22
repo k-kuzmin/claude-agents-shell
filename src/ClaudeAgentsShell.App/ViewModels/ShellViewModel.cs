@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows.Input;
+using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.State;
@@ -13,7 +14,7 @@ namespace ClaudeAgentsShell.App.ViewModels;
 /// Корневая ViewModel окна: связывает панель проектов и полосу вкладок с набором терминалов.
 /// Весь разговор с миром идёт через порты — ни файлов, ни процессов, ни WebView2 здесь нет.
 /// </summary>
-public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabStateSink
+public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabStateSink, IDiffTabs
 {
     private readonly ITerminalWorkspace _workspace;
     private readonly IUserPrompt _prompt;
@@ -21,6 +22,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     private readonly SessionStateCoordinator _sessionState;
     private readonly ILayoutStore _layoutStore;
     private readonly LayoutRecorder _layoutRecorder;
+    private readonly DiffCoordinator _diff;
+    private readonly DiffStaleTracker _diffStale;
 
     // Записи раскладки проектов, чей каталог был недоступен на старте: вкладки не подняты,
     // но и терять их нельзя — снимок переносит их как есть, пока проект не станет доступен
@@ -39,6 +42,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// <param name="sessionState">Координатор состояний вкладок по хукам.</param>
     /// <param name="layoutStore">Раскладка окна: читается один раз на старте.</param>
     /// <param name="layoutRecorder">Запись раскладки по изменениям (issue #4).</param>
+    /// <param name="diff">Панель diff вкладок (issue #5).</param>
+    /// <param name="diffStale">Плашка «есть изменения» у открытой панели diff по хукам.</param>
     public ShellViewModel(
         ITerminalWorkspace workspace,
         ProjectListViewModel projects,
@@ -46,7 +51,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         IUiDispatcher dispatcher,
         SessionStateCoordinator sessionState,
         ILayoutStore layoutStore,
-        LayoutRecorder layoutRecorder)
+        LayoutRecorder layoutRecorder,
+        DiffCoordinator diff,
+        DiffStaleTracker diffStale)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(projects);
@@ -55,6 +62,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         ArgumentNullException.ThrowIfNull(sessionState);
         ArgumentNullException.ThrowIfNull(layoutStore);
         ArgumentNullException.ThrowIfNull(layoutRecorder);
+        ArgumentNullException.ThrowIfNull(diff);
+        ArgumentNullException.ThrowIfNull(diffStale);
 
         _workspace = workspace;
         _prompt = prompt;
@@ -62,6 +71,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         _sessionState = sessionState;
         _layoutStore = layoutStore;
         _layoutRecorder = layoutRecorder;
+        _diff = diff;
+        _diffStale = diffStale;
 
         Projects = projects;
         Tabs = new TabStripViewModel();
@@ -131,6 +142,11 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 : Task.CompletedTask,
             parameter => parameter is TabViewModel { HasExited: true },
             ReportError);
+        ShowDiffCommand = new AsyncRelayCommand(
+            parameter => parameter is TabViewModel tab
+                ? ShowDiffAsync(tab, CancellationToken.None)
+                : Task.CompletedTask,
+            onError: ReportError);
         ShowAwaitingTabCommand = new AsyncRelayCommand(
             _ => ShowAwaitingTabAsync(CancellationToken.None),
             _ => Tabs.HasAwaitingInput,
@@ -196,6 +212,17 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// </summary>
     public ICommand ShowAwaitingTabCommand { get; }
 
+    /// <summary>Кнопка diff на вкладке (issue #5): панель diff этой вкладки.</summary>
+    public ICommand ShowDiffCommand { get; }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Поднимается на каждом пути, которым вкладка уходит из набора: закрытие пользователем
+    /// и закрытие вместе с проектом. Перезапуск вкладку не убирает — мёртвая остаётся рядом
+    /// с новой, и её панель diff живёт, пока пользователь не закроет саму вкладку.
+    /// </remarks>
+    public event EventHandler<DiffTabClosedEventArgs>? TabClosed;
+
     /// <summary>
     /// Выбранный проект: его вкладки показаны в полосе и в нём откроется новая сессия.
     /// Выбор всегда явный — клик по строке, открытие вкладки или переход на вкладку.
@@ -241,6 +268,11 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // До первой вкладки: адрес приёмника хуков нужен файлу настроек, который уходит
         // сессии через --settings. Позже — и первая сессия осталась бы без маркера состояния.
         await _sessionState.StartAsync(this, cancellationToken).ConfigureAwait(true);
+
+        // Тоже до первой вкладки: show_diff восстановленной сессии не должен ответить
+        // «вкладка не найдена», а её первая пачка инструментов — пройти мимо плашки.
+        _diff.Start(this);
+        _diffStale.Start();
 
         await Projects.LoadAsync(cancellationToken).ConfigureAwait(true);
 
@@ -490,6 +522,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             foreach (var tab in live)
             {
                 Tabs.Remove(tab);
+                RaiseTabClosed(tab);
             }
 
             // Активная вкладка могла быть среди закрытых, а удержать выбор не на чем:
@@ -596,6 +629,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         await _workspace.CloseAsync(tab.TerminalId, cancellationToken).ConfigureAwait(true);
 
         var next = Tabs.Remove(tab);
+        RaiseTabClosed(tab);
         RefreshProjectRows();
 
         if (next is null)
@@ -677,6 +711,14 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 await ActivateIfAnyAsync(Tabs.ByNumber(tabNumber), cancellationToken).ConfigureAwait(true);
                 break;
 
+            case ShellShortcut.ShowDiff:
+                if (Tabs.ActiveTab is { } current)
+                {
+                    await _diff.OpenForTabAsync(current.TerminalId, cancellationToken).ConfigureAwait(true);
+                }
+
+                break;
+
             case ShellShortcut.None:
             default:
                 break;
@@ -706,8 +748,39 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // Координатор снимается раньше набора вкладок: он подписан на его TerminalExited.
         _sessionState.Dispose();
 
+        // Diff гасится до набора вкладок и моста: его построения ещё шлют на страницу
+        // оглавления и файлы. Сначала источник сигналов «устарело», затем сам координатор —
+        // он отменяет и дожидается своих работ. Продолжение возвращается в поток интерфейса:
+        // набор вкладок ниже освобождается оттуда же, как и без diff.
+        _diffStale.Dispose();
+        await _diff.DisposeAsync().ConfigureAwait(true);
+
         // Набор вкладок освобождается раньше моста: помпам нужно дождаться подтверждений страницы.
         await _workspace.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    bool IDiffTabs.TryResolveTerminal(string? correlationToken, out TerminalId terminalId) =>
+        _workspace.TryResolveTerminal(correlationToken, out terminalId);
+
+    /// <inheritdoc />
+    TabViewModel? IDiffTabs.Find(TerminalId terminalId) => Tabs.Find(terminalId);
+
+    /// <summary>
+    /// Кнопка diff на вкладке: вкладка становится активной, затем открывается её панель —
+    /// страница показывает панель поверх терминала активной вкладки.
+    /// </summary>
+    public async Task ShowDiffAsync(TabViewModel tab, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+
+        if (!Tabs.Contains(tab))
+        {
+            return;
+        }
+
+        await ActivateTabAsync(tab, cancellationToken).ConfigureAwait(true);
+        await _diff.OpenForTabAsync(tab.TerminalId, cancellationToken).ConfigureAwait(true);
     }
 
     /// <inheritdoc />
@@ -1047,6 +1120,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     // Добавление, закрытие, перестановка мышью и смена проекта в видимой полосе.
     private void OnVisibleTabsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
         _layoutRecorder.Signal();
+
+    private void RaiseTabClosed(TabViewModel tab) =>
+        TabClosed?.Invoke(this, new DiffTabClosedEventArgs(tab.TerminalId));
 
     private void ReportError(Exception exception) =>
         _prompt.ShowError("Ошибка", exception.Message);

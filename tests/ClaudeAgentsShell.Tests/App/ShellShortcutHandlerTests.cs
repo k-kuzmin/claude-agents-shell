@@ -34,7 +34,8 @@ public sealed class ShellShortcutHandlerTests
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             var layouts = new FakeLayoutStore();
             Shell = new ShellViewModel(
-                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts, layouts.CreateRecorder());
+                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts, layouts.CreateRecorder(),
+                Diff.Coordinator, Diff.Tracker);
             Handler = new ShellShortcutHandler(Shell, Prompt);
         }
 
@@ -43,6 +44,8 @@ public sealed class ShellShortcutHandlerTests
         public FakeDirectoryProbe Probe { get; } = new();
 
         public FakeUserPrompt Prompt { get; } = new();
+
+        public ShellDiffParts Diff { get; } = new();
 
         public FakeTerminalWorkspace Workspace { get; } = new();
 
@@ -84,6 +87,33 @@ public sealed class ShellShortcutHandlerTests
     }
 
     [Fact]
+    public async Task Ctrl_shift_d_opens_the_diff_of_the_active_tab()
+    {
+        var harness = await StartedAsync();
+        await harness.Shell.OpenSessionAsync(harness.Shell.Projects.Rows[0], CancellationToken.None);
+        var active = await harness.Shell.OpenSessionAsync(harness.Shell.Projects.Rows[0], CancellationToken.None);
+
+        var handled = harness.Handler.Handle(Key.D, ModifierKeys.Control | ModifierKeys.Shift);
+        await harness.Diff.Coordinator.WhenIdleAsync();
+
+        Assert.True(handled);
+        var index = Assert.Single(harness.Diff.View.CallsOf("index"));
+        Assert.Equal(active!.TerminalId, index.TerminalId);
+    }
+
+    [Fact]
+    public async Task Ctrl_shift_d_without_tabs_does_nothing()
+    {
+        var harness = await StartedAsync();
+
+        Assert.True(harness.Handler.Handle(Key.D, ModifierKeys.Control | ModifierKeys.Shift));
+        await harness.Diff.Coordinator.WhenIdleAsync();
+
+        Assert.Empty(harness.Diff.View.Calls);
+        Assert.Empty(harness.Prompt.Errors);
+    }
+
+    [Fact]
     public async Task Shell_keys_are_not_intercepted()
     {
         var harness = await StartedAsync();
@@ -93,6 +123,7 @@ public sealed class ShellShortcutHandlerTests
         Assert.False(harness.Handler.Handle(Key.W, ModifierKeys.Control));
         Assert.False(harness.Handler.Handle(Key.T, ModifierKeys.Control));
         Assert.False(harness.Handler.Handle(Key.C, ModifierKeys.Control));
+        Assert.False(harness.Handler.Handle(Key.D, ModifierKeys.Control));
 
         Assert.Single(harness.Shell.Tabs.Tabs);
         Assert.Empty(harness.Workspace.Closed);

@@ -43,7 +43,8 @@ public sealed class LayoutRestoreTests
             var sessionState = new SessionStateCoordinator(
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             Shell = new ShellViewModel(
-                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, Layouts, Layouts.CreateRecorder(Time));
+                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, Layouts, Layouts.CreateRecorder(Time),
+                Diff.Coordinator, Diff.Tracker);
         }
 
         public FakeProjectStore Store { get; } = new();
@@ -51,6 +52,8 @@ public sealed class LayoutRestoreTests
         public FakeDirectoryProbe Probe { get; } = new();
 
         public FakeUserPrompt Prompt { get; } = new();
+
+        public ShellDiffParts Diff { get; } = new();
 
         public LaunchRecordingWorkspace Workspace { get; } = new();
 
