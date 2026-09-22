@@ -315,6 +315,8 @@ internal sealed class FakeHookListener : IHookListener
 
     public Uri Endpoint { get; } = new("http://127.0.0.1:52100/hook/");
 
+    public Uri McpEndpoint { get; } = new("http://127.0.0.1:52100/mcp");
+
     /// <summary>Приёмник был поднят.</summary>
     public bool Started { get; private set; }
 

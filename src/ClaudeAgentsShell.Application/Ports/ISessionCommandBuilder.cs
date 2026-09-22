@@ -17,12 +17,10 @@ public interface ISessionCommandBuilder
     /// </summary>
     /// <param name="project">Проект, в каталоге которого поднята оболочка.</param>
     /// <param name="launch">Режим запуска.</param>
-    /// <param name="hookSettingsPath">
-    /// Путь к сгенерированному файлу настроек с хуками — уходит в <c>--settings</c>.
-    /// <c>null</c> означает запуск без хуков: файл создать не удалось, и сессия работает
-    /// без маркера состояния (раздел 5.3 ТЗ допускает такую деградацию).
-    /// Параметр именно запуска, а не настройка построителя: одна вкладка может получить файл,
-    /// а соседняя — нет, если сбой случился между их открытием.
+    /// <param name="integration">
+    /// Файлы интеграции с приложением для этого запуска: <see cref="SessionIntegration.HookSettingsPath"/>
+    /// уходит в <c>--settings</c>, <see cref="SessionIntegration.McpConfigPath"/> — в <c>--mcp-config</c>.
+    /// Отсутствующий файл означает отсутствующий флаг: запуск деградирует (раздел 5.3 ТЗ), а не падает.
     /// </param>
-    IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch, string? hookSettingsPath);
+    IReadOnlyList<string> Build(ProjectDefinition project, SessionLaunch launch, SessionIntegration integration);
 }

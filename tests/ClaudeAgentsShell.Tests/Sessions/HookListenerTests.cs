@@ -17,7 +17,7 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Событие_хука_доезжает_разобранным()
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -50,7 +50,7 @@ public sealed class HookListenerTests
         // Значения проверены по бинарнику claude.exe: у SessionStart это startup, resume,
         // clear, compact и fork; у UserPromptSubmit — кто автор промпта. Приёмник их
         // не интерпретирует и не фильтрует: решение принимает координатор состояний.
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -75,7 +75,7 @@ public sealed class HookListenerTests
     {
         // Имена точные, проверены по бинарнику claude.exe: опечатка означала бы вкладку,
         // которая молча не переключает состояние.
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -106,7 +106,7 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Хук_главного_потока_без_agent_id_и_без_фоновых_задач_несёт_null()
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -123,7 +123,7 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Фоновые_задачи_разбираются_с_идентификатором_и_типом_а_расписания_игнорируются()
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -150,7 +150,7 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Пустой_массив_фоновых_задач_это_пустой_список_а_не_null()
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -174,7 +174,7 @@ public sealed class HookListenerTests
     {
         // Мусор обнуляет всё поле, а не укорачивает список: короткий список сказал бы
         // «фоновой работы нет» при живых задачах, а null означает «неизвестно».
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -196,7 +196,7 @@ public sealed class HookListenerTests
     public async Task Принятый_хук_попадает_в_журнал_даже_если_подписчик_упал()
     {
         var log = new RecordingHookLog();
-        await using var listener = new HookListener(TimeProvider.System, log);
+        await using var listener = new HookListener(TimeProvider.System, log, []);
         listener.HookReceived += (_, _) => throw new InvalidOperationException("подписчик упал");
         await listener.StartAsync(CancellationToken.None);
 
@@ -214,7 +214,7 @@ public sealed class HookListenerTests
     public async Task Мусор_в_журнал_не_попадает()
     {
         var log = new RecordingHookLog();
-        await using var listener = new HookListener(TimeProvider.System, log);
+        await using var listener = new HookListener(TimeProvider.System, log, []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -229,7 +229,7 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Слушает_только_loopback()
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         await listener.StartAsync(CancellationToken.None);
 
         Assert.Equal("127.0.0.1", listener.Endpoint.Host);
@@ -241,8 +241,8 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Два_приёмника_берут_разные_свободные_порты()
     {
-        await using var first = new HookListener(TimeProvider.System, new RecordingHookLog());
-        await using var second = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var first = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
+        await using var second = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
 
         await first.StartAsync(CancellationToken.None);
         await second.StartAsync(CancellationToken.None);
@@ -258,7 +258,7 @@ public sealed class HookListenerTests
     [InlineData("""{ "session_id": "9f2c" }""")]
     public async Task Мусор_и_незнакомый_хук_событие_не_рождают_и_приёмник_живёт(string body)
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var events = new ConcurrentQueue<HookEvent>();
         var valid = new TaskCompletionSource<HookEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
         listener.HookReceived += (_, args) =>
@@ -285,7 +285,7 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Пять_сессий_стучатся_одновременно_и_все_события_доезжают()
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var events = new ConcurrentQueue<HookEvent>();
         var all = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         listener.HookReceived += (_, args) =>
@@ -317,7 +317,7 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Токен_из_тела_подхватывается_если_заголовка_нет()
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
         var received = NextEvent(listener);
         await listener.StartAsync(CancellationToken.None);
 
@@ -337,7 +337,7 @@ public sealed class HookListenerTests
     [Fact]
     public async Task Адрес_до_старта_не_выдумывается()
     {
-        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog());
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
 
         Assert.Throws<InvalidOperationException>(() => listener.Endpoint);
     }

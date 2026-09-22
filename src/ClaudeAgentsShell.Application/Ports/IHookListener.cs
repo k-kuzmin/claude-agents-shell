@@ -19,6 +19,15 @@ public interface IHookListener : IAsyncDisposable
     /// <summary>Адрес, который прописывается в сгенерированный файл настроек хуков.</summary>
     Uri Endpoint { get; }
 
+    /// <summary>
+    /// Адрес MCP-маршрута на том же слушателе (<c>http://127.0.0.1:&lt;порт&gt;/mcp</c>) —
+    /// прописывается в сгенерированный файл для <c>--mcp-config</c>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Приёмник не запущен или MCP-маршрут не зарегистрирован: сессия запускается без MCP.
+    /// </exception>
+    Uri McpEndpoint { get; }
+
     /// <summary>Пришло событие хука.</summary>
     event EventHandler<HookEventArgs>? HookReceived;
 
