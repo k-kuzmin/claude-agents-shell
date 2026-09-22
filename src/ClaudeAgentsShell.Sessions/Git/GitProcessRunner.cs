@@ -22,11 +22,20 @@ public sealed record GitProcessResult(int? ExitCode, byte[] Output, bool Truncat
 /// Запускает git только для чтения: без окна, с <c>GIT_OPTIONAL_LOCKS=0</c> (git не обновляет
 /// индекс попутно) и <c>core.quotepath=false</c> (кириллица в путях без экранирования).
 /// Отмена снимает дерево процессов; живых git после возврата не остаётся.
+/// <para>
+/// Пайпы процесса синхронные: асинхронное чтение из них держало бы поток пула всё время работы
+/// git. Поэтому stdout, stderr и stdin обслуживают выделенные потоки, а одновременно работающих
+/// git не больше <see cref="GitDiffOptions.MaxConcurrentProcesses"/> на всё приложение
+/// (<see cref="GitProcessGate"/>): медленный git не отнимает пул у склейки вывода терминалов.
+/// </para>
 /// </summary>
 public sealed class GitProcessRunner
 {
     private const int ChunkSize = 64 * 1024;
     private const int ErrorLimitChars = 4 * 1024;
+
+    // Потокам пайпов хватает малого стека: они только копируют буферы.
+    private const int PipeThreadStackBytes = 256 * 1024;
 
     private static readonly string[] CommonArguments =
     [
@@ -39,12 +48,17 @@ public sealed class GitProcessRunner
     ];
 
     private readonly GitDiffOptions _options;
+    private readonly GitProcessGate _gate;
 
     /// <inheritdoc cref="GitProcessRunner" />
-    public GitProcessRunner(GitDiffOptions options)
+    /// <param name="options">Исполняемый файл git.</param>
+    /// <param name="gate">Общий на приложение предел одновременных git.</param>
+    public GitProcessRunner(GitDiffOptions options, GitProcessGate gate)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(gate);
         _options = options;
+        _gate = gate;
     }
 
     /// <summary>Запускает git и собирает вывод целиком или до потолка.</summary>
@@ -52,7 +66,7 @@ public sealed class GitProcessRunner
     /// <param name="arguments">Аргументы после общих (<c>-c core.quotepath=false</c> и пр.).</param>
     /// <param name="standardInput">Что подать на stdin; stdin закрывается после записи в любом случае.</param>
     /// <param name="outputCeilingBytes">Потолок stdout; <c>null</c> — без потолка.</param>
-    /// <param name="cancellationToken">Отмена снимает процесс вместе с потомками.</param>
+    /// <param name="cancellationToken">Отмена снимает процесс вместе с потомками или убирает запрос из очереди.</param>
     /// <exception cref="DiffUnavailableException">git не найден (<see cref="DiffFailure.GitNotFound"/>).</exception>
     /// <exception cref="OperationCanceledException">Запрос отменён.</exception>
     public async Task<GitProcessResult> RunAsync(
@@ -66,6 +80,7 @@ public sealed class GitProcessRunner
         ArgumentNullException.ThrowIfNull(arguments);
         cancellationToken.ThrowIfCancellationRequested();
 
+        using var lease = await _gate.EnterAsync(cancellationToken).ConfigureAwait(false);
         using var process = new Process { StartInfo = CreateStartInfo(workingDirectory, arguments) };
         try
         {
@@ -76,15 +91,17 @@ public sealed class GitProcessRunner
             throw new DiffUnavailableException(DiffFailure.GitNotFound, "git не найден. Установите Git и добавьте его в PATH.", exception);
         }
 
-        var truncated = false;
         try
         {
-            using var registration = cancellationToken.Register(static state => Kill((Process)state!), process);
+            // Отменяют и из потока интерфейса, а снятие дерева занимает ~13 мс — уводим его в пул.
+            using var registration = cancellationToken.Register(
+                static state => ThreadPool.UnsafeQueueUserWorkItem(static p => Kill(p), (Process)state!, preferLocal: false),
+                process);
 
-            var stdinTask = WriteInputAsync(process, standardInput);
-            var stderrTask = ReadErrorAsync(process);
-            var (output, overflow) = await ReadOutputAsync(process.StandardOutput.BaseStream, outputCeilingBytes).ConfigureAwait(false);
-            truncated = overflow;
+            var stdinTask = OnDedicatedThread(() => WriteInput(process, standardInput), "git stdin");
+            var stderrTask = OnDedicatedThread(() => ReadError(process), "git stderr");
+            var (output, overflow) = await OnDedicatedThread(
+                () => ReadOutput(process.StandardOutput.BaseStream, outputCeilingBytes), "git stdout").ConfigureAwait(false);
             if (overflow)
             {
                 Kill(process);
@@ -95,7 +112,7 @@ public sealed class GitProcessRunner
             var error = await stderrTask.ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
-            return new GitProcessResult(truncated ? null : process.ExitCode, output, truncated, error);
+            return new GitProcessResult(overflow ? null : process.ExitCode, output, overflow, error);
         }
         finally
         {
@@ -141,29 +158,56 @@ public sealed class GitProcessRunner
         return info;
     }
 
-    private static async Task WriteInputAsync(Process process, byte[]? input)
+    /// <summary>Работа с синхронным пайпом на своём фоновом потоке, чтобы не держать поток пула.</summary>
+    private static Task<T> OnDedicatedThread<T>(Func<T> work, string name)
     {
-        var stream = process.StandardInput.BaseStream;
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(
+            () =>
+            {
+                try
+                {
+                    completion.SetResult(work());
+                }
+                catch (Exception exception)
+                {
+                    completion.SetException(exception);
+                }
+            },
+            PipeThreadStackBytes)
+        {
+            IsBackground = true,
+            Name = name,
+        };
+        thread.Start();
+        return completion.Task;
+    }
+
+    private static bool WriteInput(Process process, byte[]? input)
+    {
         try
         {
             if (input is { Length: > 0 })
             {
-                await stream.WriteAsync(input).ConfigureAwait(false);
-                await stream.FlushAsync().ConfigureAwait(false);
+                var stream = process.StandardInput.BaseStream;
+                stream.Write(input);
+                stream.Flush();
             }
         }
         finally
         {
             process.StandardInput.Close();
         }
+
+        return true;
     }
 
-    private static async Task<string> ReadErrorAsync(Process process)
+    private static string ReadError(Process process)
     {
         var builder = new StringBuilder();
         var buffer = new char[1024];
         int read;
-        while ((read = await process.StandardError.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+        while ((read = process.StandardError.Read(buffer, 0, buffer.Length)) > 0)
         {
             var room = ErrorLimitChars - builder.Length;
             if (room > 0)
@@ -175,14 +219,14 @@ public sealed class GitProcessRunner
         return builder.ToString().Trim();
     }
 
-    private static async Task<(byte[] Output, bool Overflow)> ReadOutputAsync(Stream stream, int? ceiling)
+    private static (byte[] Output, bool Overflow) ReadOutput(Stream stream, int? ceiling)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(ChunkSize);
         try
         {
             using var collected = new MemoryStream();
             int read;
-            while ((read = await stream.ReadAsync(buffer.AsMemory(0, ChunkSize)).ConfigureAwait(false)) > 0)
+            while ((read = stream.Read(buffer, 0, ChunkSize)) > 0)
             {
                 if (ceiling is { } limit && collected.Length + read > limit)
                 {
@@ -236,7 +280,7 @@ public sealed class GitProcessRunner
         }
         catch (InvalidOperationException)
         {
-            // Уже завершился.
+            // Уже завершился или запуск закончился (и освободил процесс) раньше, чем дошло снятие из пула.
         }
         catch (Win32Exception)
         {

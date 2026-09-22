@@ -25,11 +25,20 @@ public static class DiffUntrackedFile
     /// Считает строки: NUL в первых <see cref="GitDiffOptions.BinarySniffBytes"/> — бинарный
     /// (<c>null</c>/<c>null</c>), больше <see cref="GitDiffOptions.FileOutputCeilingBytes"/> или
     /// не читается — <c>null</c>/0. Каталог (вложенный репозиторий) — 0/0.
+    /// Файл читается потоком фиксированным буфером, целиком в памяти не держится.
     /// </summary>
-    public static async Task<DiffLineCounts> CountLinesAsync(string fullPath, GitDiffOptions options, CancellationToken cancellationToken)
+    /// <param name="fullPath">Файл на диске.</param>
+    /// <param name="options">Потолок и размер проверки на бинарность.</param>
+    /// <param name="budget">
+    /// Общий на оглавление бюджет чтения. Не хватило — строки не считаются (<c>null</c>/0),
+    /// читается только начало файла для проверки на бинарность.
+    /// </param>
+    /// <param name="cancellationToken">Отмена чтения.</param>
+    public static async Task<DiffLineCounts> CountLinesAsync(string fullPath, GitDiffOptions options, DiffReadBudget budget, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(fullPath);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(budget);
 
         if (Directory.Exists(fullPath))
         {
@@ -40,9 +49,12 @@ public static class DiffUntrackedFile
         try
         {
             await using var stream = OpenRead(fullPath);
-            if (stream.Length > options.FileOutputCeilingBytes)
+            if (stream.Length > options.FileOutputCeilingBytes || !budget.TryReserve(stream.Length))
             {
-                return new DiffLineCounts(null, 0);
+                // Строки не считаются, но бинарный остаётся бинарным: хватает начала файла.
+                var sniffLimit = Math.Min(ChunkSize, options.BinarySniffBytes);
+                var sniffed = await stream.ReadAtLeastAsync(buffer.AsMemory(0, sniffLimit), sniffLimit, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
+                return ContainsNul(buffer, sniffed) ? new DiffLineCounts(null, null) : new DiffLineCounts(null, 0);
             }
 
             long position = 0;

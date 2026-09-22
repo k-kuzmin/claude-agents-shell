@@ -20,6 +20,20 @@ public sealed record GitDiffOptions
     /// <summary>Сколько байт начала неотслеживаемого файла проверяется на NUL, чтобы признать его бинарным.</summary>
     public int BinarySniffBytes { get; init; } = 8 * 1024;
 
+    /// <summary>
+    /// Общий бюджет чтения неотслеживаемых файлов на одно оглавление, в байтах. Сверх него строки
+    /// не считаются (<c>AddedLines = null</c> → «Большой diff»): читается только начало для проверки на бинарность.
+    /// </summary>
+    public long UntrackedCountBudgetBytes { get; init; } = 64L * 1024 * 1024;
+
+    /// <summary>Сколько неотслеживаемых файлов считается одновременно.</summary>
+    public int UntrackedCountParallelism { get; init; } = 4;
+
+    /// <summary>
+    /// Сколько git может работать одновременно на всё приложение. Остальные ждут в честной очереди.
+    /// </summary>
+    public int MaxConcurrentProcesses { get; init; } = 4;
+
     /// <summary>Сколько даётся одной операции целиком — оглавлению, файлу или списку worktree.</summary>
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(30);
 }

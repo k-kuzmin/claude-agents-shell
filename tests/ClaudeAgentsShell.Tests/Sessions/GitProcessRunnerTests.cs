@@ -24,7 +24,7 @@ public sealed class GitProcessRunnerTests
     public async Task Отмена_снимает_дерево_процессов()
     {
         using var temp = new TempDirectory();
-        var runner = new GitProcessRunner(new GitDiffOptions());
+        var runner = CreateRunner(new GitDiffOptions());
         using var cancellation = new CancellationTokenSource();
 
         // alias с ! запускает sh, тот — sleep: у git есть внуки.
@@ -46,7 +46,7 @@ public sealed class GitProcessRunnerTests
         repository.Write("a.txt", "a\n");
         repository.CommitAll();
         var options = new GitDiffOptions { Timeout = TimeSpan.FromMilliseconds(1) };
-        var reader = new GitDiffReader(options, new GitProcessRunner(options), new DiffCollapsePolicy(options));
+        var reader = new GitDiffReader(options, new GitProcessRunner(options, new GitProcessGate(options.MaxConcurrentProcesses)), new DiffCollapsePolicy(options));
 
         var failure = await Assert.ThrowsAsync<DiffUnavailableException>(
             () => reader.ListChangesAsync(new DiffRequest(repository.Root, null, [], false), CancellationToken.None));
@@ -61,7 +61,7 @@ public sealed class GitProcessRunnerTests
         using var repository = GitDiffTestRepository.Create();
         repository.Write("a.txt", string.Concat(Enumerable.Repeat("строка\n", 100_000)));
         repository.CommitAll();
-        var runner = new GitProcessRunner(new GitDiffOptions());
+        var runner = CreateRunner(new GitDiffOptions());
 
         var result = await runner.RunAsync(repository.Root, ["show", "HEAD:a.txt"], null, 1000, CancellationToken.None);
 
@@ -75,7 +75,7 @@ public sealed class GitProcessRunnerTests
     public async Task Stdin_подаётся_и_закрывается()
     {
         using var repository = GitDiffTestRepository.Create();
-        var runner = new GitProcessRunner(new GitDiffOptions());
+        var runner = CreateRunner(new GitDiffOptions());
 
         var result = await runner.RunAsync(
             repository.Root, ["check-attr", "-z", "--stdin", "diff"], Encoding.UTF8.GetBytes("путь с пробелом.txt\0"), null, CancellationToken.None);
@@ -88,13 +88,43 @@ public sealed class GitProcessRunnerTests
     public async Task Нет_исполняемого_файла_GitNotFound()
     {
         using var temp = new TempDirectory();
-        var runner = new GitProcessRunner(new GitDiffOptions { GitExecutable = "cas-no-such-git-" + Guid.NewGuid().ToString("N") });
+        var runner = CreateRunner(new GitDiffOptions { GitExecutable = "cas-no-such-git-" + Guid.NewGuid().ToString("N") });
 
         var failure = await Assert.ThrowsAsync<DiffUnavailableException>(
             () => runner.RunAsync(temp.Path, ["--version"], null, null, CancellationToken.None));
 
         Assert.Equal(DiffFailure.GitNotFound, failure.Failure);
     }
+
+    [Fact]
+    public async Task Семафор_держит_лишний_git_в_очереди_и_отмена_ожидания_не_запускает_его()
+    {
+        using var temp = new TempDirectory();
+        var gate = new GitProcessGate(1);
+        var runner = new GitProcessRunner(new GitDiffOptions(), gate);
+        using var first = new CancellationTokenSource();
+        using var second = new CancellationTokenSource();
+
+        var slow = runner.RunAsync(temp.Path, ["-c", "alias.slow=!sleep 60", "slow"], null, null, first.Token);
+        await WaitForDescendantsAsync(static names => names.Contains("sleep"));
+        var queued = runner.RunAsync(temp.Path, ["--version"], null, null, second.Token);
+
+        Assert.Equal(1, gate.Waiting);
+        Assert.False(queued.IsCompleted);
+        await second.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+        Assert.Equal(0, gate.Waiting);
+
+        await first.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => slow);
+
+        // Место освободилось: следующий запуск идёт сразу.
+        var version = await runner.RunAsync(temp.Path, ["--version"], null, null, CancellationToken.None);
+        Assert.True(version.Succeeded);
+    }
+
+    private static GitProcessRunner CreateRunner(GitDiffOptions options) =>
+        new(options, new GitProcessGate(options.MaxConcurrentProcesses));
 
     private static readonly HashSet<string> GitFamily = new(["git", "sh", "bash", "sleep"], StringComparer.OrdinalIgnoreCase);
 
