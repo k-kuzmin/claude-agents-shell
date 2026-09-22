@@ -226,10 +226,15 @@
                                             CommandParameter="{Binding}"
                                             ToolTip="Новая сессия"
                                             AutomationProperties.Name="Новая сессия в проекте">
-                                        <Path Style="{StaticResource IconPathStyle}"
-                                              StrokeThickness="2.2"
-                                              Stroke="{StaticResource PrimaryTextBrush}"
-                                              Data="M7.5,3 L7.5,12 M3,7.5 L12,7.5" />
+                                        <!-- Сетка 15×15, как у остальных глифов: у Path со Stretch=None
+                                             размер равен правому-нижнему краю геометрии, поэтому без
+                                             Canvas отступ появляется только слева и сверху и знак
+                                             съезжает вправо-вниз относительно соседней кнопки. -->
+                                        <Canvas Width="15" Height="15">
+                                            <Path Style="{StaticResource IconPathStyle}"
+                                                  Stroke="{StaticResource PrimaryTextBrush}"
+                                                  Data="M7.5,3 L7.5,12 M3,7.5 L12,7.5" />
+                                        </Canvas>
                                     </Button>
                                     <!-- Окно истории приезжает в M3: кнопка на месте, но отключена. -->
                                     <Button Width="28" Height="28"
