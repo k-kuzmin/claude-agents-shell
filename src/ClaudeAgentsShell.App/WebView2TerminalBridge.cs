@@ -392,6 +392,14 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
 
     private ValueTask PostAsync(string message, CancellationToken cancellationToken)
     {
+        // Контрол уже отпущен — отправлять некуда. Без этой проверки запоздалое сообщение из
+        // пула (брошенное по потолку гашение помп) ставило бы операцию в диспетчер, который
+        // в это время, возможно, ждёт освобождения контейнера.
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return ValueTask.CompletedTask;
+        }
+
         if (_dispatcher.CheckAccess())
         {
             Post(message);

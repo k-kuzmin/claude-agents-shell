@@ -13,6 +13,7 @@ namespace ClaudeAgentsShell.App;
 public partial class App : System.Windows.Application
 {
     private ServiceProvider? _services;
+    private WebView2TerminalBridge? _bridge;
     private CrashReporter? _crashes;
     private UnhandledExceptionEventHandler? _domainHandler;
     private EventHandler<UnobservedTaskExceptionEventArgs>? _taskHandler;
@@ -40,6 +41,10 @@ public partial class App : System.Windows.Application
         _taskHandler = OnUnobservedTaskException;
         TaskScheduler.UnobservedTaskException += _taskHandler;
 
+        // Мост запоминается отдельно: на выходе его надо освободить раньше контейнера и в этом
+        // потоке (см. ContainerTeardown). Экземпляр тот же, что получит окно, — он одиночка.
+        _bridge = _services.GetRequiredService<WebView2TerminalBridge>();
+
         var window = _services.GetRequiredService<MainWindow>();
         MainWindow = window;
         window.Show();
@@ -57,10 +62,13 @@ public partial class App : System.Windows.Application
         // доигрываться гашение, брошенное по потолку.
         if (_services is { } services)
         {
-            // К этому моменту окно уже освободило мост и псевдоконсоли; повторное освобождение
-            // идемпотентно и не уходит в ожидание.
-            services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            // Обычно окно к этому моменту уже освободило мост и псевдоконсоли, и повторное
+            // освобождение идемпотентно. Но не всегда: сбой до показа окна или гашение, брошенное
+            // по потолку внутри набора вкладок, оставляют мост живым — и тогда ожидание
+            // контейнера из этого потока могло повиснуть навсегда. Порядок держит ContainerTeardown.
+            ContainerTeardown.DisposeFromUiThread(services, _bridge);
             _services = null;
+            _bridge = null;
         }
 
         DispatcherUnhandledException -= OnDispatcherUnhandledException;

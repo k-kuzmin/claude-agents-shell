@@ -1,5 +1,7 @@
 using ClaudeAgentsShell.App;
+using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.ViewModels;
+using ClaudeAgentsShell.Application.Ports;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -36,6 +38,42 @@ public sealed class AppCompositionTests
         // мосту (контрол WebView2) и WpfUiDispatcher (Dispatcher.CurrentDispatcher) — так же,
         // как в настоящем приложении, где контейнер строится в потоке интерфейса.
         // Главное окно не разрешается: ему нужен уже поднятый WebView2 и показ на экране.
+        RunOnUiThread(
+            configure: static _ => { },
+            use: static provider =>
+            {
+                Assert.NotNull(provider.GetRequiredService<ShellViewModel>());
+
+                // Фабрика Lazy<IShowDiffHandler> проверкой плана не обходится: только
+                // настоящее разрешение показывает, что show_diff дойдёт до того же координатора,
+                // что слушает панель, и что цикла нет.
+                var coordinator = provider.GetRequiredService<DiffCoordinator>();
+                Assert.Same(coordinator, provider.GetRequiredService<Lazy<IShowDiffHandler>>().Value);
+                Assert.Same(coordinator, provider.GetRequiredService<IDiffChangeSink>());
+            });
+    }
+
+    [Fact]
+    public void Освобождение_контейнера_в_потоке_интерфейса_не_виснет_за_асинхронным_освобождением()
+    {
+        // Воспроизводит зависание, которое этот тест раньше ловил примерно раз в десять полных
+        // прогонов: служба, созданная после моста и потому освобождаемая раньше него, завершает
+        // DisposeAsync асинхронно (так делает журнал хуков, пока его фоновая запись не
+        // закончилась). Контейнер продолжает освобождение уже в пуле потоков, мост оттуда
+        // отправляет освобождение контрола в диспетчер, а поток интерфейса стоит в ожидании
+        // контейнера. Здесь асинхронность гарантирована, а не зависит от нагрузки; без
+        // ContainerTeardown тест висит каждый раз.
+        RunOnUiThread(
+            configure: static services => services.AddSingleton<SlowDisposable>(),
+            use: static provider =>
+            {
+                Assert.NotNull(provider.GetRequiredService<ShellViewModel>());
+                Assert.NotNull(provider.GetRequiredService<SlowDisposable>());
+            });
+    }
+
+    private static void RunOnUiThread(Action<IServiceCollection> configure, Action<ServiceProvider> use)
+    {
         Exception? captured = null;
 
         var thread = new Thread(() =>
@@ -45,9 +83,10 @@ public sealed class AppCompositionTests
             {
                 var services = new ServiceCollection();
                 AppComposition.ConfigureServices(services);
+                configure(services);
                 provider = services.BuildServiceProvider(AppComposition.ProviderOptions);
 
-                Assert.NotNull(provider.GetRequiredService<ShellViewModel>());
+                use(provider);
             }
             catch (Exception exception)
             {
@@ -55,9 +94,13 @@ public sealed class AppCompositionTests
             }
             finally
             {
-                // Набор вкладок освобождается асинхронно, и ждать его надо в том же потоке:
-                // контрол WebView2 принадлежит ему.
-                provider?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                // Так же, как App.OnExit: контрол WebView2 принадлежит этому потоку, и ждать
+                // освобождения контейнера здесь можно только через ContainerTeardown.
+                if (provider is not null)
+                {
+                    ContainerTeardown.DisposeFromUiThread(
+                        provider, provider.GetRequiredService<WebView2TerminalBridge>());
+                }
             }
         });
 
@@ -68,5 +111,18 @@ public sealed class AppCompositionTests
         // висящий прогон.
         Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "Сборка контейнера не завершилась за 30 секунд.");
         Assert.Null(captured);
+    }
+
+    /// <summary>
+    /// Служба, которая создаётся после моста (зависит от него) и освобождается асинхронно.
+    /// </summary>
+    private sealed class SlowDisposable(ITerminalBridge bridge) : IAsyncDisposable
+    {
+        public ITerminalBridge Bridge { get; } = bridge;
+
+        // Задержка, а не Task.Yield: продолжение Yield успевает выполниться в пуле раньше,
+        // чем контейнер проверит IsCompletedSuccessfully, и тогда он идёт дальше синхронно —
+        // та же гонка, из-за которой настоящее зависание случалось лишь иногда.
+        public async ValueTask DisposeAsync() => await Task.Delay(50).ConfigureAwait(false);
     }
 }
