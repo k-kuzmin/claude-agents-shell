@@ -22,6 +22,12 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     private readonly ILayoutStore _layoutStore;
     private readonly LayoutRecorder _layoutRecorder;
 
+    // Записи раскладки проектов, чей каталог был недоступен на старте: вкладки не подняты,
+    // но и терять их нельзя — снимок переносит их как есть, пока проект не станет доступен
+    // и пользователь не откроет в нём вкладку (тогда их заменяют живые) или пока проект
+    // не уберут из списка (тогда снимок их больше не видит).
+    private readonly Dictionary<Guid, ProjectLayout> _deferredLayouts = [];
+
     private bool _terminalPageReady;
     private bool _disposed;
 
@@ -336,6 +342,10 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             return null;
         }
 
+        // Живая вкладка заменяет перенесённые записи проекта: иначе после возврата каталога
+        // следующий запуск поднял бы и их, и новые — дублями.
+        _deferredLayouts.Remove(row.Id);
+
         var tab = new TabViewModel(terminalId, row.Id, row.Name, workingDirectory)
         {
             // Сессия известна с запуска: до прихода SessionStart раскладка иначе записала бы
@@ -456,6 +466,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         {
             return false;
         }
+
+        // Убранный проект не поднимется никогда — его перенесённые записи больше не нужны.
+        _deferredLayouts.Remove(row.Id);
 
         // Закрытие идёт разом по всем вкладкам, а не по одной: у каждой свой бюджет ожидания
         // выхода процесса, и последовательный проход умножал бы его на число вкладок — строка
@@ -789,8 +802,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
 
     /// <summary>
     /// Поднимает вкладки сохранённой раскладки: последовательно, в сохранённом порядке, затем
-    /// активные вкладки проектов и активный проект. Проекта больше нет или его каталог
-    /// недоступен — вкладка пропускается молча.
+    /// активные вкладки проектов и активный проект. Проекта больше нет — его вкладки
+    /// отбрасываются молча. Каталог проекта недоступен — вкладки не поднимаются, но их записи
+    /// сохраняются в раскладке до возврата каталога.
     /// </summary>
     private async Task RestoreLayoutAsync(WorkspaceLayout layout, CancellationToken cancellationToken)
     {
@@ -801,6 +815,12 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             var row = Projects.Rows.FirstOrDefault(candidate => candidate.Id == project.ProjectId);
             if (row is null)
             {
+                continue;
+            }
+
+            if (!await Projects.RefreshAvailabilityAsync(row, cancellationToken).ConfigureAwait(true))
+            {
+                _deferredLayouts[row.Id] = project;
                 continue;
             }
 
@@ -869,7 +889,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
 
     /// <summary>
     /// Снимок раскладки для записи. Живость считается здесь, в момент записи: в раскладку идут
-    /// только вкладки, у которых работает оболочка и сессия не закончилась.
+    /// только вкладки, у которых работает оболочка и сессия не закончилась. У проекта без живых
+    /// вкладок, чей каталог был недоступен на старте, переносятся его прежние записи.
     /// </summary>
     private WorkspaceLayout CaptureLayout()
     {
@@ -882,6 +903,11 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 .ToList();
             if (live.Count == 0)
             {
+                if (_deferredLayouts.TryGetValue(row.Id, out var deferred))
+                {
+                    projects.Add(deferred);
+                }
+
                 continue;
             }
 

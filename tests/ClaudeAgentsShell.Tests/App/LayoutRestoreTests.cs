@@ -284,4 +284,64 @@ public sealed class LayoutRestoreTests
         var project = Assert.Single(harness.Layouts.LastSaved!.Projects);
         Assert.Equal(new[] { "one", "two" }, project.Tabs.Select(static tab => tab.SessionId));
     }
+
+    private static async Task<(Harness Harness, ProjectDefinition Alpha, ProjectDefinition Offline, ProjectLayout Saved)> WithOfflineProjectAsync()
+    {
+        var alpha = Project("alpha", 0);
+        var gone = Project("gone", 1);
+        var offline = Project("offline", 2);
+        var saved = new ProjectLayout(offline.Id, 1, [new TabLayout("o-1", "один"), new TabLayout("o-2", null)]);
+        var harness = new Harness([alpha, offline], unavailable: [offline]);
+        harness.Layouts.Stored = new WorkspaceLayout(
+            alpha.Id,
+            [
+                new ProjectLayout(gone.Id, 0, [new TabLayout("g-1", null)]),
+                saved,
+                new ProjectLayout(alpha.Id, 0, [new TabLayout("a-1", null)]),
+            ]);
+
+        await harness.InitializeAsync();
+        return (harness, alpha, offline, saved);
+    }
+
+    [Fact]
+    public async Task Записи_проекта_с_недоступным_каталогом_переносятся_а_удалённого_отбрасываются()
+    {
+        var (harness, alpha, offline, saved) = await WithOfflineProjectAsync();
+
+        Assert.DoesNotContain(harness.Workspace.Launches, launch => launch.ProjectId == offline.Id);
+
+        var layout = harness.Settle();
+        Assert.Equal(new[] { alpha.Id, offline.Id }, layout.Projects.Select(static project => project.ProjectId));
+        Assert.Same(saved, layout.Projects[1]);
+    }
+
+    [Fact]
+    public async Task Живая_вкладка_в_вернувшемся_каталоге_заменяет_перенесённые_записи()
+    {
+        var (harness, _, offline, _) = await WithOfflineProjectAsync();
+        harness.Probe.Add(offline.Path);
+        var row = harness.Shell.Projects.Rows.Single(candidate => candidate.Id == offline.Id);
+
+        var tab = await harness.Shell.OpenSessionAsync(row, CancellationToken.None);
+        harness.Sink.SetSessionContext(tab!.TerminalId, "fresh", null, false);
+
+        var project = harness.Settle().Projects.Single(candidate => candidate.ProjectId == offline.Id);
+        Assert.Equal("fresh", Assert.Single(project.Tabs).SessionId);
+
+        // И после закрытия живой вкладки прежние записи не возвращаются.
+        await harness.Shell.CloseTabAsync(tab, CancellationToken.None);
+        Assert.DoesNotContain(harness.Settle().Projects, candidate => candidate.ProjectId == offline.Id);
+    }
+
+    [Fact]
+    public async Task Убранный_из_списка_проект_уносит_перенесённые_записи()
+    {
+        var (harness, alpha, offline, _) = await WithOfflineProjectAsync();
+        var row = harness.Shell.Projects.Rows.Single(candidate => candidate.Id == offline.Id);
+
+        Assert.True(await harness.Shell.RemoveProjectAsync(row, CancellationToken.None));
+
+        Assert.Equal(new[] { alpha.Id }, harness.Settle().Projects.Select(static project => project.ProjectId));
+    }
 }
