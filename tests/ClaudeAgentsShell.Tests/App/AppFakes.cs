@@ -147,7 +147,14 @@ internal sealed class FakeUserPrompt : IUserPrompt
         return ConfirmResult;
     }
 
-    public void ShowError(string title, string message) => Errors.Add(message);
+    /// <summary>Заголовки ошибок, в том же порядке, что и <see cref="Errors"/>.</summary>
+    public List<string> ErrorTitles { get; } = [];
+
+    public void ShowError(string title, string message)
+    {
+        ErrorTitles.Add(title);
+        Errors.Add(message);
+    }
 }
 
 /// <summary>
