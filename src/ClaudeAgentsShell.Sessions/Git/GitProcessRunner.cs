@@ -91,12 +91,13 @@ public sealed class GitProcessRunner
             throw new DiffUnavailableException(DiffFailure.GitNotFound, "git не найден. Установите Git и добавьте его в PATH.", exception);
         }
 
+        var termination = GitProcessTermination.For(process);
         try
         {
             // Отменяют и из потока интерфейса, а снятие дерева занимает ~13 мс — уводим его в пул.
             using var registration = cancellationToken.Register(
-                static state => ThreadPool.UnsafeQueueUserWorkItem(static p => Kill(p), (Process)state!, preferLocal: false),
-                process);
+                static state => ((GitProcessTermination)state!).Request(),
+                termination);
 
             var stdinTask = OnDedicatedThread(() => WriteInput(process, standardInput), "git stdin");
             var stderrTask = OnDedicatedThread(() => ReadError(process), "git stderr");
@@ -104,7 +105,7 @@ public sealed class GitProcessRunner
                 () => ReadOutput(process.StandardOutput.BaseStream, outputCeilingBytes), "git stdout").ConfigureAwait(false);
             if (overflow)
             {
-                Kill(process);
+                termination.KillNow();
             }
 
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -118,9 +119,12 @@ public sealed class GitProcessRunner
         {
             if (!HasExited(process))
             {
-                Kill(process);
+                termination.KillNow();
                 process.WaitForExit();
             }
+
+            // До Dispose процесса: снятие из пула, если оно ещё идёт, дожидаемся, новое не начнётся.
+            termination.Close();
         }
     }
 
@@ -269,22 +273,6 @@ public sealed class GitProcessRunner
         catch (InvalidOperationException)
         {
             return true;
-        }
-    }
-
-    private static void Kill(Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException)
-        {
-            // Уже завершился или запуск закончился (и освободил процесс) раньше, чем дошло снятие из пула.
-        }
-        catch (Win32Exception)
-        {
-            // Завершается прямо сейчас — доступ к нему уже закрыт.
         }
     }
 }
