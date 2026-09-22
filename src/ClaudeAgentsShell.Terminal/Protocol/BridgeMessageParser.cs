@@ -59,6 +59,16 @@ public sealed class BridgeMessageParser : IBridgeMessageParser
                         TryGetInt32(root, "bytes", out int bytes) ? bytes : 0);
                     return true;
 
+                case "diff.refresh":
+                    return TryParseDiffRefresh(root, terminalId, out message);
+
+                case "diff.file.request":
+                    return TryParseDiffFileRequest(root, terminalId, out message);
+
+                case "diff.closed":
+                    message = new InboundBridgeMessage.DiffClosed(terminalId);
+                    return true;
+
                 default:
                     return false;
             }
@@ -111,6 +121,73 @@ public sealed class BridgeMessageParser : IBridgeMessageParser
         }
 
         message = new InboundBridgeMessage.Resize(terminalId, new TerminalSize(cols, rows));
+        return true;
+    }
+
+    /// <summary>
+    /// <c>dir</c> и <c>base</c> необязательны: отсутствие, <c>null</c> и пустая строка значат
+    /// «прежнее». Любой другой тип — битое сообщение. <c>ws</c> обязателен.
+    /// </summary>
+    private static bool TryParseDiffRefresh(JsonElement root, TerminalId terminalId, out InboundBridgeMessage? message)
+    {
+        message = null;
+
+        if (!TryGetOptionalString(root, "dir", out string? directory) ||
+            !TryGetOptionalString(root, "base", out string? baseRef) ||
+            !root.TryGetProperty("ws", out var ws) ||
+            ws.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return false;
+        }
+
+        message = new InboundBridgeMessage.DiffRefresh(terminalId, directory, baseRef, ws.GetBoolean());
+        return true;
+    }
+
+    private static bool TryParseDiffFileRequest(JsonElement root, TerminalId terminalId, out InboundBridgeMessage? message)
+    {
+        message = null;
+
+        if (!TryGetString(root, "path", out string path) ||
+            string.IsNullOrEmpty(path) ||
+            !TryGetString(root, "ctx", out string ctx))
+        {
+            return false;
+        }
+
+        DiffContext context;
+        switch (ctx)
+        {
+            case "hunks":
+                context = DiffContext.Hunks;
+                break;
+            case "full":
+                context = DiffContext.FullFile;
+                break;
+            default:
+                return false;
+        }
+
+        message = new InboundBridgeMessage.DiffFileRequest(terminalId, path, context);
+        return true;
+    }
+
+    private static bool TryGetOptionalString(JsonElement root, string name, out string? value)
+    {
+        value = null;
+
+        if (!root.TryGetProperty(name, out var element) || element.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        string text = element.GetString() ?? string.Empty;
+        value = text.Length == 0 ? null : text;
         return true;
     }
 

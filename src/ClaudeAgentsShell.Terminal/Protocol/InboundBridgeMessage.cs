@@ -4,7 +4,8 @@ namespace ClaudeAgentsShell.Terminal.Protocol;
 
 /// <summary>
 /// Сообщение со страницы терминалов в C#. Разбор соответствует разделу 3.2 ТЗ:
-/// <c>in</c>, <c>resize</c>, <c>ready</c>. Неизвестные типы игнорируются.
+/// <c>in</c>, <c>resize</c>, <c>ready</c>; служебное <c>ack</c>; сообщения панели diff
+/// <c>diff.refresh</c>, <c>diff.file.request</c>, <c>diff.closed</c> (issue #5). Неизвестные типы игнорируются.
 /// </summary>
 public abstract record InboundBridgeMessage(TerminalId TerminalId)
 {
@@ -40,4 +41,28 @@ public abstract record InboundBridgeMessage(TerminalId TerminalId)
     /// </param>
     /// <param name="Bytes">Сколько байтов записано — для диагностики и сверки.</param>
     public sealed record Ack(TerminalId TerminalId, long Sequence, int Bytes) : InboundBridgeMessage(TerminalId);
+
+    /// <summary>
+    /// Панель просит построить diff заново:
+    /// <c>{"type":"diff.refresh","id":"t1","dir":null,"base":null,"ws":false}</c>.
+    /// </summary>
+    /// <param name="TerminalId">Вкладка, в панели которой нажали.</param>
+    /// <param name="Directory">Другое рабочее дерево; <c>null</c> — прежнее.</param>
+    /// <param name="BaseRef">Другая база; <c>null</c> — прежняя.</param>
+    /// <param name="IgnoreWhitespace">Сравнение без учёта пробелов (<c>-w</c>).</param>
+    public sealed record DiffRefresh(TerminalId TerminalId, string? Directory, string? BaseRef, bool IgnoreWhitespace)
+        : InboundBridgeMessage(TerminalId);
+
+    /// <summary>
+    /// Панель раскрыла файл: <c>{"type":"diff.file.request","id":"t1","path":"src/a.cs","ctx":"hunks"}</c>.
+    /// </summary>
+    /// <param name="TerminalId">Вкладка.</param>
+    /// <param name="Path">Путь из оглавления.</param>
+    /// <param name="Context"><c>hunks</c> — только фрагменты, <c>full</c> — весь файл.</param>
+    public sealed record DiffFileRequest(TerminalId TerminalId, string Path, DiffContext Context)
+        : InboundBridgeMessage(TerminalId);
+
+    /// <summary>Пользователь закрыл панель: <c>{"type":"diff.closed","id":"t1"}</c>.</summary>
+    /// <param name="TerminalId">Вкладка.</param>
+    public sealed record DiffClosed(TerminalId TerminalId) : InboundBridgeMessage(TerminalId);
 }

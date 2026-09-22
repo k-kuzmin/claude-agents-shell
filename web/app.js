@@ -6,6 +6,7 @@
 //   в C#:       in  | resize  | ready
 //   служебное:  ack — подтверждение term.write, без него не посчитать незавершённые записи
 //               (раздел 3.3 ТЗ требует этот счётчик).
+//   панель diff: diff.* — разбирает diff-panel.js (issue #5), здесь только маршрутизация.
 (function () {
   'use strict';
 
@@ -30,6 +31,12 @@
 
   var host = document.getElementById('terminals');
   var terminals = new Map();
+
+  // Панели diff живут в том же контейнере, поверх терминалов. Если скрипт панели не загрузился,
+  // терминалы обязаны работать как раньше — поэтому заглушка, а не падение.
+  var diffPanels = window.DiffPanels
+    ? window.DiffPanels.create({ host: host, post: post, onClosed: onDiffPanelClosed })
+    : { handle: function () {}, show: function () {}, remove: function () {}, isOpen: function () { return false; } };
   var encoder = new TextEncoder();
 
   // Размер один на всю страницу. Терминалы — соседние элементы одного контейнера, различаются
@@ -238,6 +245,14 @@
 
   function onResizeTick() {
     resizeTimer = 0;
+
+    // Пока поверх видимого терминала открыта панель diff, fit() его не трогает: панель
+    // занимает ту же область, а перекладывать буфер агента ради невидимого нечего.
+    // Замер откладывается до закрытия панели (onDiffPanelClosed).
+    var shown = visibleEntry();
+    if (shown && diffPanels.isOpen(shown.id)) {
+      return;
+    }
 
     var dims = measure();
     if (dims) {
@@ -468,10 +483,16 @@
       entry.element.classList.toggle('hidden', entry.id !== id);
     });
 
+    // Панель diff следует за своим терминалом. Если она открыта, фокус уходит ей (это делает
+    // она сама): иначе клавиши попадали бы в спрятанный под панелью терминал.
+    diffPanels.show(id);
+
     var target = terminals.get(id);
-    requestAnimationFrame(function () {
-      target.term.focus();
-    });
+    if (!diffPanels.isOpen(id)) {
+      requestAnimationFrame(function () {
+        target.term.focus();
+      });
+    }
 
     // Пересчёт после показа даёт те же cols/rows — размер у вкладок общий, — поэтому
     // переключение не перекладывает буфер и не шлёт ни одного resize. Замер нужен ради
@@ -486,6 +507,8 @@
     }
 
     terminals.delete(id);
+
+    diffPanels.remove(id);
 
     releaseRenderer(entry);
 
@@ -573,6 +596,19 @@
     }
   }
 
+  // Панель закрыта (Esc, кнопка или diff.close из C#): фокус возвращается терминалу,
+  // отложенный на время панели замер выполняется.
+  function onDiffPanelClosed(id, wasVisible) {
+    var entry = terminals.get(id);
+    if (entry && wasVisible) {
+      requestAnimationFrame(function () {
+        entry.term.focus();
+      });
+    }
+
+    scheduleResize();
+  }
+
   function showFatal(text) {
     var banner = document.createElement('div');
     banner.className = 'fatal';
@@ -609,6 +645,12 @@
         notifyExited(message.id, message.code);
         break;
       default:
+        // Панель бывает только у существующего терминала: diff.* для неизвестной вкладки
+        // создал бы панель, которую никто никогда не покажет и не уберёт.
+        if (typeof message.type === 'string' && message.type.lastIndexOf('diff.', 0) === 0
+          && terminals.has(message.id)) {
+          diffPanels.handle(message);
+        }
         break;
     }
   }
