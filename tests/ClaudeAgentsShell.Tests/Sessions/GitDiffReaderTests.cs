@@ -11,7 +11,7 @@ public sealed class GitDiffReaderTests
     private static GitDiffReader CreateReader(GitDiffOptions? options = null)
     {
         options ??= new GitDiffOptions();
-        return new GitDiffReader(options, new GitProcessRunner(options), new DiffCollapsePolicy(options));
+        return new GitDiffReader(options, new GitProcessRunner(options, new GitProcessGate(options.MaxConcurrentProcesses)), new DiffCollapsePolicy(options));
     }
 
     private static DiffRequest Request(string directory, string? baseRef = null, bool ignoreWhitespace = false, params string[] files) =>
@@ -237,6 +237,30 @@ public sealed class GitDiffReaderTests
         Assert.Equal(new DiffFileEntry("image.bin", null, DiffChangeKind.Untracked, null, null, DiffCollapseReason.Binary), files["image.bin"]);
         Assert.Equal(new DiffFileEntry("huge.txt", null, DiffChangeKind.Untracked, null, 0, DiffCollapseReason.LargeDiff), files["huge.txt"]);
         Assert.Equal(new DiffFileEntry("empty.txt", null, DiffChangeKind.Untracked, 0, 0, DiffCollapseReason.None), files["empty.txt"]);
+    }
+
+    [Fact]
+    public async Task Сверх_общего_бюджета_строки_не_считаются_а_бинарный_остаётся_бинарным()
+    {
+        using var repository = CreateFeatureBranch();
+        for (var i = 0; i < 10; i++)
+        {
+            repository.Write($"new/f{i}.txt", string.Concat(Enumerable.Repeat("0123456789\n", 10)));
+        }
+
+        var binary = new byte[200];
+        repository.WriteBytes("new/z.bin", binary);
+
+        // Бюджет на три текстовых файла по 110 байт; бинарный в него уже не влезает.
+        var options = new GitDiffOptions { UntrackedCountBudgetBytes = 330 };
+        var index = await CreateReader(options).ListChangesAsync(Request(repository.Root), CancellationToken.None);
+        var texts = index.Files.Where(static f => f.Path.EndsWith(".txt", StringComparison.Ordinal)).ToList();
+
+        Assert.Equal(10, texts.Count);
+        Assert.True(texts.Count(static f => f.AddedLines == 10) <= 3);
+        Assert.True(texts.Count(static f => f.AddedLines is null) >= 7);
+        Assert.All(texts.Where(static f => f.AddedLines is null), static f => Assert.Equal(DiffCollapseReason.LargeDiff, f.Collapse));
+        Assert.Equal(DiffCollapseReason.Binary, index.Files.Single(static f => f.Path == "new/z.bin").Collapse);
     }
 
     [Fact]

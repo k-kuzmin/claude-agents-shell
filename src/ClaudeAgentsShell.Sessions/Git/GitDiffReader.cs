@@ -252,12 +252,23 @@ public sealed class GitDiffReader : IGitDiffReader
         }
 
         var paths = GitDiffOutputParser.SplitNul(Decode(result.Output));
-        var entries = new List<DiffFileEntry>(paths.Count);
-        foreach (var path in paths)
+        // Чтение асинхронное (IOCP), несколько файлов сразу; общий бюджет держит оглавление
+        // быстрым, даже если агент насоздавал сотни крупных файлов.
+        var entries = new DiffFileEntry[paths.Count];
+        var budget = new DiffReadBudget(_options.UntrackedCountBudgetBytes);
+        var parallel = new ParallelOptions
         {
-            var counts = await DiffUntrackedFile.CountLinesAsync(Path.Combine(root, path), _options, cancellationToken).ConfigureAwait(false);
-            entries.Add(new DiffFileEntry(path, null, DiffChangeKind.Untracked, counts.Added, counts.Deleted, DiffCollapseReason.None));
-        }
+            MaxDegreeOfParallelism = Math.Max(1, _options.UntrackedCountParallelism),
+            CancellationToken = cancellationToken,
+        };
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, paths.Count),
+            parallel,
+            async (i, token) =>
+            {
+                var counts = await DiffUntrackedFile.CountLinesAsync(Path.Combine(root, paths[i]), _options, budget, token).ConfigureAwait(false);
+                entries[i] = new DiffFileEntry(paths[i], null, DiffChangeKind.Untracked, counts.Added, counts.Deleted, DiffCollapseReason.None);
+            }).ConfigureAwait(false);
 
         return entries;
     }

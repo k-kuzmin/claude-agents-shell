@@ -39,6 +39,7 @@ public static class SessionsServiceCollectionExtensions
         services.TryAddSingleton<IGitBranchReader, GitBranchReader>();
         services.TryAddSingleton<IGitBranchWatcher, GitBranchWatcher>();
         services.TryAddSingleton(new GitDiffOptions());
+        services.TryAddSingleton(static sp => new GitProcessGate(sp.GetRequiredService<GitDiffOptions>().MaxConcurrentProcesses));
         services.TryAddSingleton<GitProcessRunner>();
         services.TryAddSingleton<DiffCollapsePolicy>();
         services.TryAddSingleton<IGitDiffReader, GitDiffReader>();
