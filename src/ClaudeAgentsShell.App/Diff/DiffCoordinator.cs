@@ -503,11 +503,27 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
             index = generation.Index;
         }
 
-        if (!generation.TryEnter(out var cancellationToken))
+        if (!generation.TryEnter(out var generationToken))
         {
             return;
         }
 
+        var load = new FileLoad(CancellationTokenSource.CreateLinkedTokenSource(generationToken));
+        FileLoad? replaced;
+        lock (_gate)
+        {
+            generation.FileLoads.TryGetValue(request.Path, out replaced);
+            generation.FileLoads[request.Path] = load;
+        }
+
+        // Вне замка: колбэки отмены исполняются синхронно.
+        replaced?.Cancel();
+
+        // Вызывается только под замком координатора.
+        bool StillWanted() =>
+            generation.FileLoads.TryGetValue(request.Path, out var current) && ReferenceEquals(current, load);
+
+        var cancellationToken = load.Token;
         try
         {
             var entry = index?.Files.FirstOrDefault(file => string.Equals(file.Path, request.Path, StringComparison.Ordinal));
@@ -517,7 +533,8 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
                         terminalId,
                         generation,
                         token => _view.ShowErrorAsync(terminalId, request.Path, FileNotInIndexMessage, token),
-                        cancellationToken)
+                        cancellationToken,
+                        StillWanted)
                     .ConfigureAwait(false);
                 return;
             }
@@ -528,32 +545,75 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
             {
                 diff = await _git.ReadFileDiffAsync(index, entry, request.Context, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                var message = exception is DiffUnavailableException
-                    ? exception.Message
-                    : "Не удалось загрузить diff файла: " + exception.Message;
-
-                await SendAsync(
-                        terminalId,
-                        generation,
-                        token => _view.ShowErrorAsync(terminalId, request.Path, message, token),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                return;
-            }
             finally
             {
                 generation.FileGate.Release();
             }
 
-            await SendAsync(terminalId, generation, token => _view.ShowFileAsync(terminalId, diff, token), cancellationToken)
+            await SendAsync(
+                    terminalId,
+                    generation,
+                    token => _view.ShowFileAsync(terminalId, diff, token),
+                    cancellationToken,
+                    StillWanted)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await ReportFileFailureAsync(terminalId, generation, request.Path, exception, StillWanted).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                if (StillWanted())
+                {
+                    generation.FileLoads.Remove(request.Path);
+                }
+            }
+
+            load.Dispose();
+            generation.Exit();
+        }
+    }
+
+    /// <summary>
+    /// Ошибка у файла — если страница его всё ещё ждёт: сбой git, таймаут, отказ моста.
+    /// Если загрузку сменила новая просьба того же пути, новое оглавление или закрытие панели,
+    /// ошибка не шлётся. Сам никогда не бросает.
+    /// </summary>
+    private async Task ReportFileFailureAsync(
+        TerminalId terminalId,
+        DiffGeneration generation,
+        string path,
+        Exception exception,
+        Func<bool> stillWanted)
+    {
+        var message = exception switch
+        {
+            DiffUnavailableException => exception.Message,
+            OperationCanceledException => "Загрузка файла прервана — раскройте его ещё раз.",
+            _ => "Не удалось загрузить diff файла: " + exception.Message,
+        };
+
+        if (!generation.TryEnter(out var generationToken))
+        {
+            return;
+        }
+
+        try
+        {
+            await SendAsync(
+                    terminalId,
+                    generation,
+                    token => _view.ShowErrorAsync(terminalId, path, message, token),
+                    generationToken,
+                    stillWanted)
                 .ConfigureAwait(false);
         }
         catch (Exception)
         {
-            // Отменено новым запросом или закрытием, либо страница не приняла сообщение:
-            // файл просто не показан, приложение живёт дальше.
+            // Страница не приняла и сообщение об ошибке — окно закрывается.
         }
         finally
         {
@@ -634,14 +694,21 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
     }
 
     /// <summary>
-    /// Отправляет сообщение на страницу, если поколение ещё текущее. <c>false</c> — поколение
-    /// списано, сообщение не ушло.
+    /// Отправляет сообщение на страницу, если поколение ещё текущее и (для файла) просьба ещё
+    /// не сменилась новой — <paramref name="stillWanted"/> проверяется под замком координатора.
+    /// <c>false</c> — сообщение не ушло.
     /// </summary>
+    /// <remarks>
+    /// Отправка ждётся до конца под замком отправки: следующее сообщение уходит в мост только
+    /// после того, как предыдущее (у файла — все его части) действительно передано странице.
+    /// Поэтому порядок не зависит от того, как мост раскладывает части по заходам диспетчера.
+    /// </remarks>
     private async Task<bool> SendAsync(
         TerminalId terminalId,
         DiffGeneration generation,
         Func<CancellationToken, ValueTask> send,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<bool>? stillWanted = null)
     {
         await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -651,7 +718,8 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
                 if (_disposed
                     || cancellationToken.IsCancellationRequested
                     || !_panels.TryGetValue(terminalId, out var current)
-                    || !ReferenceEquals(current, generation))
+                    || !ReferenceEquals(current, generation)
+                    || (stillWanted is not null && !stillWanted()))
                 {
                     return false;
                 }

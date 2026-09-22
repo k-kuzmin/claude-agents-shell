@@ -304,6 +304,25 @@ public sealed class DiffCoordinatorTests
         var second = harness.Git.Requests[1];
         Assert.Equal(AgentPath, second.Directory);
         Assert.Equal("develop", second.BaseRef);
+
+        // Выбранное дерево запоминается: следующие обновления приходят с dir = null.
+        harness.View.RaiseRefresh(tab.TerminalId, directory: null, baseRef: null, ignoreWhitespace: true);
+        await harness.Coordinator.WhenIdleAsync();
+
+        Assert.Equal(AgentPath, harness.Git.Requests[2].Directory);
+        Assert.Equal("develop", harness.Git.Requests[2].BaseRef);
+    }
+
+    [Fact]
+    public async Task Обновление_сначала_показывает_строится()
+    {
+        await using var harness = new Harness();
+        var tab = await harness.OpenAsync("t1");
+
+        harness.View.RaiseRefresh(tab.TerminalId, null, null, ignoreWhitespace: true);
+        await harness.Coordinator.WhenIdleAsync();
+
+        Assert.Equal(["pending", "index", "pending", "index"], harness.View.Calls.Select(call => call.Kind));
     }
 
     [Fact]
@@ -360,6 +379,66 @@ public sealed class DiffCoordinatorTests
         await harness.Coordinator.WhenIdleAsync().WaitAsync(Timeout);
 
         Assert.Empty(harness.View.CallsOf("file"));
+
+        // Новое оглавление страница уже получила — ошибки у файла прежнего быть не должно.
+        Assert.Empty(harness.View.CallsOf("error"));
+    }
+
+    [Fact]
+    public async Task Повторный_запрос_того_же_пути_отменяет_прежний_и_не_трогает_другие()
+    {
+        await using var harness = new Harness();
+        var tab = await harness.OpenAsync("t1");
+
+        var gates = new Dictionary<string, TaskCompletionSource>();
+        var tokens = new List<(string Path, CancellationToken Token)>();
+        harness.Git.ReadFile = async (file, context, token) =>
+        {
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (gates)
+            {
+                gates[file.Path + "#" + tokens.Count] = gate;
+                tokens.Add((file.Path, token));
+            }
+
+            // Отмену фейк нарочно не слушает: проверяется, что поздний ответ не уходит на страницу.
+            await gate.Task;
+            return new FileDiff(file.Path, context, file.Path + "#" + context, false);
+        };
+
+        harness.View.RaiseFile(tab.TerminalId, "src/a.cs");
+        harness.View.RaiseFile(tab.TerminalId, "src/b.cs");
+        harness.View.RaiseFile(tab.TerminalId, "src/a.cs", DiffContext.FullFile);
+        await WaitUntilAsync(() => tokens.Count == 3);
+
+        Assert.True(tokens[0].Token.IsCancellationRequested);
+        Assert.False(tokens[1].Token.IsCancellationRequested);
+        Assert.False(tokens[2].Token.IsCancellationRequested);
+
+        foreach (var gate in gates.Values)
+        {
+            gate.SetResult();
+        }
+
+        await harness.Coordinator.WhenIdleAsync().WaitAsync(Timeout);
+
+        var shown = harness.View.CallsOf("file").Select(call => call.File!.Text).OrderBy(text => text, StringComparer.Ordinal);
+        Assert.Equal(["src/a.cs#FullFile", "src/b.cs#Hunks"], shown);
+        Assert.Empty(harness.View.CallsOf("error"));
+    }
+
+    [Fact]
+    public async Task Прерванное_не_по_нашей_воле_чтение_файла_даёт_ошибку_у_файла()
+    {
+        await using var harness = new Harness();
+        var tab = await harness.OpenAsync("t1");
+        harness.Git.ReadFile = (_, _, _) => Task.FromException<FileDiff>(new OperationCanceledException("git timeout"));
+
+        harness.View.RaiseFile(tab.TerminalId, "src/a.cs");
+        await harness.Coordinator.WhenIdleAsync();
+
+        var error = Assert.Single(harness.View.CallsOf("error"));
+        Assert.Equal("src/a.cs", error.Path);
     }
 
     [Fact]

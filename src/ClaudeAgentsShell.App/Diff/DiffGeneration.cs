@@ -52,6 +52,12 @@ internal sealed class DiffGeneration
     /// </summary>
     public bool SkipCallerBatch { get; set; }
 
+    /// <summary>
+    /// Текущая загрузка каждого пути: повторная просьба того же пути отменяет прежнюю.
+    /// Меняется только под замком координатора.
+    /// </summary>
+    public Dictionary<string, FileLoad> FileLoads { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Ограничитель одновременных файловых запросов поколения.</summary>
     public SemaphoreSlim FileGate => _fileGate;
 
