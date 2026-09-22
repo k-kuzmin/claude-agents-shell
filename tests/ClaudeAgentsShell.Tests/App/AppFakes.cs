@@ -345,11 +345,21 @@ internal sealed class FakeHookListener : IHookListener
         string? token,
         string? sessionId = null,
         string? workingDirectory = null,
-        string? source = null) =>
+        string? source = null,
+        string? agentId = null,
+        IReadOnlyList<BackgroundTask>? backgroundTasks = null) =>
         HookReceived?.Invoke(
             this,
             new HookEventArgs(
-                new HookEvent(kind, sessionId, workingDirectory, token, DateTimeOffset.UnixEpoch, source)));
+                new HookEvent(
+                    kind,
+                    sessionId,
+                    workingDirectory,
+                    token,
+                    DateTimeOffset.UnixEpoch,
+                    source,
+                    agentId,
+                    backgroundTasks)));
 
     public ValueTask DisposeAsync()
     {
