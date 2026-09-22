@@ -27,6 +27,7 @@ public static class SessionsServiceCollectionExtensions
 
         services.TryAddSingleton<IAppDataPaths>(static _ => AppDataPaths.ForCurrentUser());
         services.TryAddSingleton<IProjectStore, ProjectStore>();
+        services.TryAddSingleton<ILayoutStore, JsonLayoutStore>();
         services.TryAddSingleton<IDirectoryProbe, DirectoryProbe>();
         services.TryAddSingleton<IFileProbe, FileProbe>();
         services.TryAddSingleton<IShellLauncher, ShellLauncher>();

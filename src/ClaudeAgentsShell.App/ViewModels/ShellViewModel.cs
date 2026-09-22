@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
@@ -18,28 +19,43 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     private readonly IUserPrompt _prompt;
     private readonly IUiDispatcher _dispatcher;
     private readonly SessionStateCoordinator _sessionState;
+    private readonly ILayoutStore _layoutStore;
+    private readonly LayoutRecorder _layoutRecorder;
 
     private bool _terminalPageReady;
     private bool _disposed;
 
     /// <inheritdoc cref="ShellViewModel" />
+    /// <param name="workspace">Набор терминалов на странице.</param>
+    /// <param name="projects">Панель проектов.</param>
+    /// <param name="prompt">Сообщения и подтверждения пользователю.</param>
+    /// <param name="dispatcher">Поток интерфейса.</param>
+    /// <param name="sessionState">Координатор состояний вкладок по хукам.</param>
+    /// <param name="layoutStore">Раскладка окна: читается один раз на старте.</param>
+    /// <param name="layoutRecorder">Запись раскладки по изменениям (issue #4).</param>
     public ShellViewModel(
         ITerminalWorkspace workspace,
         ProjectListViewModel projects,
         IUserPrompt prompt,
         IUiDispatcher dispatcher,
-        SessionStateCoordinator sessionState)
+        SessionStateCoordinator sessionState,
+        ILayoutStore layoutStore,
+        LayoutRecorder layoutRecorder)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(projects);
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentNullException.ThrowIfNull(dispatcher);
         ArgumentNullException.ThrowIfNull(sessionState);
+        ArgumentNullException.ThrowIfNull(layoutStore);
+        ArgumentNullException.ThrowIfNull(layoutRecorder);
 
         _workspace = workspace;
         _prompt = prompt;
         _dispatcher = dispatcher;
         _sessionState = sessionState;
+        _layoutStore = layoutStore;
+        _layoutRecorder = layoutRecorder;
 
         Projects = projects;
         Tabs = new TabStripViewModel();
@@ -116,6 +132,10 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
 
         _workspace.TerminalExited += OnTerminalExited;
         Tabs.PropertyChanged += OnTabsPropertyChanged;
+
+        // Перестановка вкладок мышью идёт мимо ViewModel окна — прямо в полосу; видна она
+        // только как перемещение в видимой коллекции.
+        ((INotifyCollectionChanged)Tabs.Tabs).CollectionChanged += OnVisibleTabsChanged;
     }
 
     /// <summary>Панель проектов.</summary>
@@ -199,7 +219,11 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             + "Нажмите + в полосе вкладок или Ctrl+Shift+T.",
     };
 
-    /// <summary>Поднимает страницу терминалов и читает список проектов.</summary>
+    /// <summary>
+    /// Поднимает страницу терминалов, читает список проектов и восстанавливает вкладки
+    /// прошлого запуска (issue #4). Запись раскладки включается только после восстановления:
+    /// частично поднятая раскладка не должна затереть сохранённую.
+    /// </summary>
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await _workspace.StartAsync(cancellationToken).ConfigureAwait(true);
@@ -218,7 +242,19 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // строки которого в новом списке может уже не быть.
         SelectProject(null);
         RefreshProjectRows();
+
+        var layout = await _layoutStore.LoadAsync(cancellationToken).ConfigureAwait(true);
+        await RestoreLayoutAsync(layout, cancellationToken).ConfigureAwait(true);
+        _layoutRecorder.Start(CaptureLayout);
     }
+
+    /// <summary>
+    /// Закрытие окна, до гашения псевдоконсолей: отложенная запись раскладки уходит на диск
+    /// по текущему снимку, и запись замораживается. Иначе гашение, которое шлёт выход
+    /// оболочек и <c>SessionEnd</c>, записало бы последней пустую раскладку.
+    /// </summary>
+    public Task PersistLayoutAndFreezeAsync(CancellationToken cancellationToken) =>
+        _layoutRecorder.FlushAndFreezeAsync(cancellationToken);
 
     /// <summary>Добавляет проект: выбор папки, затем диалог настроек (раздел 6.5 ТЗ).</summary>
     public async Task AddProjectAsync(CancellationToken cancellationToken)
@@ -238,15 +274,39 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// Каталог проекта исчез — запуск заблокирован, строка помечена недоступной (раздел 8 ТЗ).
     /// </summary>
     /// <returns>Открытая вкладка либо <c>null</c>, если запуск не состоялся.</returns>
-    public async Task<TabViewModel?> OpenSessionAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    public Task<TabViewModel?> OpenSessionAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(row);
+        return OpenTabAsync(row, new SessionLaunch.NewSession(), shortTitle: null, reportFailures: true, cancellationToken);
+    }
 
+    /// <summary>
+    /// Общий путь открытия вкладки: и для новой сессии, и для восстановления раскладки.
+    /// </summary>
+    /// <param name="row">Проект вкладки.</param>
+    /// <param name="launch">Режим запуска <c>claude</c>.</param>
+    /// <param name="shortTitle">Короткое имя, известное заранее (из раскладки); <c>null</c> — «новая сессия».</param>
+    /// <param name="reportFailures">
+    /// Показывать ли сбой пользователю. Восстановление молчит: вкладка недоступного проекта
+    /// просто пропускается, а не встречает пользователя пачкой диалогов на старте.
+    /// </param>
+    /// <param name="cancellationToken">Токен отмены.</param>
+    private async Task<TabViewModel?> OpenTabAsync(
+        ProjectRowViewModel row,
+        SessionLaunch launch,
+        string? shortTitle,
+        bool reportFailures,
+        CancellationToken cancellationToken)
+    {
         if (!await Projects.RefreshAvailabilityAsync(row, cancellationToken).ConfigureAwait(true))
         {
-            _prompt.ShowError(
-                "Каталог недоступен",
-                $"Каталог проекта «{row.Name}» недоступен: {row.Path}");
+            if (reportFailures)
+            {
+                _prompt.ShowError(
+                    "Каталог недоступен",
+                    $"Каталог проекта «{row.Name}» недоступен: {row.Path}");
+            }
+
             RefreshCurrentProject();
             return null;
         }
@@ -259,7 +319,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         try
         {
             terminalId = await _workspace
-                .OpenAsync(row.Project, new SessionLaunch.NewSession(), cancellationToken)
+                .OpenAsync(row.Project, launch, cancellationToken)
                 .ConfigureAwait(true);
         }
         catch (ShellNotFoundException exception)
@@ -268,11 +328,27 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             // Псевдоконсоль поднимается уже после возврата из OpenAsync, и её сбой
             // прилетает событием TerminalExited с ненулевым кодом — вкладка к тому моменту
             // уже в полосе и просто перестаёт считаться живой.
-            _prompt.ShowError("Не удалось открыть сессию", exception.Message);
+            if (reportFailures)
+            {
+                _prompt.ShowError("Не удалось открыть сессию", exception.Message);
+            }
+
             return null;
         }
 
-        var tab = new TabViewModel(terminalId, row.Id, row.Name, workingDirectory);
+        var tab = new TabViewModel(terminalId, row.Id, row.Name, workingDirectory)
+        {
+            // Сессия известна с запуска: до прихода SessionStart раскладка иначе записала бы
+            // вкладке sessionId: null, и следующий запуск поднял бы её новой сессией.
+            SessionId = launch is SessionLaunch.ResumeSession resume ? resume.SessionId : null,
+        };
+
+        // Имя из раскладки ставится сразу, чтобы вкладка не висела «новой сессией», пока
+        // координатор не вычитает заголовок из транскрипта.
+        if (!string.IsNullOrWhiteSpace(shortTitle))
+        {
+            tab.ShortTitle = shortTitle;
+        }
 
         // Проект выбирается до добавления вкладки: иначе новая вкладка легла бы в полосу
         // чужого проекта и тут же из неё исчезла.
@@ -603,8 +679,15 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         }
 
         _disposed = true;
+
+        // Первым делом: гашение ниже шлёт выход оболочек, и раскладка не должна его записать.
+        // Окно замораживает запись ещё раньше (PersistLayoutAndFreezeAsync); это страховка
+        // на случай освобождения мимо окна.
+        _layoutRecorder.Freeze();
+
         _workspace.TerminalExited -= OnTerminalExited;
         Tabs.PropertyChanged -= OnTabsPropertyChanged;
+        ((INotifyCollectionChanged)Tabs.Tabs).CollectionChanged -= OnVisibleTabsChanged;
         Projects.Dispose();
 
         // Координатор снимается раньше набора вкладок: он подписан на его TerminalExited.
@@ -629,7 +712,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     {
         if (!string.IsNullOrWhiteSpace(shortTitle) && Tabs.Find(terminalId) is { } tab)
         {
-            tab.ShortTitle = shortTitle;
+            SetShortTitle(tab, shortTitle);
         }
     }
 
@@ -638,7 +721,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     {
         if (Tabs.Find(terminalId) is { } tab)
         {
-            tab.ShortTitle = TabViewModel.NewSessionTitle;
+            SetShortTitle(tab, TabViewModel.NewSessionTitle);
         }
     }
 
@@ -668,9 +751,14 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(sessionId))
+        // Метод зовётся на каждом хуке главного агента с теми же значениями, поэтому раскладка
+        // дёргается только на настоящей смене сессии или её конца, а не на каждом шаге работы.
+        var layoutChanged = false;
+
+        if (!string.IsNullOrWhiteSpace(sessionId) && tab.SessionId != sessionId)
         {
             tab.SessionId = sessionId;
+            layoutChanged = true;
         }
 
         if (!string.IsNullOrWhiteSpace(currentDirectory))
@@ -678,10 +766,136 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             tab.CurrentDirectory = currentDirectory;
         }
 
-        if (sessionEnded is { } ended)
+        if (sessionEnded is { } ended && tab.SessionEnded != ended)
         {
             tab.SessionEnded = ended;
+            layoutChanged = true;
         }
+
+        if (layoutChanged)
+        {
+            _layoutRecorder.Signal();
+        }
+    }
+
+    private void SetShortTitle(TabViewModel tab, string shortTitle)
+    {
+        if (tab.ShortTitle != shortTitle)
+        {
+            tab.ShortTitle = shortTitle;
+            _layoutRecorder.Signal();
+        }
+    }
+
+    /// <summary>
+    /// Поднимает вкладки сохранённой раскладки: последовательно, в сохранённом порядке, затем
+    /// активные вкладки проектов и активный проект. Проекта больше нет или его каталог
+    /// недоступен — вкладка пропускается молча.
+    /// </summary>
+    private async Task RestoreLayoutAsync(WorkspaceLayout layout, CancellationToken cancellationToken)
+    {
+        var chosen = new List<TabViewModel>(layout.Projects.Count);
+
+        foreach (var project in layout.Projects)
+        {
+            var row = Projects.Rows.FirstOrDefault(candidate => candidate.Id == project.ProjectId);
+            if (row is null)
+            {
+                continue;
+            }
+
+            TabViewModel? first = null;
+            TabViewModel? active = null;
+
+            for (var index = 0; index < project.Tabs.Count; index++)
+            {
+                var saved = project.Tabs[index];
+                SessionLaunch launch = saved.SessionId is { } sessionId
+                    ? new SessionLaunch.ResumeSession(sessionId)
+                    : new SessionLaunch.NewSession();
+
+                var tab = await OpenTabAsync(row, launch, saved.ShortTitle, reportFailures: false, cancellationToken)
+                    .ConfigureAwait(true);
+                if (tab is null)
+                {
+                    continue;
+                }
+
+                first ??= tab;
+
+                // Индекс активной — позиция в сохранённом списке, а не среди поднятых.
+                if (index == project.ActiveTabIndex)
+                {
+                    active = tab;
+                }
+            }
+
+            if ((active ?? first) is { } remembered)
+            {
+                chosen.Add(remembered);
+            }
+        }
+
+        // Запоминание активной вкладки каждого проекта: возврат к проекту приведёт на неё.
+        foreach (var tab in chosen)
+        {
+            Tabs.SetActive(tab);
+        }
+
+        var target = Projects.Rows.FirstOrDefault(row => row.Id == layout.ActiveProjectId)
+            ?? (chosen.Count > 0 ? Projects.Rows.FirstOrDefault(row => row.Id == chosen[0].ProjectId) : null);
+        if (target is null)
+        {
+            return;
+        }
+
+        SelectProject(target);
+
+        // Показ именно принудительный, а не через ActivateTabAsync: последней на странице
+        // показана последняя поднятая вкладка, а полоса уже может считать нужную активной —
+        // и ActivateTabAsync тогда не сказал бы странице ничего.
+        if (Tabs.ActiveTabFor(target.Id) is { } visible)
+        {
+            await _workspace.ActivateAsync(visible.TerminalId, cancellationToken).ConfigureAwait(true);
+            Tabs.SetActive(visible);
+        }
+        else
+        {
+            Tabs.SetActive(null);
+        }
+
+        RefreshProjectRows();
+    }
+
+    /// <summary>
+    /// Снимок раскладки для записи. Живость считается здесь, в момент записи: в раскладку идут
+    /// только вкладки, у которых работает оболочка и сессия не закончилась.
+    /// </summary>
+    private WorkspaceLayout CaptureLayout()
+    {
+        var projects = new List<ProjectLayout>();
+
+        foreach (var row in Projects.Rows)
+        {
+            var live = Tabs.AllTabs
+                .Where(tab => tab.ProjectId == row.Id && tab.IsRunning && !tab.SessionEnded)
+                .ToList();
+            if (live.Count == 0)
+            {
+                continue;
+            }
+
+            var activeIndex = Tabs.ActiveTabFor(row.Id) is { } active ? live.IndexOf(active) : 0;
+
+            projects.Add(new ProjectLayout(
+                row.Id,
+                Math.Max(activeIndex, 0),
+                [.. live.Select(static tab => new TabLayout(
+                    tab.SessionId,
+                    tab.ShortTitle == TabViewModel.NewSessionTitle ? null : tab.ShortTitle))]));
+        }
+
+        return new WorkspaceLayout(ActiveProjectRow?.Id, projects);
     }
 
     // Строка, к которой относится команда: явно переданная либо выбранная. Кнопка настроек
@@ -709,6 +923,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
             row.MarkerState = Tabs.MarkerStateFor(row.Id);
         }
 
+        // Состав вкладок изменился — в том числе у невыбранного проекта, чьё закрытие
+        // видимую полосу не трогает.
+        _layoutRecorder.Signal();
         RefreshCurrentProject();
     }
 
@@ -732,6 +949,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     {
         Projects.Select(row);
         Tabs.ShowProject(row?.Id);
+        _layoutRecorder.Signal();
         RefreshCurrentProject();
     }
 
@@ -759,6 +977,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 // Пометка о коде выхода (раздел 8 ТЗ): код приходит вместе с событием,
                 // разбирать ради него вывод вкладки не нужно и запрещено.
                 tab.MarkExited(e.ExitCode);
+
+                // Вкладка с умершей оболочкой из раскладки выпадает.
+                _layoutRecorder.Signal();
 
                 // Процесс умер без жеста пользователя, поэтому сам реквери не придёт, а кнопка
                 // «перезапустить» появилась бы на вкладке выключенной. Это та самая проверка
@@ -790,7 +1011,16 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         {
             RefreshMarkerStates();
         }
+
+        if (e.PropertyName is nameof(TabStripViewModel.ActiveTab))
+        {
+            _layoutRecorder.Signal();
+        }
     }
+
+    // Добавление, закрытие, перестановка мышью и смена проекта в видимой полосе.
+    private void OnVisibleTabsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        _layoutRecorder.Signal();
 
     private void ReportError(Exception exception) =>
         _prompt.ShowError("Ошибка", exception.Message);

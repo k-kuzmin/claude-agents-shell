@@ -11,6 +11,9 @@ public sealed class AppDataPaths : IAppDataPaths
     /// <summary>Имя файла со списком проектов (раздел 4.1 ТЗ).</summary>
     public const string ProjectsFileName = "projects.json";
 
+    /// <summary>Имя файла раскладки окна (issue #4).</summary>
+    public const string LayoutFileName = "layout.json";
+
     private readonly string _appData;
     private volatile bool _created;
 
@@ -42,6 +45,9 @@ public sealed class AppDataPaths : IAppDataPaths
 
     /// <inheritdoc />
     public string ProjectsFile => Path.Combine(AppData, ProjectsFileName);
+
+    /// <inheritdoc />
+    public string LayoutFile => Path.Combine(AppData, LayoutFileName);
 
     /// <summary>
     /// Каталог транскриптов Claude Code. Геттер сознательно ничего не создаёт: раздел 7
