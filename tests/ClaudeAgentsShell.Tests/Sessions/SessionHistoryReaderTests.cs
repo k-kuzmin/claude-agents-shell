@@ -454,6 +454,142 @@ public sealed class SessionHistoryReaderTests
         Assert.Equal("новое начало", Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
     }
 
+    [Theory]
+    [InlineData(20 * 1024)]
+    [InlineData(100 * 1024)]
+    public async Task Строка_длиннее_буфера_чтения_не_мешает_заголовку_после_неё(int length)
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteTranscript(temp, SessionId,
+            Assistant(new string('a', length)),
+            """{"type":"user","message":{"role":"user","content":"после длинной строки"}}""");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("после длинной строки", summary?.Title);
+    }
+
+    [Fact]
+    public async Task Длинная_строка_с_заголовком_читается_целиком()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var question = "вопрос " + new string('б', 30 * 1024);
+        WriteTranscript(temp, SessionId,
+            Assistant("до"),
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"" + question + "\"}}");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        // Парсер может укоротить заголовок, но начало обязано совпасть и не быть испорченным.
+        Assert.NotNull(summary?.Title);
+        Assert.StartsWith("вопрос ббб", summary.Title);
+        Assert.DoesNotContain('�', summary.Title);
+    }
+
+    [Fact]
+    public async Task Кириллица_поперёк_границы_буфера_не_портится()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+
+        // Буфер чтения — 16384 байта. Первая строка подобрана так, чтобы граница пришлась ровно
+        // на середину двухбайтовой «Ж» в заголовке второй строки.
+        const int boundary = 16 * 1024;
+        const string titlePrefix = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"";
+        var fillerTemplate = Assistant(string.Empty);
+        var fillerLength = boundary - 1 - Encoding.UTF8.GetByteCount(titlePrefix) - 1;
+        var filler = Assistant(new string('a', fillerLength - Encoding.UTF8.GetByteCount(fillerTemplate)));
+        var path = WriteTranscript(temp, SessionId, filler, titlePrefix + "Жук на границе\"}}");
+
+        var bytes = File.ReadAllBytes(path);
+        Assert.Equal(0xD0, bytes[boundary - 1]);
+        Assert.Equal(0x96, bytes[boundary]);
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("Жук на границе", summary?.Title);
+    }
+
+    [Fact]
+    public async Task Метка_порядка_байтов_в_начале_не_мешает_разбору()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var path = WriteTranscript(temp, SessionId);
+        File.WriteAllText(
+            path,
+            """{"type":"user","message":{"role":"user","content":"с меткой"}}""" + "\n",
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+        Assert.Equal(0xEF, File.ReadAllBytes(path)[0]);
+        Assert.Equal("с меткой", (await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None))?.Title);
+    }
+
+    [Fact]
+    public async Task Переводы_строк_windows_разбираются()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var path = WriteTranscript(temp, SessionId);
+        File.WriteAllText(
+            path,
+            Assistant("до") + "\r\n" + """{"type":"user","gitBranch":"main","message":{"role":"user","content":"виндовый"}}""" + "\r\n",
+            new UTF8Encoding(false));
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("виндовый", summary?.Title);
+        Assert.Equal("main", summary?.Branch);
+    }
+
+    [Fact]
+    public async Task Незаконченная_строка_после_дозаписи_читается_целиком()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var path = WriteTranscript(temp, SessionId);
+        File.WriteAllText(
+            path,
+            Filler + "\n" + """{"type":"user","message":{"role":"user","content":"нач""",
+            new UTF8Encoding(false));
+
+        // Строка ещё пишется — разобрать её нельзя, но и в просмотренное она не засчитана.
+        Assert.Null((await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None))?.Title);
+
+        var modified = File.GetLastWriteTimeUtc(path);
+        File.AppendAllText(path, "ало\"}}\n", new UTF8Encoding(false));
+        File.SetLastWriteTimeUtc(path, modified.AddSeconds(1));
+
+        Assert.Equal("начало", (await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None))?.Title);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Время_изменения_назад_сканирует_с_нуля(bool grow)
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var stamp = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+        var path = WriteTranscript(temp, SessionId, Filler, Assistant("без заголовка"));
+        File.SetLastWriteTimeUtc(path, stamp);
+
+        Assert.Null((await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None))?.Title);
+
+        // Подмена начала видна только при скане с нуля: продолжение с позиции её бы пропустило.
+        OverwriteHead(path, "другой файл");
+        if (grow)
+        {
+            File.AppendAllText(path, Assistant("ещё") + "\n", new UTF8Encoding(false));
+        }
+
+        File.SetLastWriteTimeUtc(path, stamp.AddHours(-1));
+
+        Assert.Equal("другой файл", (await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None))?.Title);
+    }
+
     private static string Assistant(string text) =>
         "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"" + text + "\"}}";
 
