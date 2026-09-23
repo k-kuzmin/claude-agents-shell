@@ -13,6 +13,12 @@ public interface ISessionHistoryReader
     /// Сводки по сессиям рабочего каталога, от свежих к старым.
     /// Каталога нет — пустой список, это не ошибка.
     /// </summary>
+    /// <remarks>
+    /// Только сессии, которые человек вёл в терминале: вспомогательные — файлы <c>agent-*.jsonl</c>,
+    /// запуски через SDK и <c>claude -p</c> (<c>entrypoint: sdk-*</c>), первое <c>isSidechain: true</c> —
+    /// в список не входят. Признак не удалось прочитать — сессия остаётся. <see cref="ReadOneAsync"/>
+    /// так не фильтрует: хук приходит по уже известной сессии.
+    /// </remarks>
     Task<IReadOnlyList<SessionSummary>> ReadAsync(string workingDirectory, CancellationToken cancellationToken);
 
     /// <summary>
