@@ -54,6 +54,7 @@ internal static class AppComposition
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
         services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
         services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
+        services.AddSingleton<ISessionHistoryDialog, SessionHistoryWindowDialog>();
         services.AddSingleton<IAppVersion>(static _ => new AssemblyAppVersion(typeof(AppComposition).Assembly));
 
         // Глобальные обработчики исключений; ICrashLog регистрирует слой Sessions.
