@@ -220,6 +220,31 @@ public sealed class GitDiffReaderTests
     }
 
     [Fact]
+    public async Task Файлы_под_названным_каталогом_сворачиваются_как_обычно_а_названные_точно_нет()
+    {
+        using var repository = CreateFeatureBranch();
+        var big = string.Join('\n', Enumerable.Range(0, 401)) + "\n";
+        repository.Write("папка/big.txt", big);
+        repository.Write("папка/package-lock.json", "{}\n");
+        repository.WriteBytes("папка/image.bin", [0, 1, 2]);
+        repository.Write("папка/small.cs", "ok\n");
+        repository.Write("named.txt", big);
+        repository.Write("other.cs", "x\n");
+
+        var index = await CreateReader().ListChangesAsync(
+            Request(repository.Root, null, false, @"папка\", "named.txt"),
+            CancellationToken.None);
+
+        var collapse = index.Files.ToDictionary(static f => f.Path, static f => f.Collapse);
+        Assert.Equal(5, collapse.Count);
+        Assert.Equal(DiffCollapseReason.LargeDiff, collapse["папка/big.txt"]);
+        Assert.Equal(DiffCollapseReason.Generated, collapse["папка/package-lock.json"]);
+        Assert.Equal(DiffCollapseReason.Binary, collapse["папка/image.bin"]);
+        Assert.Equal(DiffCollapseReason.None, collapse["папка/small.cs"]);
+        Assert.Equal(DiffCollapseReason.None, collapse["named.txt"]);
+    }
+
+    [Fact]
     public async Task Неотслеживаемые_бинарный_и_сверх_потолка()
     {
         using var repository = CreateFeatureBranch();

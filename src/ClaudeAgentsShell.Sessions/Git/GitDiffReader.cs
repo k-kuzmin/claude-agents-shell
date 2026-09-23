@@ -143,11 +143,14 @@ public sealed class GitDiffReader : IGitDiffReader
         var all = tracked.Concat(untracked.Where(entry => seen.Add(entry.Path))).ToList();
         var attributes = await ReadAttributesAsync(root, all, cancellationToken).ConfigureAwait(false);
 
+        // Не сворачиваются только файлы, названные точно; попавшие под названный каталог
+        // сворачиваются как обычно и раскрываются страницей в пределах бюджета.
+        var named = new HashSet<string>(requested, StringComparer.Ordinal);
         var files = new List<DiffFileEntry>(all.Count);
         foreach (var entry in all)
         {
             attributes.TryGetValue(entry.Path, out var pathAttributes);
-            var collapse = _policy.Classify(entry, pathAttributes, requested.Count > 0);
+            var collapse = _policy.Classify(entry, pathAttributes, named.Contains(entry.Path));
             files.Add(entry with { Collapse = collapse });
         }
 
