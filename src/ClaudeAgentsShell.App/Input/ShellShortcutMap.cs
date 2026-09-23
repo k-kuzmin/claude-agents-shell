@@ -56,6 +56,11 @@ public static class ShellShortcutMap
                 shortcut = ShellShortcut.CloseTab;
                 return true;
 
+            // Только с Shift: голый Ctrl+D — конец ввода для оболочки и claude.
+            case Key.D when shift:
+                shortcut = ShellShortcut.ShowDiff;
+                return true;
+
             case Key.Tab:
                 shortcut = shift ? ShellShortcut.PreviousTab : ShellShortcut.NextTab;
                 return true;

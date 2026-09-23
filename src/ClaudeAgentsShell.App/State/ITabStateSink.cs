@@ -43,4 +43,16 @@ public interface ITabStateSink
     /// </remarks>
     /// <returns><c>false</c>, если вкладки уже нет.</returns>
     bool TryGetWorkingDirectory(TerminalId terminalId, out string workingDirectory);
+
+    /// <summary>
+    /// Обновляет сведения о сессии вкладки по хуку главного потока. <c>null</c> в аргументе
+    /// значит «хук поля не принёс» и прежнее значение не трогает. Неизвестная вкладка — ничего.
+    /// </summary>
+    /// <param name="terminalId">Вкладка.</param>
+    /// <param name="sessionId">Идентификатор сессии из хука.</param>
+    /// <param name="currentDirectory"><c>cwd</c> из хука.</param>
+    /// <param name="sessionEnded">
+    /// <c>true</c> — пришёл <c>SessionEnd</c>, <c>false</c> — <c>SessionStart</c>, <c>null</c> — прочие хуки.
+    /// </param>
+    void SetSessionContext(TerminalId terminalId, string? sessionId, string? currentDirectory, bool? sessionEnded);
 }

@@ -90,6 +90,12 @@ internal sealed class FakeFolderPicker : IFolderPicker
     public string? PickFolder(string title) => NextFolder;
 }
 
+/// <summary>Версия приложения: строку задаёт тест.</summary>
+internal sealed class FakeAppVersion(string informationalVersion) : IAppVersion
+{
+    public string InformationalVersion { get; } = informationalVersion;
+}
+
 /// <summary>Диалог настроек проекта: правку задаёт тест, показанное запоминается.</summary>
 internal sealed class FakeProjectSettingsDialog : IProjectSettingsDialog
 {
@@ -315,6 +321,8 @@ internal sealed class FakeHookListener : IHookListener
 
     public Uri Endpoint { get; } = new("http://127.0.0.1:52100/hook/");
 
+    public Uri McpEndpoint { get; } = new("http://127.0.0.1:52100/mcp");
+
     /// <summary>Приёмник был поднят.</summary>
     public bool Started { get; private set; }
 
@@ -462,6 +470,12 @@ internal sealed class FakeTabStateSink : ITabStateSink
         workingDirectory = string.Empty;
         return false;
     }
+
+    /// <summary>Все вызовы <see cref="SetSessionContext"/> по порядку.</summary>
+    public List<(TerminalId Terminal, string? SessionId, string? CurrentDirectory, bool? SessionEnded)> SessionContextLog { get; } = [];
+
+    public void SetSessionContext(TerminalId terminalId, string? sessionId, string? currentDirectory, bool? sessionEnded) =>
+        SessionContextLog.Add((terminalId, sessionId, currentDirectory, sessionEnded));
 }
 
 /// <summary>

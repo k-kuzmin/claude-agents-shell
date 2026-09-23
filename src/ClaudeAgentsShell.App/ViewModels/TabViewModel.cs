@@ -72,6 +72,48 @@ public sealed class TabViewModel : ObservableObject
     /// </summary>
     public string WorkingDirectory { get; }
 
+    private string? _sessionId;
+    private string? _currentDirectory;
+    private bool _sessionEnded;
+    private bool _hasPendingDiff;
+
+    /// <summary>
+    /// Сессия Claude Code вкладки: из режима запуска (<c>--resume</c>), затем из хуков.
+    /// Уходит в <c>layout.json</c>, чтобы поднять вкладку при следующем запуске (issue #4).
+    /// </summary>
+    public string? SessionId
+    {
+        get => _sessionId;
+        set => SetProperty(ref _sessionId, value);
+    }
+
+    /// <summary>
+    /// Текущий каталог главного агента — последний <c>cwd</c> из его хуков (хуки сабагентов
+    /// не в счёт). <c>null</c>, пока хуков не было; тогда diff считается от <see cref="WorkingDirectory"/>.
+    /// </summary>
+    public string? CurrentDirectory
+    {
+        get => _currentDirectory;
+        set => SetProperty(ref _currentDirectory, value);
+    }
+
+    /// <summary>
+    /// Последним событием жизненного цикла сессии был <c>SessionEnd</c>: <c>claude</c> вышел,
+    /// осталась оболочка. Такая вкладка в раскладку не попадает.
+    /// </summary>
+    public bool SessionEnded
+    {
+        get => _sessionEnded;
+        set => SetProperty(ref _sessionEnded, value);
+    }
+
+    /// <summary>Агент открыл diff, пока вкладка была в фоне; снимается при переходе во вкладку.</summary>
+    public bool HasPendingDiff
+    {
+        get => _hasPendingDiff;
+        set => SetProperty(ref _hasPendingDiff, value);
+    }
+
     /// <summary>
     /// Короткое имя сессии. До первого сообщения пользователя — «новая сессия»; дальше его
     /// выставляет координатор состояний, вычитав первое сообщение из транскрипта.

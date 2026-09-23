@@ -1,5 +1,7 @@
 ﻿using System.ComponentModel;
+using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
@@ -33,7 +35,10 @@ public sealed class ShellViewModelTests
             var list = new ProjectListViewModel(
                 Store, BranchReader, Watcher, Probe, Picker, Dialog, Prompt, Launcher, new InlineUiDispatcher());
             var sessionState = new SessionStateCoordinator(Hooks, Workspace, History, new InlineUiDispatcher());
-            Shell = new ShellViewModel(Workspace, list, Prompt, new InlineUiDispatcher(), sessionState);
+            var layouts = new FakeLayoutStore();
+            Shell = new ShellViewModel(
+                Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts.CreateService(),
+                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("1.2.3+abc"));
         }
 
         public FakeProjectStore Store { get; } = new();
@@ -56,6 +61,8 @@ public sealed class ShellViewModelTests
 
         public FakeUserPrompt Prompt { get; } = new();
 
+        public ShellDiffParts Diff { get; } = new();
+
         public FakeTerminalWorkspace Workspace { get; } = new();
 
         public ShellViewModel Shell { get; }
@@ -70,6 +77,15 @@ public sealed class ShellViewModelTests
         var harness = new Harness(projects);
         await harness.InitializeAsync();
         return harness;
+    }
+
+    [Fact]
+    public void Version_label_is_built_from_the_version_port()
+    {
+        var harness = new Harness();
+
+        Assert.Equal("v1.2.3", harness.Shell.Version.Label);
+        Assert.Equal("Версия 1.2.3+abc", harness.Shell.Version.ToolTip);
     }
 
     [Fact]
@@ -1543,5 +1559,99 @@ public sealed class ShellViewModelTests
         // Вкладок не осталось — светиться нечему, и точка в разметке всё равно скрыта.
         Assert.Equal(TabState.Unknown, row.MarkerState);
         Assert.False(row.HasSessions);
+    }
+
+    private static List<TerminalId> RecordClosedTabs(ShellViewModel shell)
+    {
+        var closed = new List<TerminalId>();
+        ((IDiffTabs)shell).TabClosed += (_, e) => closed.Add(e.TerminalId);
+        return closed;
+    }
+
+    [Fact]
+    public async Task Closing_a_tab_tells_the_diff_panel_which_tab_is_gone()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var closed = RecordClosedTabs(harness.Shell);
+        var first = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(first!.TerminalId, 0);
+
+        await harness.Shell.CloseTabAsync(first, CancellationToken.None);
+
+        Assert.Equal([first.TerminalId], closed);
+        Assert.Null(((IDiffTabs)harness.Shell).Find(first.TerminalId));
+    }
+
+    [Fact]
+    public async Task Refused_close_keeps_the_diff_panel_of_the_tab()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var closed = RecordClosedTabs(harness.Shell);
+        var tab = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Prompt.ConfirmResult = false;
+
+        await harness.Shell.CloseTabAsync(tab!, CancellationToken.None);
+
+        Assert.Empty(closed);
+    }
+
+    [Fact]
+    public async Task Removing_a_project_reports_every_one_of_its_tabs_as_closed()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var closed = RecordClosedTabs(harness.Shell);
+        var first = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var foreign = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+
+        await harness.Shell.RemoveProjectAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.Equal([first!.TerminalId, second!.TerminalId], closed);
+        Assert.Same(foreign, ((IDiffTabs)harness.Shell).Find(foreign!.TerminalId));
+    }
+
+    [Fact]
+    public async Task Restart_keeps_the_dead_tab_and_its_diff_panel()
+    {
+        // Перезапуск открывает соседнюю вкладку, а мёртвая остаётся: закрывать её панель рано.
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var closed = RecordClosedTabs(harness.Shell);
+        var dead = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        harness.Workspace.RaiseExited(dead!.TerminalId, exitCode: 1);
+
+        await harness.Shell.RestartTabAsync(dead, CancellationToken.None);
+
+        Assert.Empty(closed);
+        Assert.Same(dead, ((IDiffTabs)harness.Shell).Find(dead.TerminalId));
+    }
+
+    [Fact]
+    public async Task Diff_button_activates_the_tab_and_opens_its_panel()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0));
+        var first = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.True(harness.Shell.ShowDiffCommand.CanExecute(first));
+        await harness.Shell.ShowDiffAsync(first!, CancellationToken.None);
+
+        Assert.Same(first, harness.Shell.Tabs.ActiveTab);
+        var index = Assert.Single(harness.Diff.View.CallsOf("index"));
+        Assert.Equal(first!.TerminalId, index.TerminalId);
+        Assert.Equal([PathA], harness.Diff.Git.Requests.Select(request => request.Directory));
+    }
+
+    [Fact]
+    public async Task Diff_starts_listening_to_the_page_on_initialization_and_stops_on_dispose()
+    {
+        var harness = new Harness(Project("alpha", PathA, 0));
+        Assert.False(harness.Diff.View.HasSubscribers);
+
+        await harness.InitializeAsync();
+        Assert.True(harness.Diff.View.HasSubscribers);
+
+        await harness.Shell.DisposeAsync();
+        Assert.False(harness.Diff.View.HasSubscribers);
     }
 }

@@ -102,6 +102,42 @@
                                                        Visibility="{Binding HasExited, Converter={StaticResource BoolToVisibility}}"
                                                        ToolTip="Процесс сессии завершился" />
 
+                                            <!-- Кнопка diff (issue #5): то же, что Ctrl+Shift+D, но для этой вкладки —
+                                                 она становится активной, и поверх её терминала открывается панель.
+                                                 Точка в углу — агент открыл diff, пока вкладка была в фоне
+                                                 (HasPendingDiff); снимается при переходе во вкладку. Кнопка, как
+                                                 и крестик, не становится ручкой перетаскивания: DraggableTabAt
+                                                 отказывается тащить вкладку, если под указателем ButtonBase. -->
+                                            <Button x:Name="DiffButton"
+                                                    Width="20" Height="20"
+                                                    Style="{StaticResource FlatButtonStyle}"
+                                                    Foreground="{StaticResource DisabledTextBrush}"
+                                                    Command="{Binding DataContext.ShowDiffCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Показать diff (Ctrl+Shift+D)"
+                                                    AutomationProperties.Name="Показать diff">
+                                                <Grid Width="12" Height="12">
+                                                    <!-- Координаты заданы во всей сетке 12×12, без выравнивания по
+                                                         центру: Path без Stretch меряется от нуля до края фигуры,
+                                                         и Center сдвигал бы знак влево-вверх. -->
+                                                    <Path Style="{StaticResource IconPathStyle}"
+                                                          StrokeThickness="1.4"
+                                                          Stroke="{StaticResource DiffAddedBrush}"
+                                                          Data="M6,1 L6,7 M3,4 L9,4" />
+                                                    <Path Style="{StaticResource IconPathStyle}"
+                                                          StrokeThickness="1.4"
+                                                          Stroke="{StaticResource DiffRemovedBrush}"
+                                                          Data="M3,10.5 L9,10.5" />
+                                                    <Ellipse x:Name="PendingDiffDot"
+                                                             Width="5" Height="5"
+                                                             HorizontalAlignment="Right"
+                                                             VerticalAlignment="Top"
+                                                             Margin="0,-1,-2,0"
+                                                             Fill="{StaticResource AccentBrush}"
+                                                             Visibility="{Binding HasPendingDiff, Converter={StaticResource BoolToVisibility}}" />
+                                                </Grid>
+                                            </Button>
+
                                             <!-- Перезапуск — это новая сессия в том же проекте соседней вкладкой:
                                                  на мёртвой вкладке остаётся её вывод, ради которого она и живёт
                                                  после выхода процесса. Кнопка не становится ручкой перетаскивания

@@ -243,6 +243,19 @@ public sealed class SessionStateCoordinator : IDisposable
             ResetTitleIfSessionChanged(sink, terminalId, hookEvent);
         }
 
+        // Хуки сабагента несут cwd его собственного worktree: взять их — значит показать diff
+        // той копии, что отчиталась последней, а не той, где работает главный агент.
+        if (hookEvent.AgentId is null)
+        {
+            bool? sessionEnded = hookEvent.Kind switch
+            {
+                HookKind.SessionStart => false,
+                HookKind.SessionEnd => true,
+                _ => null,
+            };
+            sink.SetSessionContext(terminalId, hookEvent.SessionId, hookEvent.WorkingDirectory, sessionEnded);
+        }
+
         if (!_activity.TryGetValue(terminalId, out var activity))
         {
             activity = new TabActivity();

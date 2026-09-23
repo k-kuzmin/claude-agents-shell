@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeAgentsShell.Application.Ports;
+using ClaudeAgentsShell.Sessions.Mcp;
 
 namespace ClaudeAgentsShell.Sessions.Hooks;
 
@@ -28,8 +29,6 @@ public sealed class HookSettingsProvider : IHookSettingsProvider
 
     /// <summary>Имя командного файла, который вызывается из каждого хука.</summary>
     public const string ScriptFileName = "hook-send.cmd";
-
-    private const string TempSuffix = ".tmp";
 
     private const string NoProxyVariableName = "NO_PROXY";
     private const string LoopbackHosts = "127.0.0.1,localhost";
@@ -95,8 +94,8 @@ public sealed class HookSettingsProvider : IHookSettingsProvider
 
         // Оба файла пишутся через временный: сессия могла открыть прежний по --settings,
         // и надорванный файл хуже устаревшего.
-        await WriteAtomicAsync(script, BuildScript(endpoint), cancellationToken).ConfigureAwait(false);
-        await WriteAtomicAsync(settings, BuildSettings(script, endpoint), cancellationToken).ConfigureAwait(false);
+        await AtomicTextFile.WriteAsync(script, BuildScript(endpoint), cancellationToken).ConfigureAwait(false);
+        await AtomicTextFile.WriteAsync(settings, BuildSettings(script, endpoint), cancellationToken).ConfigureAwait(false);
 
         return settings;
     }
@@ -184,22 +183,30 @@ public sealed class HookSettingsProvider : IHookSettingsProvider
                 ["PostToolBatch"] = [http],
                 ["PermissionRequest"] = [http],
             },
+
+            // Инструмент show_diff разрешён заранее (issue #5): он только открывает панель
+            // приложения и ничего не меняет, а вопрос о разрешении на каждый вызов прерывал бы
+            // агента. Правило живёт здесь, а не в проекте пользователя, и действует только
+            // на сессии, запущенные приложением.
+            Permissions = new PermissionsDto { Allow = [McpProtocol.ShowDiffPermissionRule] },
         };
 
         return JsonSerializer.Serialize(document, SerializerOptions);
-    }
-
-    private static async Task WriteAtomicAsync(string path, string content, CancellationToken cancellationToken)
-    {
-        var temporary = path + TempSuffix;
-        await File.WriteAllTextAsync(temporary, content, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
-        File.Move(temporary, path, overwrite: true);
     }
 
     private sealed class HookSettingsDto
     {
         [JsonPropertyName("hooks")]
         public Dictionary<string, List<HookMatcherDto>> Hooks { get; set; } = new(StringComparer.Ordinal);
+
+        [JsonPropertyName("permissions")]
+        public PermissionsDto? Permissions { get; set; }
+    }
+
+    private sealed class PermissionsDto
+    {
+        [JsonPropertyName("allow")]
+        public List<string> Allow { get; set; } = [];
     }
 
     private sealed class HookMatcherDto

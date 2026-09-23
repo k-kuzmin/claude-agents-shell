@@ -1,3 +1,4 @@
+using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.State;
@@ -44,6 +45,7 @@ internal static class AppComposition
         // Мост — единственное место, где приложение знает про WebView2.
         services.AddSingleton<WebView2TerminalBridge>();
         services.AddSingleton<ITerminalBridge>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
+        services.AddSingleton<IDiffView>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
 
         // Порты уровня оболочки: всё, что ViewModel нужно от WPF и файловой системы.
         // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.
@@ -52,6 +54,7 @@ internal static class AppComposition
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
         services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
         services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
+        services.AddSingleton<IAppVersion>(static _ => new AssemblyAppVersion(typeof(AppComposition).Assembly));
 
         // Глобальные обработчики исключений; ICrashLog регистрирует слой Sessions.
         // Признак гашения общий на приложение: его взводит окно, а читает докладчик о сбоях.
@@ -65,6 +68,18 @@ internal static class AppComposition
 
         // Единственный источник состояния вкладок — хуки Claude Code (раздел 5.3 ТЗ).
         services.AddSingleton<SessionStateCoordinator>();
+
+        // Раскладка окна пишется по изменениям вкладок (issue #4).
+        services.AddSingleton<LayoutRecorder>();
+        services.AddSingleton<WorkspaceLayoutService>();
+
+        // Diff вкладок (issue #5). Координатор — одновременно обработчик show_diff (его получает
+        // инструмент MCP-маршрута приёмника хуков) и приёмник сигнала «устарело». Набор вкладок он получает в Start,
+        // а не из контейнера: иначе корневая ViewModel и координатор зависели бы друг от друга.
+        services.AddSingleton<DiffCoordinator>();
+        services.AddSingleton<IShowDiffHandler>(static sp => sp.GetRequiredService<DiffCoordinator>());
+        services.AddSingleton<IDiffChangeSink>(static sp => sp.GetRequiredService<DiffCoordinator>());
+        services.AddSingleton<DiffStaleTracker>();
 
         services.AddSingleton<ProjectListViewModel>();
         services.AddSingleton<ShellViewModel>();

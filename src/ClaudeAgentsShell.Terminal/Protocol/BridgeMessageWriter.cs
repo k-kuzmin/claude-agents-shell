@@ -11,7 +11,7 @@ namespace ClaudeAgentsShell.Terminal.Protocol;
 /// за одну аллокацию через <see cref="string.Create{TState}"/>, base64 пишется прямо в её буфер
 /// методом <see cref="Convert.TryToBase64Chars"/>. Ни промежуточных строк, ни сериализатора.
 /// </summary>
-public sealed class BridgeMessageWriter : IBridgeMessageWriter
+public sealed partial class BridgeMessageWriter : IBridgeMessageWriter
 {
     private const string OutHead = "{\"type\":\"out\",\"id\":\"";
     private const string OutSeq = "\",\"seq\":";

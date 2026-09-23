@@ -26,6 +26,28 @@ public sealed class HookSettingsProviderTests
         Assert.Equal([appData], Directory.GetDirectories(temp.Path));
     }
 
+    /// <summary>
+    /// Issue #5: <c>show_diff</c> разрешён заранее в сгенерированных настройках, а не в проекте
+    /// пользователя. Правило точное: иначе агент спрашивал бы разрешения на каждый вызов.
+    /// </summary>
+    [Fact]
+    public async Task Инструмент_show_diff_разрешён_заранее()
+    {
+        using var temp = new TempDirectory();
+        var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
+
+        var path = await provider.EnsureSettingsFileAsync(Endpoint, CancellationToken.None);
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, CancellationToken.None));
+
+        Assert.Equal(["hooks", "permissions"], PropertyNames(document.RootElement));
+
+        var permissions = document.RootElement.GetProperty("permissions");
+        Assert.Equal(["allow"], PropertyNames(permissions));
+        Assert.Equal(
+            ["mcp__agents-shell__show_diff"],
+            permissions.GetProperty("allow").EnumerateArray().Select(static e => e.GetString()));
+    }
+
     [Fact]
     public async Task Зарегистрирован_точный_набор_хуков_и_PreToolUse_среди_них_нет()
     {

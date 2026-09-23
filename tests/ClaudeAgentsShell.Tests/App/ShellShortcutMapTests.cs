@@ -19,6 +19,7 @@ public sealed class ShellShortcutMapTests
     [Theory]
     [InlineData(Key.T, ShellShortcut.NewSession)]
     [InlineData(Key.W, ShellShortcut.CloseTab)]
+    [InlineData(Key.D, ShellShortcut.ShowDiff)]
     public void Ctrl_shift_letters_are_window_commands(Key key, ShellShortcut expected)
     {
         var result = Map(key, ModifierKeys.Control | ModifierKeys.Shift);
@@ -30,11 +31,13 @@ public sealed class ShellShortcutMapTests
     [Theory]
     [InlineData(Key.T)]
     [InlineData(Key.W)]
+    [InlineData(Key.D)]
     [InlineData(Key.C)]
     [InlineData(Key.R)]
     public void Ctrl_letters_belong_to_the_shell(Key key)
     {
-        // Ctrl+T и Ctrl+W — transpose-chars и kill-word в readline: окно их не трогает.
+        // Ctrl+T и Ctrl+W — transpose-chars и kill-word в readline, Ctrl+D — конец ввода:
+        // окно их не трогает.
         var result = Map(key, ModifierKeys.Control);
 
         Assert.False(result.Handled);

@@ -45,6 +45,36 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
+    public async Task Хуки_главного_потока_передают_сессию_каталог_и_жизнь_сессии()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        harness.RaiseHook(HookKind.Stop, tab, workingDirectory: HookPath);
+        harness.RaiseHook(HookKind.SessionEnd, tab);
+
+        Assert.Equal(
+            [
+                (tab, (string?)SessionId, (string?)ProjectPath, (bool?)false),
+                (tab, SessionId, HookPath, null),
+                (tab, SessionId, ProjectPath, true),
+            ],
+            harness.Sink.SessionContextLog);
+    }
+
+    [Fact]
+    public async Task Хуки_сабагента_не_меняют_каталог_вкладки()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SubagentStart, tab, workingDirectory: HookPath, agentId: "a1");
+
+        Assert.Empty(harness.Sink.SessionContextLog);
+    }
+
+    [Fact]
     public async Task Stop_переводит_вкладку_в_ждёт_ввода()
     {
         using var harness = new Harness();

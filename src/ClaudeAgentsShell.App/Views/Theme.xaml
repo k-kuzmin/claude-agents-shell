@@ -36,6 +36,9 @@
          оранжевых знака читались бы как один. Приглушённый красный ни с чем не спорит.
          Нулевой код — штатный выход, ему хватает FaintTextBrush, своей кисти он не требует. -->
     <SolidColorBrush x:Key="ExitFailureBrush" Color="#C2564A" />
+    <!-- Знаки «+» и «−» на кнопке diff вкладки: добавленное и удалённое. -->
+    <SolidColorBrush x:Key="DiffAddedBrush" Color="#7FB069" />
+    <SolidColorBrush x:Key="DiffRemovedBrush" Color="#C2564A" />
 
     <FontFamily x:Key="UiFontFamily">IBM Plex Sans, Segoe UI</FontFamily>
     <FontFamily x:Key="MonoFontFamily">JetBrains Mono, Cascadia Mono, Consolas</FontFamily>

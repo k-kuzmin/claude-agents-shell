@@ -107,6 +107,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- шапка панели -->
@@ -295,5 +296,16 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
         </ScrollViewer>
+
+        <!-- версия приложения: вне прокрутки, левый край — по шапке панели;
+             полная версия с хэшем коммита — в подсказке -->
+        <TextBlock Grid.Row="2"
+                   Margin="14,6,12,12"
+                   HorizontalAlignment="Left"
+                   Text="{Binding Version.Label}"
+                   ToolTip="{Binding Version.ToolTip}"
+                   FontSize="10.5"
+                   FontFamily="{StaticResource MonoFontFamily}"
+                   Foreground="{StaticResource DisabledTextBrush}" />
     </Grid>
 </UserControl>
