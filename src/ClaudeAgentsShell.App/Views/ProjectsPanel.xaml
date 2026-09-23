@@ -149,6 +149,13 @@
                                  ViewModel через Tag строки, а строка — у её же DataContext. -->
                             <Border.ContextMenu>
                                 <ContextMenu Style="{StaticResource RowContextMenuStyle}">
+                                    <!-- Действие над сессиями проекта — первым, отдельной группой:
+                                         это то же, что «+» и «часы» на строке, а не обслуживание проекта. -->
+                                    <MenuItem Header="Продолжить последнюю сессию"
+                                              Style="{StaticResource RowMenuItemStyle}"
+                                              Command="{Binding PlacementTarget.Tag.ContinueLastSessionCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                    <Separator Style="{StaticResource RowMenuSeparatorStyle}" />
                                     <MenuItem Header="Открыть папку в проводнике"
                                               Style="{StaticResource RowMenuItemStyle}"
                                               Command="{Binding PlacementTarget.Tag.OpenProjectFolderCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
@@ -237,12 +244,12 @@
                                                   Data="M7.5,3 L7.5,12 M3,7.5 L12,7.5" />
                                         </Canvas>
                                     </Button>
-                                    <!-- Окно истории приезжает в M3: кнопка на месте, но отключена. -->
+                                    <!-- Окно истории сессий: переключает на открытую вкладку либо продолжает сессию. -->
                                     <Button Width="28" Height="28"
                                             Style="{StaticResource FlatButtonStyle}"
                                             Command="{Binding DataContext.ShowHistoryCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                             CommandParameter="{Binding}"
-                                            ToolTip="История сессий (этап M3)"
+                                            ToolTip="История сессий"
                                             AutomationProperties.Name="История сессий проекта">
                                         <Canvas Width="15" Height="15">
                                             <Path Style="{StaticResource IconPathStyle}"
