@@ -173,6 +173,9 @@ internal sealed class FakeDiffView : IDiffView
 
     public bool HasSubscribers => RefreshRequested is not null || FileRequested is not null || Closed is not null;
 
+    /// <summary>Вмешательство в вызов: вернуть незавершённую задачу, чтобы вызов «висел».</summary>
+    public Func<DiffViewCall, ValueTask?>? OnCall { get; set; }
+
     public void RaiseRefresh(TerminalId id, string? directory, string? baseRef, bool ignoreWhitespace) =>
         RefreshRequested?.Invoke(this, new DiffRefreshRequestedEventArgs(id, directory, baseRef, ignoreWhitespace));
 
@@ -209,7 +212,7 @@ internal sealed class FakeDiffView : IDiffView
             _calls.Add(call);
         }
 
-        return ValueTask.CompletedTask;
+        return OnCall?.Invoke(call) ?? ValueTask.CompletedTask;
     }
 }
 

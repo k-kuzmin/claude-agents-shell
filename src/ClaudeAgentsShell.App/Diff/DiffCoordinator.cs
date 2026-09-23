@@ -126,7 +126,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
         }
 
         var query = new DiffQuery(directory, BaseRef: null, IgnoreWhitespace: false, Files: [], Note: null);
-        await Track(BuildAsync(terminalId, query, fromAgentCall: false)).WaitAsync(cancellationToken).ConfigureAwait(false);
+        await Run(() => BuildAsync(terminalId, query, fromAgentCall: false), Superseded()).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -159,7 +159,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
             Files: CleanFiles(request.Files),
             Note: NullIfBlank(request.Note));
 
-        return await Track(BuildAsync(resolved.TerminalId, query, fromAgentCall: true))
+        return await Run(() => BuildAsync(resolved.TerminalId, query, fromAgentCall: true), Superseded())
             .WaitAsync(cancellationToken)
             .ConfigureAwait(false);
     }
@@ -204,7 +204,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
             generation.StaleMarked = true;
         }
 
-        Track(MarkStaleAsync(terminalId, generation));
+        Run(() => MarkStaleAsync(terminalId, generation));
     }
 
     /// <inheritdoc />
@@ -251,7 +251,8 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
             generation.Retire();
         }
 
-        // Задачи сами ловят свои сбои, поэтому WhenAll не бросает.
+        // Снимок полон: работа учитывается под замком до своего запуска, а после _disposed не
+        // запускается (Run). Задачи сами ловят свои сбои, поэтому WhenAll не бросает.
         await Task.WhenAll(running).ConfigureAwait(false);
         _sendGate.Dispose();
     }
@@ -488,7 +489,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
     }
 
     /// <summary>Страница раскрыла файл. Событие приходит из потока интерфейса.</summary>
-    private void OnFileRequested(object? sender, DiffFileRequestedEventArgs e) => Track(LoadFileAsync(e));
+    private void OnFileRequested(object? sender, DiffFileRequestedEventArgs e) => Run(() => LoadFileAsync(e));
 
     private async Task LoadFileAsync(DiffFileRequestedEventArgs request)
     {
@@ -625,7 +626,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
     }
 
     /// <summary>Страница просит перестроить diff. Событие приходит из потока интерфейса.</summary>
-    private void OnRefreshRequested(object? sender, DiffRefreshRequestedEventArgs e) => Track(RefreshAsync(e));
+    private void OnRefreshRequested(object? sender, DiffRefreshRequestedEventArgs e) => Run(() => RefreshAsync(e));
 
     private async Task RefreshAsync(DiffRefreshRequestedEventArgs request)
     {
@@ -757,36 +758,79 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
         return completion.Task;
     }
 
-    /// <summary>Учитывает задачу, чтобы <see cref="DisposeAsync"/> её дождался.</summary>
-    private Task<T> Track<T>(Task<T> task)
+    /// <summary>
+    /// Запускает работу так, чтобы <see cref="DisposeAsync"/> её дождался. Работа учитывается под
+    /// замком <em>до</em> запуска — раньше, чем выполнится её синхронная часть (вплоть до ожидания
+    /// замка отправки), а после начала освобождения не запускается вовсе. Поэтому снимок в
+    /// <see cref="DisposeAsync"/> полон, и никакая работа не переживает освобождение.
+    /// </summary>
+    /// <param name="work">Работа; сама ловит свои сбои.</param>
+    /// <param name="whenDisposed">Итог, если координатор уже освобождается.</param>
+    private Task<T> Run<T>(Func<Task<T>> work, T whenDisposed)
     {
-        Track((Task)task);
-        return task;
+        var registration = Register();
+        return registration is null ? Task.FromResult(whenDisposed) : Watch(Start(work, registration), registration);
     }
 
-    private void Track(Task task)
+    /// <inheritdoc cref="Run{T}(Func{Task{T}}, T)" />
+    private void Run(Func<Task> work)
+    {
+        if (Register() is { } registration)
+        {
+            Watch(Start(work, registration), registration);
+        }
+    }
+
+    /// <summary>Место в наборе работ; <c>null</c> — освобождение уже началось.</summary>
+    private TaskCompletionSource? Register()
     {
         lock (_gate)
         {
-            if (task.IsCompleted)
+            if (_disposed)
             {
-                return;
+                return null;
             }
 
-            _running.Add(task);
+            var registration = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _running.Add(registration.Task);
+            return registration;
         }
+    }
 
+    private TTask Start<TTask>(Func<TTask> work, TaskCompletionSource registration)
+        where TTask : Task
+    {
+        try
+        {
+            return work();
+        }
+        catch
+        {
+            Unregister(registration);
+            throw;
+        }
+    }
+
+    private TTask Watch<TTask>(TTask task, TaskCompletionSource registration)
+        where TTask : Task
+    {
         task.ContinueWith(
-            completed =>
-            {
-                lock (_gate)
-                {
-                    _running.Remove(completed);
-                }
-            },
+            static (_, state) => ((Action)state!)(),
+            () => Unregister(registration),
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+        return task;
+    }
+
+    private void Unregister(TaskCompletionSource registration)
+    {
+        lock (_gate)
+        {
+            _running.Remove(registration.Task);
+        }
+
+        registration.TrySetResult();
     }
 
     /// <summary>Каталог вкладки для diff: текущий каталог главного агента, до первого хука — каталог запуска.</summary>

@@ -669,6 +669,52 @@ public sealed class DiffCoordinatorTests
     }
 
     [Fact]
+    public async Task Освобождение_посреди_синхронной_части_работы_ждёт_её()
+    {
+        await using var harness = new Harness();
+        var tab = harness.AddTab("t1", active: true);
+        await harness.Coordinator.OpenForTabAsync(tab.TerminalId, CancellationToken.None).WaitAsync(Timeout);
+
+        // Освобождение начинается внутри синхронной части пометки «устарело» — там, где раньше
+        // задача ещё не была учтена: снимок работ её не видел, и освобождение её не ждало.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? disposing = null;
+        harness.View.OnCall = call =>
+        {
+            if (call.Kind != "stale")
+            {
+                return null;
+            }
+
+            disposing = harness.Coordinator.DisposeAsync().AsTask();
+            return new ValueTask(release.Task);
+        };
+
+        harness.Coordinator.NotifyFilesChanged(FakeDiffTabs.TokenFor("t1"));
+
+        Assert.NotNull(disposing);
+        Assert.False(disposing.IsCompleted);
+        release.SetResult();
+        await disposing.WaitAsync(Timeout);
+        Assert.Single(harness.View.CallsOf("stale"));
+    }
+
+    [Fact]
+    public async Task После_начала_освобождения_работа_не_запускается()
+    {
+        var harness = new Harness();
+        harness.AddTab("t1", active: true);
+        await harness.DisposeAsync();
+
+        var outcome = await harness.Coordinator.HandleAsync(
+            FakeDiffTabs.TokenFor("t1"), new ShowDiffRequest(null, Directory: null, [], null), CancellationToken.None).WaitAsync(Timeout);
+
+        Assert.IsNotType<ShowDiffOutcome.Failed>(outcome);
+        Assert.Empty(harness.Git.Requests);
+        Assert.Empty(harness.View.Calls);
+    }
+
+    [Fact]
     public async Task Закрытие_панели_не_исполняет_колбэки_отмены_на_вызывающем_потоке()
     {
         await using var harness = new Harness();
