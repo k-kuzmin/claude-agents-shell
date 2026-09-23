@@ -316,6 +316,7 @@ public sealed class GitDiffReader : IGitDiffReader
         // быстрым, даже если агент насоздавал сотни крупных файлов.
         var entries = new DiffFileEntry[paths.Count];
         var budget = new DiffReadBudget(_options.UntrackedCountBudgetBytes);
+        var resolver = new UntrackedPathResolver(root);
         var parallel = new ParallelOptions
         {
             MaxDegreeOfParallelism = Math.Max(1, _options.UntrackedCountParallelism),
@@ -326,7 +327,7 @@ public sealed class GitDiffReader : IGitDiffReader
             parallel,
             async (i, token) =>
             {
-                var counts = await DiffUntrackedFile.CountLinesAsync(root, paths[i], _options, budget, token).ConfigureAwait(false);
+                var counts = await DiffUntrackedFile.CountLinesAsync(resolver, paths[i], _options, budget, token).ConfigureAwait(false);
                 entries[i] = new DiffFileEntry(paths[i], null, DiffChangeKind.Untracked, counts.Added, counts.Deleted, DiffCollapseReason.None);
             }).ConfigureAwait(false);
 
@@ -402,7 +403,7 @@ public sealed class GitDiffReader : IGitDiffReader
     {
         try
         {
-            var diff = await DiffUntrackedFile.BuildDiffAsync(index.RepositoryRoot, file.Path, _options, cancellationToken).ConfigureAwait(false);
+            var diff = await DiffUntrackedFile.BuildDiffAsync(new UntrackedPathResolver(index.RepositoryRoot), file.Path, _options, cancellationToken).ConfigureAwait(false);
             return new FileDiff(file.Path, context, diff.Text, diff.Truncated);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

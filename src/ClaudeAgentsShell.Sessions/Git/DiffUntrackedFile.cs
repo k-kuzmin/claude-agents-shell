@@ -19,8 +19,9 @@ public readonly record struct UntrackedFileDiff(string Text, bool Truncated);
 /// </summary>
 /// <remarks>
 /// Ссылка (symlink, junction) — сама изменённый объект, как у git: её цель не открывается,
-/// diff — одна строка с текстом цели. Путь, проходящий через ссылку-каталог, и путь вне корня
-/// не читаются вовсе: иначе в панель и агенту ушло бы содержимое файла вне репозитория.
+/// diff — одна строка с текстом цели. Путь, проходящий через ссылку-каталог, путь вне корня и
+/// файл, открывшийся за пределами корня, не читаются: иначе в панель и агенту ушло бы содержимое
+/// файла вне репозитория. Правила — в <see cref="UntrackedPathResolver"/>.
 /// </remarks>
 public static class DiffUntrackedFile
 {
@@ -33,8 +34,8 @@ public static class DiffUntrackedFile
     /// путь через ссылку-каталог или вне корня — <c>null</c>/0.
     /// Файл читается потоком фиксированным буфером, целиком в памяти не держится.
     /// </summary>
-    /// <param name="root">Корень рабочего дерева.</param>
-    /// <param name="path">Путь от корня.</param>
+    /// <param name="resolver">Разрешение путей этого оглавления.</param>
+    /// <param name="path">Путь от корня, как его выдал git.</param>
     /// <param name="options">Потолок и размер проверки на бинарность.</param>
     /// <param name="budget">
     /// Общий на оглавление бюджет чтения. Не хватило — строки не считаются (<c>null</c>/0),
@@ -42,33 +43,44 @@ public static class DiffUntrackedFile
     /// </param>
     /// <param name="cancellationToken">Отмена чтения.</param>
     public static async Task<DiffLineCounts> CountLinesAsync(
-        string root, string path, GitDiffOptions options, DiffReadBudget budget, CancellationToken cancellationToken)
+        UntrackedPathResolver resolver, string path, GitDiffOptions options, DiffReadBudget budget, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(budget);
 
-        var target = Resolve(root, path);
-        if (target.LinkText is not null)
+        UntrackedTarget target;
+        try
         {
-            return new DiffLineCounts(1, 0);
+            target = resolver.Resolve(path);
         }
-
-        if (target.FullPath is not { } fullPath)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return new DiffLineCounts(null, 0);
         }
 
-        if (Directory.Exists(fullPath))
+        switch (target.Kind)
         {
-            return new DiffLineCounts(0, 0);
+            case UntrackedKind.Link:
+                return new DiffLineCounts(1, 0);
+            case UntrackedKind.Directory:
+                return new DiffLineCounts(0, 0);
+            case UntrackedKind.File:
+                break;
+            default:
+                return new DiffLineCounts(null, 0);
         }
 
         var buffer = ArrayPool<byte>.Shared.Rent(ChunkSize);
         try
         {
-            await using var stream = OpenRead(fullPath);
+            await using var stream = OpenRead(target.FullPath);
+            if (!resolver.IsInsideRoot(stream.SafeFileHandle))
+            {
+                return new DiffLineCounts(null, 0);
+            }
+
             if (stream.Length > options.FileOutputCeilingBytes || !budget.TryReserve(stream.Length))
             {
                 // Строки не считаются, но бинарный остаётся бинарным: хватает начала файла.
@@ -119,34 +131,43 @@ public static class DiffUntrackedFile
     /// Собирает unified diff «новый файл» так же, как его напечатал бы git для добавленного файла.
     /// Больше потолка — начало до последней целой строки и <see cref="UntrackedFileDiff.Truncated"/>.
     /// </summary>
-    /// <param name="root">Корень рабочего дерева.</param>
+    /// <param name="resolver">Разрешение путей репозитория.</param>
     /// <param name="path">Путь от корня через <c>/</c> — и для заголовков.</param>
     /// <param name="options">Потолок и размер проверки на бинарность.</param>
     /// <param name="cancellationToken">Отмена чтения.</param>
-    /// <exception cref="IOException">Файл не читается, лежит вне корня или за ссылкой-каталогом.</exception>
-    public static async Task<UntrackedFileDiff> BuildDiffAsync(string root, string path, GitDiffOptions options, CancellationToken cancellationToken)
+    /// <exception cref="IOException">
+    /// Файл не читается (причина ОС), лежит вне корня, за ссылкой-каталогом или открылся за пределами корня.
+    /// </exception>
+    /// <exception cref="UnauthorizedAccessException">Нет прав.</exception>
+    public static async Task<UntrackedFileDiff> BuildDiffAsync(
+        UntrackedPathResolver resolver, string path, GitDiffOptions options, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(options);
 
-        var target = Resolve(root, path);
-        if (target.LinkText is { } linkText)
+        var target = resolver.Resolve(path);
+        switch (target.Kind)
         {
-            return new UntrackedFileDiff(LinkDiff(path, linkText), false);
+            case UntrackedKind.Link:
+                return new UntrackedFileDiff(LinkDiff(path, target.LinkText!), false);
+            case UntrackedKind.Outside:
+                throw new IOException("Файл вне репозитория: " + path);
+            case UntrackedKind.BehindLink:
+                throw new IOException("Путь проходит через ссылку: " + path);
         }
 
-        var fullPath = target.FullPath ?? throw new IOException("Файл вне репозитория или за ссылкой: " + path);
         var header = new StringBuilder()
             .Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
             .Append("new file mode 100644\n");
 
-        if (Directory.Exists(fullPath))
+        if (target.Kind == UntrackedKind.Directory)
         {
             return new UntrackedFileDiff(header.ToString(), false);
         }
 
-        var (content, truncated) = await ReadHeadAsync(fullPath, options.FileOutputCeilingBytes, cancellationToken).ConfigureAwait(false);
+        var (content, truncated) = await ReadHeadAsync(resolver, target.FullPath, path, options.FileOutputCeilingBytes, cancellationToken)
+            .ConfigureAwait(false);
         if (content.AsSpan(0, Math.Min(content.Length, options.BinarySniffBytes)).Contains((byte)0))
         {
             header.Append("Binary files /dev/null and b/").Append(path).Append(" differ\n");
@@ -185,9 +206,15 @@ public static class DiffUntrackedFile
         return new UntrackedFileDiff(header.ToString(), truncated);
     }
 
-    private static async Task<(byte[] Content, bool Truncated)> ReadHeadAsync(string fullPath, int ceiling, CancellationToken cancellationToken)
+    private static async Task<(byte[] Content, bool Truncated)> ReadHeadAsync(
+        UntrackedPathResolver resolver, string fullPath, string path, int ceiling, CancellationToken cancellationToken)
     {
         await using var stream = OpenRead(fullPath);
+        if (!resolver.IsInsideRoot(stream.SafeFileHandle))
+        {
+            throw new IOException("Файл открылся за пределами репозитория (ссылка): " + path);
+        }
+
         var size = (int)Math.Min(stream.Length, ceiling);
         var content = new byte[size];
         var filled = 0;
@@ -207,60 +234,16 @@ public static class DiffUntrackedFile
     }
 
     /// <summary>
-    /// Куда смотрит путь от корня, не разыменовывая ссылок: обычный файл (<see cref="UntrackedTarget.FullPath"/>),
-    /// сама ссылка (<see cref="UntrackedTarget.LinkText"/>) или ничего — путь вне корня, проходит через
-    /// ссылку-каталог или атрибуты не читаются. Точка повторной обработки без цели ссылки (облачный
-    /// файл и т. п.) — обычный файл: её содержимое — она сама.
+    /// Diff новой ссылки, как его печатает git: режим 120000, одна строка с целью через <c>/</c>
+    /// без перевода строки в конце.
     /// </summary>
-    private static UntrackedTarget Resolve(string root, string path)
-    {
-        try
-        {
-            var fullRoot = Path.GetFullPath(root);
-            var fullPath = Path.GetFullPath(Path.Combine(fullRoot, path));
-            var relative = Path.GetRelativePath(fullRoot, fullPath);
-            if (relative == "." || Path.IsPathFullyQualified(relative)
-                || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-            {
-                return default;
-            }
-
-            var segments = relative.Split(Path.DirectorySeparatorChar);
-            var current = fullRoot;
-            for (var i = 0; i < segments.Length; i++)
-            {
-                current = Path.Combine(current, segments[i]);
-                var attributes = File.GetAttributes(current);
-                if ((attributes & FileAttributes.ReparsePoint) == 0)
-                {
-                    continue;
-                }
-
-                FileSystemInfo info = (attributes & FileAttributes.Directory) != 0 ? new DirectoryInfo(current) : new FileInfo(current);
-                if (info.LinkTarget is not { } linkTarget)
-                {
-                    continue;
-                }
-
-                return i == segments.Length - 1 ? new UntrackedTarget(null, linkTarget) : default;
-            }
-
-            return new UntrackedTarget(fullPath, null);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return default;
-        }
-    }
-
-    /// <summary>Diff новой ссылки, как его печатает git: режим 120000, одна строка с целью без перевода строки.</summary>
     private static string LinkDiff(string path, string linkTarget) => new StringBuilder()
         .Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
         .Append("new file mode 120000\n")
         .Append("--- /dev/null\n")
         .Append("+++ b/").Append(path).Append('\n')
         .Append("@@ -0,0 +1 @@\n")
-        .Append('+').Append(linkTarget.Replace('\n', ' ')).Append('\n')
+        .Append('+').Append(linkTarget.Replace('\\', '/').Replace('\n', ' ')).Append('\n')
         .Append("\\ No newline at end of file\n")
         .ToString();
 
@@ -276,8 +259,3 @@ public static class DiffUntrackedFile
         ChunkSize,
         FileOptions.Asynchronous | FileOptions.SequentialScan);
 }
-
-/// <summary>Разрешённый путь неотслеживаемого элемента; оба <c>null</c> — не читается.</summary>
-/// <param name="FullPath">Обычный файл или каталог на диске.</param>
-/// <param name="LinkText">Элемент — ссылка; текст её цели.</param>
-internal readonly record struct UntrackedTarget(string? FullPath, string? LinkText);
