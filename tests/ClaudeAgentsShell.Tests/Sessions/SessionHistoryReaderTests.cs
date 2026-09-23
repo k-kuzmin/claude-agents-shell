@@ -313,6 +313,85 @@ public sealed class SessionHistoryReaderTests
     /// <summary>Строка, которая заголовком стать не может, — около 140 символов.</summary>
     private static string Filler => "{\"type\":\"assistant\",\"text\":\"" + new string('a', 110) + "\"}";
 
+    [Fact]
+    public async Task Сотня_транскриптов_читается_по_порядку_а_повторно_без_открытия_файлов()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var start = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+        var paths = new List<string>();
+        for (var index = 0; index < 100; index++)
+        {
+            var path = WriteTranscript(temp, $"session-{index:D3}",
+                """{"type":"queue-operation","operation":"enqueue"}""",
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"вопрос " + index + "\"}}");
+            File.SetLastWriteTimeUtc(path, start.AddMinutes(index));
+            paths.Add(path);
+        }
+
+        var first = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        Assert.Equal(100, first.Count);
+        Assert.Equal("session-099", first[0].SessionId);
+        Assert.Equal("session-000", first[^1].SessionId);
+        Assert.All(first, summary => Assert.Equal("вопрос " + int.Parse(summary.SessionId[^3..]), summary.Title));
+
+        // Файлы заперты целиком: открыть их нельзя, а перечисление каталога работает. Если бы
+        // повторный вызов открывал неизменённые транскрипты, заголовки деградировали бы до null.
+        var locks = paths.Select(static path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None)).ToList();
+        try
+        {
+            var second = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+            Assert.Equal(first.Select(static s => s.SessionId), second.Select(static s => s.SessionId));
+            Assert.All(second, summary => Assert.NotNull(summary.Title));
+        }
+        finally
+        {
+            foreach (var stream in locks)
+            {
+                stream.Dispose();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Удалённый_транскрипт_вычищается_из_кэша()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var stamp = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+        var path = WriteTranscript(temp, SessionId, """{"type":"user","message":{"role":"user","content":"первый"}}""");
+        File.SetLastWriteTimeUtc(path, stamp);
+
+        Assert.Equal("первый", Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
+
+        File.Delete(path);
+        Assert.Empty(await reader.ReadAsync(WorkingDirectory, CancellationToken.None));
+
+        // Тот же путь, то же время и тот же размер: живи запись в кэше, вернулся бы старый заголовок.
+        WriteTranscript(temp, SessionId, """{"type":"user","message":{"role":"user","content":"второй"}}""");
+        File.SetLastWriteTimeUtc(path, stamp);
+
+        Assert.Equal("второй", Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
+    }
+
+    [Fact]
+    public async Task Не_открывшийся_транскрипт_перечитывается_позже()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var path = WriteTranscript(temp, SessionId, """{"type":"user","message":{"role":"user","content":"вопрос"}}""");
+
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            // Занят — строка деградирует до «имя файла и дата».
+            Assert.Null(Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
+        }
+
+        Assert.Equal("вопрос", Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
+    }
+
     private static SessionHistoryReader CreateReader(TempDirectory temp, SessionsOptions? options = null) =>
         new(new AppDataPaths(temp.Combine("appdata"), temp.Combine("claude", "projects")), options ?? new SessionsOptions());
 
