@@ -188,6 +188,22 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task Choice_always_carries_the_request_project()
+    {
+        _reader.Set(CoreDir, Session("a", "первая", Now.AddHours(-1)), Session("b", "вторая", Now.AddHours(-2)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+
+        vm.MoveSelection(1);
+        vm.Accept();
+        Assert.Equal(Core.Id, vm.Result?.ProjectId);
+
+        vm.MoveSelection(-1);
+        vm.Accept();
+        Assert.Equal(Core.Id, vm.Result?.ProjectId);
+    }
+
+    [Fact]
     public async Task Enter_without_selection_does_nothing()
     {
         using var vm = Create();
