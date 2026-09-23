@@ -6,7 +6,15 @@ namespace ClaudeAgentsShell.Sessions.History;
 /// <summary>Что удалось вытащить из одной строки <c>.jsonl</c>.</summary>
 /// <param name="Title">Первое сообщение пользователя, если эта строка им и оказалась.</param>
 /// <param name="Branch">Ветка git, записанная Claude Code в строку.</param>
-internal readonly record struct TranscriptLine(string? Title, string? Branch);
+/// <param name="Entrypoint">
+/// Чем запущена сессия (<c>cli</c>, <c>sdk-py</c>, <c>sdk-cli</c>…), если строка несёт это поле.
+/// </param>
+/// <param name="Sidechain">Значение <c>isSidechain</c>, если строка его несёт.</param>
+internal readonly record struct TranscriptLine(
+    string? Title,
+    string? Branch,
+    string? Entrypoint = null,
+    bool? Sidechain = null);
 
 /// <summary>
 /// Разбор строки транскрипта. Формат нестабилен, поэтому здесь нет ни одной обязательной
@@ -34,10 +42,12 @@ internal static class TranscriptLineParser
 
             var root = document.RootElement;
             var branch = ReadString(root, "gitBranch");
+            var entrypoint = ReadString(root, "entrypoint");
+            var sidechain = ReadBoolean(root, "isSidechain");
 
             return IsFirstUserMessageCandidate(root)
-                ? new TranscriptLine(ExtractTitle(root), branch)
-                : new TranscriptLine(null, branch);
+                ? new TranscriptLine(ExtractTitle(root), branch, entrypoint, sidechain)
+                : new TranscriptLine(null, branch, entrypoint, sidechain);
         }
         catch (JsonException)
         {
@@ -165,6 +175,16 @@ internal static class TranscriptLineParser
 
     private static bool IsTrue(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
+
+    private static bool? ReadBoolean(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value)
+            ? value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => null,
+            }
+            : null;
 
     private static string? ReadString(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
