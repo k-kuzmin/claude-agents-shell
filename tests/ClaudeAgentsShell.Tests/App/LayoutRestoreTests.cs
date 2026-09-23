@@ -44,7 +44,7 @@ public sealed class LayoutRestoreTests
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, Layouts.CreateService(Time),
-                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("0.0.0"));
+                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("0.0.0"), new FakeSessionHistoryDialog());
         }
 
         public FakeProjectStore Store { get; } = new();

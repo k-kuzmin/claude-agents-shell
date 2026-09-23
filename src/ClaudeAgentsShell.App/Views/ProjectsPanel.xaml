@@ -237,22 +237,25 @@
                                                   Data="M7.5,3 L7.5,12 M3,7.5 L12,7.5" />
                                         </Canvas>
                                     </Button>
-                                    <!-- Окно истории приезжает в M3: кнопка на месте, но отключена. -->
+                                    <!-- Окно истории сессий: переключает на открытую вкладку либо продолжает сессию. -->
                                     <Button Width="28" Height="28"
                                             Style="{StaticResource FlatButtonStyle}"
                                             Command="{Binding DataContext.ShowHistoryCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                             CommandParameter="{Binding}"
-                                            ToolTip="История сессий (этап M3)"
+                                            ToolTip="История сессий"
                                             AutomationProperties.Name="История сессий проекта">
                                         <Canvas Width="15" Height="15">
                                             <Path Style="{StaticResource IconPathStyle}"
-                                                  Stroke="{StaticResource MutedTextBrush}"
+                                                  Stroke="{StaticResource PrimaryTextBrush}"
+                                                  StrokeThickness="1.4"
                                                   Data="M1.9,7.5 A5.6,5.6 0 1 0 3.5,3.5" />
                                             <Path Style="{StaticResource IconPathStyle}"
-                                                  Stroke="{StaticResource MutedTextBrush}"
+                                                  Stroke="{StaticResource PrimaryTextBrush}"
+                                                  StrokeThickness="1.4"
                                                   Data="M1.9,2.5 L1.9,5.6 L5,5.6" />
                                             <Path Style="{StaticResource IconPathStyle}"
-                                                  Stroke="{StaticResource MutedTextBrush}"
+                                                  Stroke="{StaticResource PrimaryTextBrush}"
+                                                  StrokeThickness="1.4"
                                                   Data="M7.5,5 L7.5,7.5 L9.4,8.7" />
                                         </Canvas>
                                     </Button>
