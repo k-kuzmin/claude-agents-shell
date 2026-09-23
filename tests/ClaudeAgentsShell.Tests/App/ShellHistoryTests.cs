@@ -120,18 +120,21 @@ public sealed class ShellHistoryTests
     }
 
     [Fact]
-    public async Task Choosing_a_session_not_open_resumes_it_in_the_chosen_project()
+    public async Task Choosing_a_session_not_open_resumes_it_in_the_row_project()
     {
         var alpha = Project("alpha", 0);
         var beta = Project("beta", 1);
         var harness = await StartedAsync(alpha, beta);
+        await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
         harness.History.Choice = new SessionHistoryChoice(beta.Id, "b-7");
 
-        // Сессия запускается в проекте из выбора, а не строки, с которой открыли окно.
-        var tab = await harness.Shell.ShowHistoryAsync(harness.Row(0), CancellationToken.None);
+        // Окно открыто со строки beta и отдаёт сессию её проекта: новая вкладка с --resume
+        // в beta становится активной, хотя до этого активной была вкладка alpha.
+        var tab = await harness.Shell.ShowHistoryAsync(harness.Row(1), CancellationToken.None);
 
         Assert.NotNull(tab);
-        var launch = Assert.Single(harness.Workspace.Launches);
+        Assert.Equal(2, harness.Workspace.Launches.Count);
+        var launch = harness.Workspace.Launches[^1];
         Assert.Equal(beta.Id, launch.ProjectId);
         Assert.Equal(new SessionLaunch.ResumeSession("b-7"), launch.Launch);
         Assert.Equal("b-7", tab!.SessionId);
