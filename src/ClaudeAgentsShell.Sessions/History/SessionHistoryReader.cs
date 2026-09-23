@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.Text;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
 
@@ -10,7 +12,8 @@ namespace ClaudeAgentsShell.Sessions.History;
 /// Файл читается потоково и чтение прекращается, как только найден заголовок, но не позже
 /// <see cref="SessionsOptions.TranscriptScanLimit"/>: транскрипты вырастают до десятков
 /// мегабайт, а нужна из них одна строка. Разобранное кэшируется по ключу «путь, время
-/// изменения, размер».
+/// изменения, размер». Для файла без заголовка запоминается, докуда он просмотрен: когда живой
+/// транскрипт растёт, поиск продолжается с этой позиции, а упёршийся в предел не сканируется вовсе.
 /// </para>
 /// <para>
 /// Файлы только читаются: ни записи, ни удаления, ни создания каталога (раздел 7 CLAUDE.md).
@@ -28,6 +31,11 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
     /// в открытие файла и первые килобайты, а не в процессор: больше нескольких потоков не нужно.
     /// </summary>
     private const int ReadParallelism = 8;
+
+    /// <summary>Начальный размер буфера чтения; под длинную строку он расширяется.</summary>
+    private const int ReadBufferSize = 16 * 1024;
+
+    private static ReadOnlySpan<byte> Utf8Bom => [0xEF, 0xBB, 0xBF];
 
     private readonly IAppDataPaths _paths;
     private readonly long _scanLimit;
@@ -166,15 +174,37 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         var modified = new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero);
         var size = file.Length;
 
-        if (_cache.TryGetValue(file.FullName, out var cached) && cached.Matches(modified, size))
+        _cache.TryGetValue(file.FullName, out var cached);
+        if (cached is not null && cached.Matches(modified, size))
         {
             return cached.Parsed;
         }
 
-        var parsed = await ParseAsync(file, modified, size, _scanLimit, cancellationToken).ConfigureAwait(false);
+        // Живой транскрипт без заголовка (сессия начата слэш-командой и т.п.) меняется на каждом
+        // сообщении. Если файл только вырос, начало уже просмотрено: упёрлись в предел — заголовка
+        // не будет (он был бы в начале), не упёрлись — продолжаем с сохранённой позиции.
+        // Уменьшился или время ушло назад — это другой файл, и сканирование идёт с нуля.
+        var resume = cached is { Parsed.Summary.Title: null, Progress: { } progress }
+                     && size >= cached.Size
+                     && modified >= cached.Modified
+            ? progress
+            : ScanProgress.Start;
+
+        ParsedTranscript parsed;
+        ScanProgress next;
+        if (resume.LimitReached)
+        {
+            parsed = cached!.Parsed with { Summary = cached.Parsed.Summary with { ModifiedUtc = modified, SizeBytes = size } };
+            next = resume;
+        }
+        else
+        {
+            (parsed, next) = await ParseAsync(file, modified, size, _scanLimit, resume, cancellationToken).ConfigureAwait(false);
+        }
+
         if (parsed.Readable)
         {
-            _cache[file.FullName] = new CachedSummary(modified, size, parsed);
+            _cache[file.FullName] = new CachedSummary(modified, size, parsed, parsed.Summary.Title is null ? next : null);
         }
         else
         {
@@ -209,17 +239,27 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         }
     }
 
-    private static async Task<ParsedTranscript> ParseAsync(
+    private static async Task<(ParsedTranscript Parsed, ScanProgress Progress)> ParseAsync(
         FileInfo file,
         DateTimeOffset modified,
         long size,
         long scanLimit,
+        ScanProgress resume,
         CancellationToken cancellationToken)
     {
         var sessionId = Path.GetFileNameWithoutExtension(file.Name);
         string? title = null;
-        string? branch = null;
+        var branch = resume.Branch;
         var readable = true;
+
+        // Позиция — байтовое смещение сразу за последней целой строкой: строки режутся по байту
+        // '\n', который в UTF-8 не встречается внутри многобайтовой последовательности. Незаконченная
+        // последняя строка (сессия её ещё пишет) разбирается, но в позицию не входит — при
+        // следующем чтении она будет прочитана целиком.
+        var offset = resume.Offset;
+        var scanned = resume.ScannedChars;
+        var limitReached = false;
+        var buffer = ArrayPool<byte>.Shared.Rent(ReadBufferSize);
 
         try
         {
@@ -228,15 +268,54 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete,
-                bufferSize: 16 * 1024,
+                bufferSize: 1,
                 useAsync: true);
+            stream.Seek(offset, SeekOrigin.Begin);
 
-            using var reader = new StreamReader(stream);
-
-            var scanned = 0L;
-            while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+            int start = 0, end = 0;
+            var endOfFile = false;
+            while (true)
             {
-                var parsed = TranscriptLineParser.Parse(line);
+                var newline = buffer.AsSpan(start, end - start).IndexOf((byte)'\n');
+                if (newline < 0)
+                {
+                    if (endOfFile)
+                    {
+                        if (end > start)
+                        {
+                            var tail = Inspect(buffer.AsSpan(start, end - start), offset == 0);
+                            branch ??= tail.Branch;
+                            title = tail.Title;
+                        }
+
+                        break;
+                    }
+
+                    // Строки в буфере нет целиком — сдвинуть остаток в начало, при нужде расширить.
+                    if (start > 0)
+                    {
+                        buffer.AsSpan(start, end - start).CopyTo(buffer);
+                        end -= start;
+                        start = 0;
+                    }
+
+                    if (end == buffer.Length)
+                    {
+                        var larger = ArrayPool<byte>.Shared.Rent(buffer.Length * 2);
+                        buffer.AsSpan(0, end).CopyTo(larger);
+                        ArrayPool<byte>.Shared.Return(buffer);
+                        buffer = larger;
+                    }
+
+                    var read = await stream.ReadAsync(buffer.AsMemory(end), cancellationToken).ConfigureAwait(false);
+                    endOfFile = read == 0;
+                    end += read;
+                    continue;
+                }
+
+                var parsed = Inspect(buffer.AsSpan(start, newline), offset == 0);
+                start += newline + 1;
+                offset += newline + 1;
                 branch ??= parsed.Branch;
 
                 if (parsed.Title is { } found)
@@ -253,9 +332,10 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
                 // выбрано значение предела). Отсчёт идёт по уже прочитанному, поэтому одна
                 // аномально длинная строка предел перешагнёт: ограничить её длину, не потеряв
                 // заголовок из вставленного лога, нечем.
-                scanned += line.Length + 1;
+                scanned += parsed.Chars + 1;
                 if (scanned >= scanLimit)
                 {
+                    limitReached = true;
                     break;
                 }
             }
@@ -269,11 +349,35 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
             // во втором случае спросить позже имеет смысл, в первом — нет.
             readable = false;
         }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
 
         // MessageCount остаётся null умышленно: чтобы его посчитать, пришлось бы дочитать файл
         // до конца, а это прямо противоречит требованию остановиться на заголовке.
-        return new ParsedTranscript(
-            new SessionSummary(sessionId, file.FullName, modified, size, title, null, branch), readable);
+        var summary = new SessionSummary(sessionId, file.FullName, modified, size, title, null, branch);
+        return (new ParsedTranscript(summary, readable), new ScanProgress(offset, scanned, limitReached, branch));
+    }
+
+    /// <summary>Разбирает одну строку транскрипта из байтов UTF-8.</summary>
+    /// <param name="line">Байты строки без завершающего <c>\n</c>.</param>
+    /// <param name="fileStart">Строка первая в файле — у неё может быть метка порядка байтов.</param>
+    private static (string? Title, string? Branch, int Chars) Inspect(ReadOnlySpan<byte> line, bool fileStart)
+    {
+        if (fileStart && line.StartsWith(Utf8Bom))
+        {
+            line = line[Utf8Bom.Length..];
+        }
+
+        if (!line.IsEmpty && line[^1] == (byte)'\r')
+        {
+            line = line[..^1];
+        }
+
+        var text = Encoding.UTF8.GetString(line);
+        var parsed = TranscriptLineParser.Parse(text);
+        return (parsed.Title, parsed.Branch, text.Length);
     }
 
     /// <summary>Разобранный транскрипт и признак того, что файл удалось прочитать.</summary>
@@ -284,7 +388,22 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
     /// </param>
     private readonly record struct ParsedTranscript(SessionSummary Summary, bool Readable);
 
-    private readonly record struct CachedSummary(DateTimeOffset Modified, long Size, ParsedTranscript Parsed)
+    /// <summary>Докуда просмотрен транскрипт без заголовка.</summary>
+    /// <param name="Offset">Байтовое смещение сразу за последней целой просмотренной строкой.</param>
+    /// <param name="ScannedChars">Сколько символов уже засчитано в предел просмотра.</param>
+    /// <param name="LimitReached">Проход упёрся в предел: дальше заголовок не ищется.</param>
+    /// <param name="Branch">Ветка, найденная в просмотренной части.</param>
+    private sealed record ScanProgress(long Offset, long ScannedChars, bool LimitReached, string? Branch)
+    {
+        public static ScanProgress Start { get; } = new(0, 0, false, null);
+    }
+
+    /// <summary>Запись кэша разбора.</summary>
+    /// <param name="Modified">Время изменения файла на момент разбора.</param>
+    /// <param name="Size">Размер файла на момент разбора.</param>
+    /// <param name="Parsed">Результат разбора.</param>
+    /// <param name="Progress">Только у записи без заголовка: откуда продолжать поиск.</param>
+    private sealed record CachedSummary(DateTimeOffset Modified, long Size, ParsedTranscript Parsed, ScanProgress? Progress)
     {
         public bool Matches(DateTimeOffset modified, long size) => Modified == modified && Size == size;
     }

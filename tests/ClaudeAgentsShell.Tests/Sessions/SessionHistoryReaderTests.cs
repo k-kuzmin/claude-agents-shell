@@ -392,6 +392,99 @@ public sealed class SessionHistoryReaderTests
         Assert.Equal("вопрос", Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
     }
 
+    [Fact]
+    public async Task Дозапись_в_транскрипт_без_заголовка_не_перечитывает_начало()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var path = WriteTranscript(temp, SessionId, Filler, Assistant("два"));
+
+        Assert.Null((await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None))?.Title);
+
+        // Начало подменено на строку с заголовком той же длины. Перечитай его чтение с нуля —
+        // заголовок нашёлся бы; продолжение с сохранённой позиции его не видит.
+        OverwriteHead(path, "подменённое начало");
+        AppendLines(path, Assistant("три"));
+
+        var afterAppend = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+        Assert.NotNull(afterAppend);
+        Assert.Null(afterAppend.Title);
+
+        // Заголовок в дописанной части в пределах лимита находится.
+        AppendLines(path, """{"type":"user","message":{"role":"user","content":"дописанный вопрос"}}""");
+
+        var withTitle = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+        Assert.Equal("дописанный вопрос", withTitle?.Title);
+        Assert.Equal(new FileInfo(path).Length, withTitle?.SizeBytes);
+    }
+
+    [Fact]
+    public async Task Упёршийся_в_предел_транскрипт_при_росте_не_сканируется()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp, new SessionsOptions { TranscriptScanLimit = 200 });
+        var path = WriteTranscript(temp, SessionId, Filler, Filler);
+
+        Assert.Null(Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
+
+        OverwriteHead(path, "подменённое начало");
+        AppendLines(path, Assistant("ещё"));
+
+        var grown = Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None));
+        Assert.Null(grown.Title);
+        Assert.Equal(new FileInfo(path).Length, grown.SizeBytes);
+    }
+
+    [Fact]
+    public async Task Урезанный_транскрипт_сканируется_заново()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp, new SessionsOptions { TranscriptScanLimit = 200 });
+        var path = WriteTranscript(temp, SessionId, Filler, Filler, Filler);
+
+        Assert.Null(Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
+
+        // Файл стал короче — это уже другой файл, сохранённая позиция к нему не относится.
+        OverwriteHead(path, "новое начало");
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Write))
+        {
+            stream.SetLength(Encoding.UTF8.GetByteCount(Filler) + 1);
+        }
+
+        Assert.Equal("новое начало", Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None)).Title);
+    }
+
+    private static string Assistant(string text) =>
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"" + text + "\"}}";
+
+    /// <summary>
+    /// Заменяет первую строку файла строкой пользователя с заголовком <paramref name="title" />
+    /// той же длины в байтах: размер файла не меняется.
+    /// </summary>
+    private static void OverwriteHead(string path, string title)
+    {
+        var bytes = File.ReadAllBytes(path);
+        var firstLength = Array.IndexOf(bytes, (byte)'\n');
+
+        var prefix = "{\"type\":\"user\",\"pad\":\"";
+        var suffix = "\",\"message\":{\"role\":\"user\",\"content\":\"" + title + "\"}}";
+        var padding = firstLength - Encoding.UTF8.GetByteCount(prefix + suffix);
+        Assert.True(padding >= 0, "Первая строка слишком коротка для подмены.");
+
+        var head = Encoding.UTF8.GetBytes(prefix + new string('x', padding) + suffix);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Write);
+        stream.Write(head);
+    }
+
+    private static void AppendLines(string path, params string[] lines)
+    {
+        var modified = File.GetLastWriteTimeUtc(path);
+        File.AppendAllText(path, string.Join('\n', lines) + "\n", new UTF8Encoding(false));
+
+        // Время изменения явно вперёд: на грубом таймере файловой системы оно могло бы совпасть.
+        File.SetLastWriteTimeUtc(path, modified.AddSeconds(1));
+    }
+
     private static SessionHistoryReader CreateReader(TempDirectory temp, SessionsOptions? options = null) =>
         new(new AppDataPaths(temp.Combine("appdata"), temp.Combine("claude", "projects")), options ?? new SessionsOptions());
 
