@@ -351,7 +351,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     }
 
     /// <summary>
-    /// Окно истории с фильтром на проекте строки. Выбрана сессия, живая в одной из вкладок, —
+    /// Окно истории проекта строки. Выбрана сессия, живая в одной из вкладок, —
     /// переход на эту вкладку: второй <c>claude</c> на тот же транскрипт не запускается.
     /// Иначе — новая вкладка с <c>--resume</c> в проекте выбранной сессии. Окно закрыли
     /// без выбора — ничего.
@@ -362,9 +362,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         ArgumentNullException.ThrowIfNull(row);
 
         var request = new SessionHistoryRequest(
-            [.. Projects.Rows.Select(static candidate =>
-                new SessionHistoryProject(candidate.Id, candidate.Name, candidate.Path))],
-            row.Id,
+            new SessionHistoryProject(row.Id, row.Name, row.Path),
             LiveSessionIds());
 
         var choice = await _historyDialog.ShowAsync(request, cancellationToken).ConfigureAwait(true);

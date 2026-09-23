@@ -8,7 +8,7 @@ namespace ClaudeAgentsShell.App.Views;
 
 /// <summary>
 /// Модальное окно истории сессий (раздел 6.4 ТЗ). Разметка, клавиши и связь с ViewModel —
-/// больше здесь ничего: фильтры, поиск и выбор живут в <see cref="SessionHistoryViewModel"/>.
+/// больше здесь ничего: поиск и выбор живут в <see cref="SessionHistoryViewModel"/>.
 /// </summary>
 public partial class SessionHistoryWindow : Window
 {
@@ -17,7 +17,6 @@ public partial class SessionHistoryWindow : Window
 
     private readonly SessionHistoryViewModel _viewModel;
 
-    private Guid _scrolledProjectId;
     private string? _scrolledSessionId;
 
     /// <inheritdoc cref="SessionHistoryWindow" />
@@ -52,12 +51,11 @@ public partial class SessionHistoryWindow : Window
             return;
         }
 
-        if (row.ProjectId == _scrolledProjectId && row.SessionId == _scrolledSessionId)
+        if (row.SessionId == _scrolledSessionId)
         {
             return;
         }
 
-        _scrolledProjectId = row.ProjectId;
         _scrolledSessionId = row.SessionId;
         SessionList.ScrollIntoView(row);
     }
