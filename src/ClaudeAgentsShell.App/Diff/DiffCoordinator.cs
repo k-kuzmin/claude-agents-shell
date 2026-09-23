@@ -401,7 +401,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
 
                         // Разворот сверяется с путями оглавления точным совпадением — пути агента
                         // приводятся к той же форме, что и при сужении оглавления.
-                        var expand = DiffPaths.NormalizeRequested(query.Files, index.RepositoryRoot);
+                        var expand = DiffPaths.NormalizeRequested(query.Files, index.RepositoryRoot).Paths;
                         return _view.ShowIndexAsync(terminalId, index, worktrees, query.Note, expand, token);
                     },
                     cancellationToken)

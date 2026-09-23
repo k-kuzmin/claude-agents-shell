@@ -219,6 +219,23 @@ public sealed class GitDiffReaderTests
         Assert.Equal(DiffCollapseReason.None, collapse["bin.dat"]);
     }
 
+    [Theory]
+    [InlineData(".")]
+    [InlineData(".", "src/a.cs")]
+    public async Task Корень_в_files_означает_весь_репозиторий_без_сужения(params string[] files)
+    {
+        using var repository = CreateFeatureBranch();
+        repository.Write("src/a.cs", "changed\n");
+        repository.Write("package-lock.json", "{}\n");
+
+        var index = await CreateReader().ListChangesAsync(Request(repository.Root, null, false, files), CancellationToken.None);
+
+        var collapse = index.Files.ToDictionary(static f => f.Path, static f => f.Collapse);
+        Assert.Equal(2, collapse.Count);
+        Assert.Equal(DiffCollapseReason.None, collapse["src/a.cs"]);
+        Assert.Equal(DiffCollapseReason.Generated, collapse["package-lock.json"]);
+    }
+
     [Fact]
     public async Task Файлы_под_названным_каталогом_сворачиваются_как_обычно_а_названные_точно_нет()
     {

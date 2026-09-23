@@ -114,11 +114,13 @@ public sealed class GitDiffReader : IGitDiffReader
     private async Task<DiffIndex> ListCoreAsync(DiffRequest request, CancellationToken cancellationToken)
     {
         var root = await ResolveRootAsync(request.Directory, cancellationToken).ConfigureAwait(false);
-        var requested = DiffPaths.NormalizeRequested(request.Files, root);
-        if (request.Files.Count > 0 && requested.Count == 0)
+        var selection = DiffPaths.NormalizeRequested(request.Files, root);
+        if (selection.AllOutside)
         {
             throw new DiffUnavailableException(DiffFailure.GitFailed, "Указанные файлы лежат вне репозитория " + root + ".");
         }
+
+        var requested = selection.Paths;
 
         // Неотслеживаемые не зависят от базы — считаются параллельно с её поиском.
         using var scope = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

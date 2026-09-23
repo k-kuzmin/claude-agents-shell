@@ -40,7 +40,7 @@ public sealed class ShowDiffTool : IMcpTool
             "files": {
               "type": "array",
               "items": { "type": "string" },
-              "description": "Repository-relative paths to show and expand. Other changed files are left out. Default: all changed files."
+              "description": "Repository-relative files or directories to show. Other changed files are left out. Files named exactly are always expanded; files under a named directory are expanded within the usual budget. Default: all changed files."
             },
             "note": {
               "type": "string",

@@ -7,11 +7,14 @@ namespace ClaudeAgentsShell.Domain;
 /// </summary>
 public static class DiffPaths
 {
+    /// <summary>Приведённый путь, обозначающий сам корень — весь репозиторий.</summary>
+    public const string Root = ".";
+
     /// <summary>
     /// Приводит путь к виду pathspec от корня: разделители <c>/</c>, сегменты <c>.</c> и <c>..</c>
     /// схлопнуты (строково, без обращения к диску), ведущие <c>/</c> и <c>./</c> отброшены;
-    /// абсолютный путь внутри корня становится относительным. <c>null</c> — путь пустой, сам корень
-    /// или выходит за корень (абсолютный вне него или относительный, поднимающийся выше через <c>..</c>).
+    /// абсолютный путь внутри корня становится относительным. Сам корень (<c>.</c>, <c>src/..</c>,
+    /// абсолютный путь корня) даёт <see cref="Root"/>. <c>null</c> — путь пустой или выходит за корень (абсолютный вне него или относительный, поднимающийся выше через <c>..</c>).
     /// </summary>
     /// <remarks>
     /// Регистр не приводится: git сравнивает pathspec с учётом регистра, и <c>SRC/b.cs</c> не
@@ -61,27 +64,47 @@ public static class DiffPaths
             }
         }
 
-        return segments.Count == 0 ? null : string.Join('/', segments);
+        return segments.Count == 0 ? Root : string.Join('/', segments);
     }
 
     /// <summary>
-    /// Приводит список путей по <see cref="NormalizeRequested(string, string)"/>: пути вне корня
-    /// отбрасываются, повторы схлопываются, порядок сохраняется.
+    /// Приводит список путей по <see cref="NormalizeRequested(string, string)"/>: пустые и лежащие
+    /// вне корня отбрасываются, повторы схлопываются, порядок сохраняется. Корень среди путей
+    /// снимает сужение целиком — запрос ведёт себя как пустой.
     /// </summary>
-    public static IReadOnlyList<string> NormalizeRequested(IReadOnlyList<string> paths, string repositoryRoot)
+    public static RequestedPaths NormalizeRequested(IReadOnlyList<string> paths, string repositoryRoot)
     {
         ArgumentNullException.ThrowIfNull(paths);
         var result = new List<string>(paths.Count);
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var named = false;
         foreach (var path in paths)
         {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            named = true;
             var normalized = NormalizeRequested(path, repositoryRoot);
+            if (normalized == Root)
+            {
+                return new RequestedPaths([], AllOutside: false);
+            }
+
             if (normalized is not null && seen.Add(normalized))
             {
                 result.Add(normalized);
             }
         }
 
-        return result;
+        return new RequestedPaths(result, AllOutside: named && result.Count == 0);
     }
 }
+
+/// <summary>Запрошенные пути после приведения <see cref="DiffPaths"/>.</summary>
+/// <param name="Paths">
+/// Pathspec от корня без повторов, в порядке запроса. Пусто — сужения нет: весь репозиторий.
+/// </param>
+/// <param name="AllOutside">Пути названы, но все лежат вне корня — сужать не до чего.</param>
+public sealed record RequestedPaths(IReadOnlyList<string> Paths, bool AllOutside);
