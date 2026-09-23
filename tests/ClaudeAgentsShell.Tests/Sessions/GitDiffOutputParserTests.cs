@@ -129,16 +129,16 @@ public sealed class GitDiffOutputParserTests
     }
 
     [Fact]
-    public void Счётчики_с_w_заменяют_прежние_а_файл_без_записи_получает_ноль()
+    public void Счётчики_и_бинарность_берутся_из_numstat_с_w_а_файл_без_записи_получает_ноль()
     {
         DiffFileEntry[] entries =
         [
-            new("a.txt", null, DiffChangeKind.Modified, 5, 2, DiffCollapseReason.None),
-            new("spaces.txt", null, DiffChangeKind.Modified, 1, 1, DiffCollapseReason.None),
-            new("bin.dat", null, DiffChangeKind.Modified, null, null, DiffCollapseReason.None),
+            new("a.txt", null, DiffChangeKind.Modified, 0, 0, DiffCollapseReason.None),
+            new("spaces.txt", null, DiffChangeKind.Modified, 0, 0, DiffCollapseReason.None),
+            new("bin.dat", null, DiffChangeKind.Modified, 0, 0, DiffCollapseReason.None),
         ];
 
-        var result = GitDiffOutputParser.WithWhitespaceIgnoredCounts(entries, GitDiffOutputParser.ParseNumstat("4\t1\ta.txt\0"));
+        var result = GitDiffOutputParser.WithWhitespaceIgnoredCounts(entries, GitDiffOutputParser.ParseNumstat("4\t1\ta.txt\0-\t-\tbin.dat\0"));
 
         Assert.Equal(["a.txt", "spaces.txt", "bin.dat"], result.Select(static e => e.Path));
         Assert.Equal((4, 1), (result[0].AddedLines, result[0].DeletedLines));

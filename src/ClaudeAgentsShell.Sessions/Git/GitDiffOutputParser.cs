@@ -92,7 +92,8 @@ public static class GitDiffOutputParser
 
         for (var index = 0; index < entries.Count; index++)
         {
-            // Нет записи numstat — строк не изменилось (так бывает с -w); бинарный пришёл бы как -\t-.
+            // Запасной 0/0: вывод только --raw (под -w счётчики приходят отдельной командой) или
+            // запись numstat не пришла. Бинарный в numstat пришёл бы как -\t-.
             var count = counts.TryGetValue(entries[index].Path, out var found) ? found : (0, 0);
             entries[index] = entries[index] with { AddedLines = count.Added, DeletedLines = count.Deleted };
         }
@@ -122,8 +123,9 @@ public static class GitDiffOutputParser
     }
 
     /// <summary>
-    /// Заменяет счётчики строк оглавления, построенного без <c>-w</c>, счётчиками numstat с <c>-w</c>.
-    /// Нет записи — под <c>-w</c> строк не изменилось: 0/0. Бинарный (<c>null</c>/<c>null</c>) остаётся бинарным.
+    /// Проставляет строкам оглавления, построенного <c>diff --raw</c> без <c>-w</c>, счётчики и
+    /// бинарность из <c>diff --numstat -w</c>. Бинарный приходит в нём как <c>-\t-</c> и получает
+    /// <c>null</c>/<c>null</c>; нет записи — под <c>-w</c> строк не изменилось: текстовый 0/0.
     /// </summary>
     /// <remarks>
     /// Список файлов строится без <c>-w</c> намеренно: git 2.55 под <c>-w</c> не выдаёт raw-запись
@@ -137,12 +139,6 @@ public static class GitDiffOutputParser
         var result = new List<DiffFileEntry>(entries.Count);
         foreach (var entry in entries)
         {
-            if (entry.AddedLines is null && entry.DeletedLines is null)
-            {
-                result.Add(entry);
-                continue;
-            }
-
             var count = counts.TryGetValue(entry.Path, out var found) ? found : (0, 0);
             result.Add(entry with { AddedLines = count.Added, DeletedLines = count.Deleted });
         }

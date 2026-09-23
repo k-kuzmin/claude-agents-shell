@@ -368,6 +368,34 @@ public sealed class GitDiffReaderTests
     }
 
     [Fact]
+    public async Task Под_w_счётчики_заменяются_по_ключам_списка_а_бинарный_остаётся_бинарным()
+    {
+        using var repository = CreateFeatureBranch();
+        repository.Git("mv", "rename me.txt", "пробелы.txt");
+        repository.Write("пробелы.txt", string.Join('\n', Enumerable.Range(1, 40).Select(static n => n == 5 ? "  5" : n.ToString(System.Globalization.CultureInfo.InvariantCulture))) + "\n");
+        repository.Git("add", "-A");
+        repository.Write("src/a.cs", "one\n  two\nCHANGED\n");
+        repository.WriteBytes("bin.dat", [0, 9, 9, 9]);
+        var reader = CreateReader();
+
+        var plain = await reader.ListChangesAsync(Request(repository.Root), CancellationToken.None);
+        var ignoring = await reader.ListChangesAsync(Request(repository.Root, ignoreWhitespace: true), CancellationToken.None);
+
+        var before = plain.Files.ToDictionary(static f => f.Path);
+        var after = ignoring.Files.ToDictionary(static f => f.Path);
+        Assert.Equal(before.Keys.Order(StringComparer.Ordinal), after.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(3, after.Count);
+
+        Assert.Equal((1, 1), (before["пробелы.txt"].AddedLines, before["пробелы.txt"].DeletedLines));
+        Assert.Equal(new DiffFileEntry("пробелы.txt", "rename me.txt", DiffChangeKind.Renamed, 0, 0, DiffCollapseReason.None), after["пробелы.txt"]);
+
+        Assert.Equal((2, 2), (before["src/a.cs"].AddedLines, before["src/a.cs"].DeletedLines));
+        Assert.Equal((1, 1), (after["src/a.cs"].AddedLines, after["src/a.cs"].DeletedLines));
+
+        Assert.Equal(new DiffFileEntry("bin.dat", null, DiffChangeKind.Modified, null, null, DiffCollapseReason.Binary), after["bin.dat"]);
+    }
+
+    [Fact]
     public async Task Потолок_обрывает_diff_по_целой_строке()
     {
         using var repository = CreateFeatureBranch();
