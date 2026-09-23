@@ -36,6 +36,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// <param name="layout">Раскладка окна: восстановление, снимок и запись по изменениям (issue #4).</param>
     /// <param name="diff">Панель diff вкладок (issue #5).</param>
     /// <param name="diffStale">Плашка «есть изменения» у открытой панели diff по хукам.</param>
+    /// <param name="appVersion">Версия приложения для подписи в углу окна.</param>
     public ShellViewModel(
         ITerminalWorkspace workspace,
         ProjectListViewModel projects,
@@ -44,7 +45,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         SessionStateCoordinator sessionState,
         WorkspaceLayoutService layout,
         DiffCoordinator diff,
-        DiffStaleTracker diffStale)
+        DiffStaleTracker diffStale,
+        IAppVersion appVersion)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(projects);
@@ -54,6 +56,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(diff);
         ArgumentNullException.ThrowIfNull(diffStale);
+        ArgumentNullException.ThrowIfNull(appVersion);
 
         _workspace = workspace;
         _prompt = prompt;
@@ -65,6 +68,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
 
         Projects = projects;
         Tabs = new TabStripViewModel();
+        Version = AppVersionText.From(appVersion.InformationalVersion);
 
         AddProjectCommand = new AsyncRelayCommand(_ => AddProjectAsync(CancellationToken.None), onError: ReportError);
         OpenSessionCommand = new AsyncRelayCommand(
@@ -154,6 +158,9 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
 
     /// <summary>Полоса вкладок.</summary>
     public TabStripViewModel Tabs { get; }
+
+    /// <summary>Подписи версии приложения в левом нижнем углу окна.</summary>
+    public AppVersionText Version { get; }
 
     /// <summary>Добавить проект в список.</summary>
     public ICommand AddProjectCommand { get; }

@@ -1,3 +1,4 @@
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Domain;
@@ -44,7 +45,7 @@ public sealed class LayoutRestoreTests
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, Layouts.CreateService(Time),
-                Diff.Coordinator, Diff.Tracker);
+                Diff.Coordinator, Diff.Tracker, new AssemblyAppVersion(typeof(ShellViewModel).Assembly));
         }
 
         public FakeProjectStore Store { get; } = new();

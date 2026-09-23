@@ -13,6 +13,9 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <Deterministic>true</Deterministic>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Версия локальной сборки. Релиз переопределяет её тегом через -p:Version
+         (.github/workflows/release.yml); SDK сам дописывает +<хэш коммита>. -->
+    <Version>0.0.0-dev</Version>
   </PropertyGroup>
 
 </Project>

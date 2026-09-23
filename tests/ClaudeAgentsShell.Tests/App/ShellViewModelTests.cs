@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
@@ -37,7 +38,7 @@ public sealed class ShellViewModelTests
             var layouts = new FakeLayoutStore();
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts.CreateService(),
-                Diff.Coordinator, Diff.Tracker);
+                Diff.Coordinator, Diff.Tracker, new AssemblyAppVersion(typeof(ShellViewModel).Assembly));
         }
 
         public FakeProjectStore Store { get; } = new();

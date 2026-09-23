@@ -54,6 +54,7 @@ internal static class AppComposition
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
         services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
         services.AddSingleton<IProjectSettingsDialog, ProjectSettingsWindowDialog>();
+        services.AddSingleton<IAppVersion>(static _ => new AssemblyAppVersion(typeof(AppComposition).Assembly));
 
         // Глобальные обработчики исключений; ICrashLog регистрирует слой Sessions.
         // Признак гашения общий на приложение: его взводит окно, а читает докладчик о сбоях.
