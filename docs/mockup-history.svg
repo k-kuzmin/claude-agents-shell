@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" width="1200" height="750" font-family="'Segoe UI', 'IBM Plex Sans', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif">
-<title>Claude Agents Shell — главное окно</title>
-<desc>Слева панель проектов с маркерами состояния и числом сессий, справа вкладки-сессии выбранного проекта и терминал с TUI Claude Code. Данные вымышленные.</desc>
+<title>Claude Agents Shell — история сессий</title>
+<desc>Окно истории сессий проекта поверх главного окна: поиск, строки с датой, веткой и коротким идентификатором, пометка «открыта». Данные вымышленные.</desc>
 <defs><clipPath id="window"><rect width="1440" height="900" rx="12"/></clipPath></defs>
 <g clip-path="url(#window)">
 <rect x="0" y="0" width="1440" height="900" fill="#121211"/>
@@ -161,5 +161,71 @@
 <line x1="264" y1="859.5" x2="1426" y2="859.5" stroke="#6E6960" stroke-width="1.2"/>
 <text x="264" y="881" font-size="14" font-family="Consolas, 'Cascadia Mono', Menlo, 'DejaVu Sans Mono', monospace" xml:space="preserve"><tspan fill="#AF87FF">  ⏵⏵ accept edits on </tspan><tspan fill="#8A857C">(shift+tab to cycle)</tspan></text>
 </g>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000" flood-opacity="0.6"/></filter>
+<rect x="360" y="180" width="720" height="540" fill="#191816" filter="url(#shadow)"/>
+<rect x="360.5" y="180.5" width="719" height="539" fill="none" stroke="#332F2B" stroke-width="1"/>
+<line x1="361" y1="220.5" x2="1079" y2="220.5" stroke="#2B2825" stroke-width="1"/>
+<text x="377" y="205.3" font-size="12.5"><tspan fill="#8A857C">История сессий</tspan><tspan dx="8" fill="#E9E6E0" font-weight="600">kassa</tspan></text>
+<path transform="translate(1052.25 195.25)" d="M2.5,2.5 L11.5,11.5 M11.5,2.5 L2.5,11.5" fill="none" stroke="#9C968C" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="377.5" y="235.5" width="685" height="35" rx="8" fill="#121211" stroke="#2B2825" stroke-width="1"/>
+<path transform="translate(390 246) scale(0.7)" d="M4,11 A7,7 0 1 0 18,11 A7,7 0 1 0 4,11 Z M20,20 L16.5,16.5" fill="none" stroke="#8A857C" stroke-width="2.6" stroke-linecap="round"/>
+<rect x="413" y="245" width="1.5" height="16" fill="#D97757"/>
+<text x="415" y="257.5" font-size="13" fill="#6E6960">Поиск по первому сообщению…</text>
+<line x1="361" y1="285.5" x2="1079" y2="285.5" stroke="#2B2825" stroke-width="1"/>
+<line x1="361" y1="680.5" x2="1079" y2="680.5" stroke="#2B2825" stroke-width="1"/>
+<clipPath id="c12"><rect x="361" y="286" width="718" height="394"/></clipPath>
+<g clip-path="url(#c12)">
+<text x="1049" y="325.9" font-size="11" fill="#6FA8A0" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace" text-anchor="end">открыта</text>
+<clipPath id="c13"><rect x="383" y="294" width="607.8" height="56"/></clipPath>
+<g clip-path="url(#c13)">
+<text x="383" y="317.5" font-size="13" fill="#C9C4BB">добавь частичные возвраты: сумма не больше остатка, повтор с тем же ключом — тот же результат</text>
+<text x="383" y="336" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">сегодня 14:36 · feat/refunds · 0d41f2a7</text>
+</g>
+<text x="1049" y="383.9" font-size="11" fill="#6FA8A0" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace" text-anchor="end">открыта</text>
+<clipPath id="c14"><rect x="383" y="352" width="607.8" height="56"/></clipPath>
+<g clip-path="url(#c14)">
+<text x="383" y="375.5" font-size="13" fill="#C9C4BB">миграция: колонка refunded_amount, заполнить из истории операций</text>
+<text x="383" y="394" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">сегодня 13:05 · feat/refunds · 7be0c193</text>
+</g>
+<rect x="369" y="410" width="692" height="56" rx="9" fill="#262320"/>
+<clipPath id="c15"><rect x="369" y="410" width="692" height="56" rx="9"/></clipPath>
+<rect x="369" y="410" width="2" height="56" fill="#D97757" clip-path="url(#c15)"/>
+<rect x="976.44" y="424" width="72.56" height="28" rx="7" fill="#D97757"/>
+<text x="1012.72" y="442.3" font-size="12" fill="#1A0E08" font-weight="600" text-anchor="middle">Открыть</text>
+<clipPath id="c16"><rect x="383" y="410" width="571.44" height="56"/></clipPath>
+<g clip-path="url(#c16)">
+<text x="383" y="433.5" font-size="13" fill="#E9E6E0">почему RefundServiceTests.RetriesOnTimeout падает только на CI</text>
+<text x="383" y="452" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">вчера 21:48 · main · c40a5f2e</text>
+</g>
+<clipPath id="c17"><rect x="383" y="468" width="654" height="56"/></clipPath>
+<g clip-path="url(#c17)">
+<text x="383" y="491.5" font-size="13" fill="#C9C4BB">набросай нагрузочный сценарий на k6: 200 rps на /refunds, отчёт в markdown</text>
+<text x="383" y="510" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">вчера 16:11 · perf/k6 · 91d7ab60</text>
+</g>
+<clipPath id="c18"><rect x="383" y="526" width="654" height="56"/></clipPath>
+<g clip-path="url(#c18)">
+<text x="383" y="549" font-size="12" fill="#9C968C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">3f2a9e1b-5c7d-4e8a-9b0c-1d2e3f4a5b6c.jsonl</text>
+<text x="383" y="568" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">18 сен 11:24 · main · 3f2a9e1b</text>
+</g>
+<clipPath id="c19"><rect x="383" y="584" width="654" height="56"/></clipPath>
+<g clip-path="url(#c19)">
+<text x="383" y="607.5" font-size="13" fill="#C9C4BB">вынеси расчёт комиссии в отдельный сервис, публичный API не ломай</text>
+<text x="383" y="626" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">15 сен 10:02 · feat/fees · 55e1c7d4</text>
+</g>
+<clipPath id="c20"><rect x="383" y="642" width="654" height="56"/></clipPath>
+<g clip-path="url(#c20)">
+<text x="383" y="665.5" font-size="13" fill="#C9C4BB">разбери логи воркера за ночь и найди, почему дублируются чеки</text>
+<text x="383" y="684" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">12 сен 09:50 · main · 2ae90b17</text>
+</g>
+</g>
+<rect x="1063" y="296" width="6" height="140.4" rx="3" fill="#332F2B"/>
+<text x="377" y="703.8" font-size="11" fill="#6E6960" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">↑↓ выбрать</text>
+<rect x="455.5" y="691.5" width="42" height="17" rx="4" fill="none" stroke="#332F2B" stroke-width="1"/>
+<text x="476.5" y="703.8" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace" text-anchor="middle">Enter</text>
+<text x="504" y="703.8" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">открыть во вкладке</text>
+<rect x="641.3" y="691.5" width="28.8" height="17" rx="4" fill="none" stroke="#332F2B" stroke-width="1"/>
+<text x="655.7" y="703.8" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace" text-anchor="middle">Esc</text>
+<text x="676.6" y="703.8" font-size="11" fill="#8A857C" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace">закрыть</text>
+<text x="1063" y="703.8" font-size="11" fill="#6E6960" font-family="'Cascadia Mono', Consolas, 'JetBrains Mono', Menlo, 'DejaVu Sans Mono', monospace" text-anchor="end">~/.claude/projects</text>
 </g>
 </svg>
