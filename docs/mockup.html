@@ -4,325 +4,370 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Claude Agents Shell — макет</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<!-- Самодостаточный файл: ни CDN, ни внешних шрифтов. Цвета и размеры — из
+     src/ClaudeAgentsShell.App/Views/Theme.xaml, разметки панелей и web/diff.css; данные вымышленные.
+     Статичные картинки для README — docs/mockup.svg, docs/mockup-diff.svg, docs/mockup-history.svg. -->
 <style>
-  body { margin: 0; padding: 48px 40px 64px 40px; background: #0B0B0A; color: #E9E6E0;
-         font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
-  button { font-family: inherit; border: 0; background: none; color: inherit; }
-  input, select, textarea { font-family: inherit; }
-  h1 { margin: 0 0 6px 0; font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
-  p.lede { margin: 0 0 44px 0; font-size: 14px; color: #9C968C; max-width: 70ch; }
+:root {
+  --window: #121211; --chrome: #191816; --work: #0E0E0D; --row-hover: #262320; --btn-hover: #35302B;
+  --sep: #2B2825; --outline: #332F2B;
+  --primary: #E9E6E0; --secondary: #C9C4BB; --muted: #9C968C; --faint: #8A857C; --disabled: #6E6960;
+  --accent: #D97757; --calm: #6FA8A0; --unknown: #4A4640; --bgwork: #6E86B0; --exit-failure: #C2564A;
+  --diff-added: #7FB069; --diff-removed: #C2564A; --on-accent: #1A0E08;
+  /* WPF: UiFontFamily = IBM Plex Sans, Segoe UI; MonoFontFamily = JetBrains Mono, Cascadia Mono, Consolas.
+     Страница терминалов (web/): Consolas, 'Cascadia Mono', monospace. Внешних шрифтов нет — только системные. */
+  --ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --term: Consolas, "Cascadia Mono", monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 48px 40px 64px; background: #0B0B0A; color: var(--primary); font-family: var(--ui);
+       -webkit-font-smoothing: antialiased; }
+button { font: inherit; border: 0; background: none; color: inherit; padding: 0; }
+h1 { margin: 0 0 6px; font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+p.lede { margin: 0 0 40px; font-size: 14px; line-height: 1.55; color: var(--muted); max-width: 88ch; }
+section { margin: 0 0 56px; }
+h2 { margin: 0 0 6px; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+p.note { margin: 0 0 14px; font-size: 13px; color: var(--muted); max-width: 100ch; line-height: 1.5; }
+.frame { display: inline-block; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+.mono { font-family: var(--mono); }
+.dot { width: 6px; height: 6px; border-radius: 3px; flex: 0 0 auto; }
+.s-busy { background: var(--calm); } .s-awaiting { background: var(--accent); } .s-background { background: var(--bgwork); }
+.s-idle { background: var(--disabled); } .s-unknown { background: var(--unknown); }
+svg.i { display: block; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---- окно ---- */
+.win { width: 1440px; height: 900px; display: flex; flex-direction: column; background: var(--window); overflow: hidden; position: relative; }
+.titlebar { height: 38px; flex: 0 0 auto; display: flex; align-items: center; padding-left: 12px; background: var(--chrome);
+            border-bottom: 1px solid var(--sep); }
+.titlebar .name { margin-left: 10px; font-size: 12.5px; font-weight: 600; flex: 1; }
+.caption { width: 34px; height: 30px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+.caption:last-child { margin-right: 4px; }
+.caption:hover, .flat:hover { background: var(--btn-hover); }
+.body { flex: 1; display: flex; min-height: 0; }
+
+/* ---- панель проектов (Views/ProjectsPanel.xaml) ---- */
+.projects { width: 256px; flex: 0 0 auto; display: flex; flex-direction: column; background: var(--chrome); border-right: 1px solid var(--sep); }
+.phead { margin: 16px 12px 10px 14px; display: flex; align-items: center; justify-content: space-between; }
+.caption-text { font-size: 10.5px; font-weight: 600; color: var(--faint); }
+.outlined { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--outline); display: flex; align-items: center; justify-content: center; }
+.plist { flex: 1; padding: 0 8px 10px; }
+.prow { margin-bottom: 2px; padding: 7px 7px 7px 10px; border-radius: 8px; border-left: 2px solid transparent; display: flex; align-items: center; }
+.prow.hover { background: var(--row-hover); }
+.prow.current { background: var(--row-hover); border-left-color: var(--accent); }
+.prow.missing { opacity: .45; }
+.prow .text { flex: 1; min-width: 0; }
+.pname { font-size: 13px; font-weight: 600; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prow.current .pname { color: var(--primary); }
+.prow.missing .pname { text-decoration: line-through; }
+.ppath { margin-top: 3px; font-size: 11px; font-family: var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prest { display: flex; align-items: center; gap: 6px; margin-right: 8px; font-size: 10.5px; font-family: var(--mono); color: var(--faint); }
+.pbtns { display: flex; }
+.flat { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+.flat.hot { background: var(--btn-hover); }
+.version { margin: 6px 12px 12px 14px; font-size: 10.5px; font-family: var(--mono); color: var(--disabled); }
+
+/* ---- полоса вкладок (Views/TabStrip.xaml) ---- */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--work); }
+.tabs { height: 40px; flex: 0 0 auto; display: flex; background: var(--chrome); border-bottom: 1px solid var(--sep); }
+.tab { flex: 0 0 auto; padding: 0 10px 0 14px; display: flex; align-items: center; border-top: 2px solid var(--sep); border-right: 1px solid var(--sep); }
+.tab.active { background: var(--work); }
+.tab .dot { margin-right: 9px; }
+.tab .ttl { flex: 1; min-width: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab.active .ttl { color: var(--primary); }
+.tab .badge-exit { margin: 0 6px 0 4px; font-size: 10.5px; font-family: var(--mono); color: var(--exit-failure); }
+.tb { width: 20px; height: 20px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; position: relative; }
+.tb .pending { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); top: 3px; right: 2px; }
+.newtab { width: 38px; display: flex; align-items: center; justify-content: center; }
+.awaiting { margin: 0 14px 0 auto; display: flex; align-items: center; gap: 7px; font-size: 11px; font-family: var(--mono); color: var(--faint); padding-left: 10px; }
+
+/* ---- терминал (web/app.js: Consolas 14px, lineHeight 1.2; фон #0E0E0D) ---- */
+.termhost { flex: 1; min-height: 0; margin: 0 6px 6px 0; position: relative; }
+.term { position: absolute; inset: 0; padding: 8px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end;
+        font: 14px/17px var(--term); color: #C9C4BB; white-space: pre; }
+.term .rule { height: 17px; background: linear-gradient(#6E6960, #6E6960) center / 100% 1px no-repeat; }
+.term .cur { background: #E9E6E0; }
+
+/* ---- панель diff (web/diff.css) ---- */
+.diff-panel { position: absolute; inset: 0; display: flex; flex-direction: column; background: #121211; color: #C9C4BB;
+              font-family: 'Segoe UI', system-ui, sans-serif; font-size: 12px; }
+/* Как в web/diff.css: это правило (0,1,1) перекрывает шрифт, размер и цвет у .diff-ext, .row-btn, .diff-close и
+   .diff-stale (0,1,0) — в приложении они рисуются унаследованным шрифтом 12px и цветом панели. */
+.diff-panel button, .diff-panel select, .diff-panel input { font-family: inherit; font-size: 12px; color: inherit; }
+.diff-bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: #191816; border-bottom: 1px solid #2B2825; }
+.diff-heading { flex: 1; min-width: 0; }
+.diff-title { color: #E9E6E0; font-size: 13px; font-weight: 600; }
+.diff-info { margin-top: 2px; color: #8A857C; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 11px; }
+.diff-controls { display: flex; align-items: center; gap: 8px; }
+.diff-ws { color: #9C968C; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
+.diff-ws input { margin: 0; accent-color: #D97757; }
+.diff-worktree { max-width: 260px; background: #121211; border: 1px solid #332F2B; border-radius: 4px; padding: 2px 4px; }
+.diff-btn, .row-btn, .diff-ext { background: none; border: 1px solid #332F2B; border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+.diff-btn:hover, .row-btn:hover { border-color: #6E6960; color: #E9E6E0; }
+.diff-close { font-size: 16px; line-height: 16px; padding: 2px 8px 4px; }
+.diff-stale { display: block; width: 100%; padding: 6px 12px; text-align: left; color: #1A0E08; background: #D97757; font-weight: 600; }
+.diff-body { flex: 1; min-height: 0; display: flex; }
+.diff-side { flex: 0 0 300px; width: 300px; min-width: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid #2B2825; background: #0E0E0D; }
+.diff-search { margin: 8px; padding: 4px 8px; background: #121211; border: 1px solid #332F2B; border-radius: 4px; outline: none; }
+.diff-search::placeholder { color: #6E6960; }
+.diff-exts { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 8px 6px; }
+.diff-ext { padding: 1px 6px; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 11px; color: #E9E6E0; border-color: #6FA8A0; }
+.diff-ext.off { color: #6E6960; border-color: #332F2B; text-decoration: line-through; }
+.diff-summary { padding: 0 8px 6px; color: #8A857C; font-size: 11px; }
+.diff-toc { flex: 1; border-top: 1px solid #2B2825; overflow: hidden; }
+.toc-row { height: 24px; line-height: 24px; padding: 0 8px; display: flex; align-items: center; gap: 6px; white-space: pre; }
+.toc-row.hover { background: #191816; }
+.toc-kind { flex: 0 0 auto; width: 14px; text-align: center; font-family: Consolas, 'Cascadia Mono', monospace; font-weight: 600; color: #9C968C; }
+.k-A, .k-U { color: #6FA8A0; } .k-D { color: #D97757; }
+.toc-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.toc-dir { color: #6E6960; } .toc-name { color: #E9E6E0; }
+.toc-stat { flex: 0 0 auto; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 11px; color: #8A857C; }
+.badge { flex: 0 0 auto; padding: 0 5px; border-radius: 3px; background: #2B2825; color: #9C968C; font-size: 10.5px; line-height: 16px;
+         font-family: 'Segoe UI', system-ui, sans-serif; }
+.diff-main { flex: 1; min-width: 0; overflow: hidden; font-family: Consolas, 'Cascadia Mono', monospace; font-size: 12px; position: relative; }
+.diff-main .r { height: 20px; line-height: 20px; display: flex; align-items: center; white-space: pre; tab-size: 4; }
+.file-row { background: #191816; border-top: 1px solid #2B2825; border-bottom: 1px solid #2B2825; font-family: 'Segoe UI', system-ui, sans-serif;
+            padding: 0 12px; gap: 8px; }
+.file-path { color: #E9E6E0; font-family: Consolas, 'Cascadia Mono', monospace; }
+.row-btn { padding: 0 6px; line-height: 16px; font-size: 11px; color: #9C968C; }
+.file-row .row-btn:first-of-type { margin-left: auto; }
+.note-row { color: #8A857C; font-family: 'Segoe UI', system-ui, sans-serif; padding: 0 12px; gap: 4px; }
+.line-row .no { flex: 0 0 6ch; padding-right: 1ch; box-sizing: content-box; text-align: right; color: #6E6960; }
+.line-row .sign { flex: 0 0 2ch; text-align: center; }
+.t-a { background: rgba(111,168,160,.14); } .t-a .sign { color: #6FA8A0; }
+.t-d { background: rgba(217,119,87,.14); } .t-d .sign { color: #D97757; }
+.t-h { background: #1F2321; color: #6FA8A0; }
+.vscroll { position: absolute; right: 0; top: 180px; width: 10px; height: 120px; border-radius: 5px; background: #2a2a28; }
+
+/* ---- окно истории (Views/SessionHistoryWindow.xaml) ---- */
+.dlg { background: var(--chrome); border: 1px solid var(--outline); display: flex; flex-direction: column; color: var(--primary); }
+.dlg-title { height: 40px; flex: 0 0 auto; display: flex; align-items: center; padding-left: 16px; border-bottom: 1px solid var(--sep); font-size: 12.5px; }
+.dlg-title .caption { margin-left: auto; }
+.hist { width: 720px; height: 540px; }
+.hsearch { padding: 14px 16px; border-bottom: 1px solid var(--sep); }
+.hsearch .box { height: 36px; padding: 0 12px; display: flex; align-items: center; gap: 9px; background: var(--window); border: 1px solid var(--sep); border-radius: 8px; }
+.hsearch input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--primary); font: 13px var(--ui); caret-color: var(--accent); }
+.hsearch input::placeholder { color: var(--disabled); }
+.hlist { flex: 1; min-height: 0; padding: 8px; display: flex; gap: 0; overflow: hidden; }
+.hrows { flex: 1; min-width: 0; }
+.hrow { margin-bottom: 2px; padding: 10px 12px; border-radius: 9px; border-left: 2px solid transparent; display: flex; align-items: center; }
+.hrow:hover { background: var(--row-hover); }
+.hrow.sel { background: var(--row-hover); border-left-color: var(--accent); }
+.hrow .text { flex: 1; min-width: 0; margin-right: 12px; }
+.htitle { font-size: 13px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hrow.sel .htitle { color: var(--primary); }
+.htitle.missing { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.hdetails { margin-top: 4px; font-size: 11px; font-family: var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.open-mark { font-size: 11px; font-family: var(--mono); color: var(--calm); }
+.accept { margin-left: 10px; height: 28px; padding: 0 12px; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 600; }
+.thin-scroll { flex: 0 0 10px; padding: 2px; }
+.thin-scroll div { height: 42%; border-radius: 3px; background: var(--outline); }
+.hfoot { flex: 0 0 auto; padding: 7px 16px; border-top: 1px solid var(--sep); display: flex; align-items: center; font-size: 11px; font-family: var(--mono); color: var(--disabled); }
+.hfoot .hint { height: 24px; display: flex; align-items: center; margin-right: 6px; color: var(--faint); }
+.kcap { margin: 0 6px; padding: 1px 5px; border: 1px solid var(--outline); border-radius: 4px; }
+.hfoot .status { margin-left: auto; }
+
+/* ---- настройки проекта (Views/ProjectSettingsWindow.xaml) ---- */
+.settings { width: 560px; }
+.settings .dlg-title { font-weight: 600; background: var(--chrome); }
+.sform { padding: 18px 20px; background: var(--chrome); }
+.flabel { display: block; font-size: 11px; font-weight: 600; color: var(--muted); margin: 16px 0 5px; }
+.flabel:first-child { margin-top: 0; }
+.field { width: 100%; height: 30px; padding: 0 9px; background: var(--work); color: var(--primary); border: 1px solid var(--outline); border-radius: 6px;
+         font: 12.5px var(--ui); outline: none; }
+.field.mono { font: 11.5px var(--mono); }
+.fhint { margin-top: 5px; font-size: 11px; color: var(--faint); }
+.dbtn { height: 32px; min-width: 104px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--outline); color: var(--secondary); font-size: 12.5px; }
+.dbtn.primary { background: var(--accent); border-color: var(--accent); color: var(--work); font-weight: 600; }
+.sfoot { padding: 14px 20px; border-top: 1px solid var(--sep); display: flex; justify-content: flex-end; gap: 10px; }
+
+/* ---- легенда ---- */
+.legend { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: 18px 0 0; font-size: 12.5px; color: var(--secondary); }
+.legend div { display: flex; align-items: center; gap: 8px; }
+.legend .mono { font-size: 11px; }
 </style>
 </head>
 <body>
 <h1>Claude Agents Shell</h1>
-<p class="lede">Статичный макет: панель проектов слева, вкладки-сессии и терминал справа. Действия живут на строке проекта — плюс открывает новую сессию, часы со стрелкой открывают историю сессий этого проекта.</p>
-<section style="margin: 0 0 56px 0;">
-<h2 style="margin: 0 0 14px 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #8A857C;">Главное окно</h2>
-<div style="display: inline-block; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,0.45);">
-<div style="width: 1440px; height: 900px; box-sizing: border-box; display: flex; flex-direction: column; background: #121211; color: #E9E6E0; overflow: hidden;">
+<p class="lede">Статичный макет по фактическому интерфейсу: панель проектов слева, вкладки-сессии выбранного проекта
+и терминал справа. Действия живут на строке проекта: плюс открывает новую сессию, часы со стрелкой — историю сессий
+этого проекта. Полоса вкладок показывает только вкладки выбранного проекта; счётчик «ждёт ввода» считает все проекты.</p>
 
-  <!-- ===== title bar ===== -->
-  <div style="height: 38px; flex-shrink: 0; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 0 4px 0 12px; background: #191816; border-bottom: 1px solid #2B2825;">
-    <div style="width: 16px; height: 16px; border-radius: 4px; background: #D97757; flex-shrink: 0;"></div>
-    <div style="font-size: 12.5px; font-weight: 600; letter-spacing: 0.01em;">Claude Agents Shell</div>
-    <div style="flex-grow: 1;"></div>
-    <button aria-label="Настройки" style="width: 34px; height: 30px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #9C968C;">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"></path></svg>
-    </button>
-    <button aria-label="Свернуть" style="width: 34px; height: 30px; border-radius: 6px; color: #9C968C; font-size: 13px;">&#8211;</button>
-    <button aria-label="Развернуть" style="width: 34px; height: 30px; border-radius: 6px; color: #9C968C; font-size: 11px;">&#9633;</button>
-    <button aria-label="Закрыть" style="width: 34px; height: 30px; border-radius: 6px; color: #9C968C; font-size: 13px;">&#10005;</button>
+<section>
+<h2>Главное окно</h2>
+<p class="note">Строка <b>kassa</b> — выбранный проект (акцентная полоса слева), <b>storefront</b> — под курсором: вместо
+маркера и числа сессий видны кнопки «новая сессия» и «история». Точка у проекта — самое важное состояние его вкладок.
+Внизу — версия приложения. Строка <b>legacy-crm</b> — каталог недоступен.</p>
+
+<div class="frame"><div class="win">
+  <div class="titlebar">
+    <svg width="16" height="16" viewBox="0 0 32 32"><path d="M7,0 L25,0 A7,7 0 0 1 32,7 L32,25 A7,7 0 0 1 25,32 L7,32 A7,7 0 0 1 0,25 L0,7 A7,7 0 0 1 7,0 Z M6,8 L10,8 L10,10 L12,10 L12,12 L14,12 L14,14 L16,14 L16,18 L14,18 L14,20 L12,20 L12,22 L10,22 L10,24 L6,24 L6,22 L8,22 L8,20 L10,20 L10,18 L12,18 L12,14 L10,14 L10,12 L8,12 L8,10 L6,10 Z M18,20 L26,20 L26,24 L18,24 Z" fill="var(--accent)" fill-rule="evenodd"/></svg><div class="name">Claude Agents Shell</div>
+    <button class="caption" aria-label="Свернуть"><svg class="i" width="14" height="14" viewBox="0 0 14 14" stroke="var(--muted)" stroke-width="1.3"><path d="M1,7 L13,7"/></svg></button>
+    <button class="caption" aria-label="Развернуть"><svg class="i" width="13" height="13" viewBox="0 0 13 13" stroke="var(--muted)" stroke-width="1.3"><path d="M2,2 L11,2 L11,11 L2,11 Z"/></svg></button>
+    <button class="caption" aria-label="Закрыть"><svg class="i" width="14" height="14" viewBox="0 0 14 14" stroke="var(--muted)" stroke-width="1.3"><path d="M2.5,2.5 L11.5,11.5 M11.5,2.5 L2.5,11.5"/></svg></button>
   </div>
-
-  <!-- ===== body ===== -->
-  <div style="flex-grow: 1; display: flex; min-height: 0;">
-
-    <!-- ---- sidebar ---- -->
-    <div style="width: 256px; flex-shrink: 0; box-sizing: border-box; display: flex; flex-direction: column; background: #191816; border-right: 1px solid #2B2825;">
-
-      <div style="box-sizing: border-box; padding: 16px 12px 10px 14px; display: flex; align-items: center; gap: 8px;">
-        <div style="flex-grow: 1; font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; color: #8A857C;">ПРОЕКТЫ</div>
-        <button aria-label="Добавить проект" style="width: 28px; height: 28px; border-radius: 6px; border: 1px solid #332F2B; display: flex; align-items: center; justify-content: center; color: #C9C4BB;">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M12 11v5M9.5 13.5h5"></path></svg>
-        </button>
+  <div class="body">
+    <div class="projects">
+      <div class="phead"><div class="caption-text">ПРОЕКТЫ</div><button class="outlined" aria-label="Добавить проект"><svg class="i" width="15" height="15" viewBox="0 0 15 15" stroke="var(--secondary)" stroke-width="1.8"><path d="M1.9,4.4 L1.9,11.9 L13.1,11.9 L13.1,5.6 L6.9,5.6 L5.6,4.4 Z"/><path d="M7.5,6.9 L7.5,10.6 M5.7,8.7 L9.3,8.7"/></svg></button></div>
+      <div class="plist">
+        <div class="prow current"><div class="text"><div class="pname">kassa</div><div class="ppath">D:\work\kassa · feat/refunds</div></div><div class="prest"><span class="dot s-awaiting"></span><span>5</span></div></div><div class="prow hover"><div class="text"><div class="pname">storefront</div><div class="ppath">D:\work\storefront · develop</div></div><div class="pbtns"><button class="flat hot" aria-label="Новая сессия в проекте"><svg class="i" width="15" height="15" viewBox="0 0 15 15" stroke="var(--primary)" stroke-width="1.8"><path d="M7.5,3 L7.5,12 M3,7.5 L12,7.5"/></svg></button><button class="flat" aria-label="История сессий проекта"><svg class="i" width="15" height="15" viewBox="0 0 15 15" stroke="var(--primary)" stroke-width="1.4"><path d="M1.9,7.5 A5.6,5.6 0 1 0 3.5,3.5"/><path d="M1.9,2.5 L1.9,5.6 L5,5.6"/><path d="M7.5,5 L7.5,7.5 L9.4,8.7"/></svg></button></div></div><div class="prow"><div class="text"><div class="pname">infra-scripts</div><div class="ppath">D:\ops\infra-scripts · main</div></div><div class="prest"><span class="dot s-background"></span><span>1</span></div></div><div class="prow"><div class="text"><div class="pname">docs-portal</div><div class="ppath">D:\work\docs-portal · main</div></div><div class="prest"><span>—</span></div></div><div class="prow missing" title="Каталог проекта недоступен"><div class="text"><div class="pname">legacy-crm</div><div class="ppath">D:\old\legacy-crm</div></div><div class="prest"><span>—</span></div></div>
       </div>
-
-      <!-- project list: the row IS the control — + starts a session, clock opens history -->
-      <div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 0 8px 10px 8px; display: flex; flex-direction: column; gap: 2px; overflow: hidden;">
-
-        <!-- hovered row: both actions revealed -->
-        <div style="position: relative; box-sizing: border-box; padding: 7px 7px 7px 10px; border-radius: 8px; background: #262320; border-left: 2px solid #D97757; display: flex; align-items: center; gap: 6px;">
-          <div style="flex-grow: 1; min-width: 0;">
-            <div style="font-size: 13px; font-weight: 600; color: #E9E6E0;">core-api</div>
-            <div style="margin-top: 3px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">D:\src\core-api &#183; feat/orders-repo</div>
-          </div>
-          <button aria-label="Новая сессия в проекте core-api" style="width: 28px; height: 28px; flex-shrink: 0; border-radius: 7px; background: #35302B; color: #E9E6E0; display: flex; align-items: center; justify-content: center;">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"></path></svg>
-          </button>
-          <button aria-label="История сессий проекта core-api" style="width: 28px; height: 28px; flex-shrink: 0; border-radius: 7px; color: #9C968C; display: flex; align-items: center; justify-content: center;">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 12a9 9 0 1 0 2.6-6.4"></path><path d="M3 4v5h5"></path><path d="M12 8v4l3 2"></path></svg>
-          </button>
-          <div style="position: absolute; top: 44px; right: 34px; box-sizing: border-box; padding: 5px 9px; border-radius: 6px; background: #0B0B0A; border: 1px solid #3A3630; font-size: 11px; color: #C9C4BB; white-space: nowrap;">Новая сессия</div>
-        </div>
-
-        <!-- resting rows: only the state marker -->
-        <div style="box-sizing: border-box; padding: 7px 7px 7px 12px; border-radius: 8px; display: flex; align-items: center; gap: 8px;">
-          <div style="flex-grow: 1; min-width: 0;">
-            <div style="font-size: 13px; font-weight: 600; color: #C9C4BB;">build-pipeline</div>
-            <div style="margin-top: 3px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">D:\src\build-pipeline &#183; main</div>
-          </div>
-          <div style="flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding-right: 8px;">
-            <div style="width: 6px; height: 6px; border-radius: 3px; background: #6FA8A0;"></div>
-            <div style="font-size: 10.5px; font-family: 'JetBrains Mono', monospace; color: #C9C4BB;">1</div>
-          </div>
-        </div>
-
-        <div style="box-sizing: border-box; padding: 7px 7px 7px 12px; border-radius: 8px; display: flex; align-items: center; gap: 8px;">
-          <div style="flex-grow: 1; min-width: 0;">
-            <div style="font-size: 13px; font-weight: 600; color: #C9C4BB;">billing-sync</div>
-            <div style="margin-top: 3px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">D:\src\billing-sync &#183; master</div>
-          </div>
-          <div style="flex-shrink: 0; padding-right: 8px; font-size: 10.5px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">&#8212;</div>
-        </div>
-
-        <div style="box-sizing: border-box; padding: 7px 7px 7px 12px; border-radius: 8px; display: flex; align-items: center; gap: 8px;">
-          <div style="flex-grow: 1; min-width: 0;">
-            <div style="font-size: 13px; font-weight: 600; color: #C9C4BB;">ui-sandbox</div>
-            <div style="margin-top: 3px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">E:\src\ui-sandbox &#183; dev</div>
-          </div>
-          <div style="flex-shrink: 0; padding-right: 8px; font-size: 10.5px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">&#8212;</div>
-        </div>
-
-      </div>
+      <div class="version" title="v0.2.4+3c1f9e2">v0.2.4</div>
     </div>
-
-    <!-- ---- main column ---- -->
-    <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; background: #0E0E0D;">
-
-      <!-- tab strip -->
-      <div style="height: 40px; flex-shrink: 0; box-sizing: border-box; display: flex; align-items: stretch; background: #191816; border-bottom: 1px solid #2B2825;">
-
-        <div style="box-sizing: border-box; min-width: 216px; padding: 0 10px 0 14px; display: flex; align-items: center; gap: 9px; background: #0E0E0D; border-top: 2px solid #D97757; border-right: 1px solid #2B2825;">
-          <div style="width: 6px; height: 6px; border-radius: 3px; background: #D97757; flex-shrink: 0;"></div>
-          <div style="flex-grow: 1; font-size: 12.5px; color: #E9E6E0; white-space: nowrap;">core-api &#183; orders repo</div>
-          <button aria-label="Закрыть вкладку" style="width: 20px; height: 20px; border-radius: 4px; color: #8A857C; font-size: 11px;">&#10005;</button>
-        </div>
-
-        <div style="box-sizing: border-box; min-width: 200px; padding: 0 10px 0 14px; display: flex; align-items: center; gap: 9px; border-top: 2px solid transparent; border-right: 1px solid #2B2825;">
-          <div style="width: 6px; height: 6px; border-radius: 3px; background: #6FA8A0; flex-shrink: 0;"></div>
-          <div style="flex-grow: 1; font-size: 12.5px; color: #9C968C; white-space: nowrap;">core-api &#183; retry logic</div>
-          <button aria-label="Закрыть вкладку" style="width: 20px; height: 20px; border-radius: 4px; color: #6E6960; font-size: 11px;">&#10005;</button>
-        </div>
-
-        <div style="box-sizing: border-box; min-width: 200px; padding: 0 10px 0 14px; display: flex; align-items: center; gap: 9px; border-top: 2px solid transparent; border-right: 1px solid #2B2825;">
-          <div style="width: 6px; height: 6px; border-radius: 3px; background: #6FA8A0; flex-shrink: 0;"></div>
-          <div style="flex-grow: 1; font-size: 12.5px; color: #9C968C; white-space: nowrap;">build-pipeline &#183; ci green</div>
-          <button aria-label="Закрыть вкладку" style="width: 20px; height: 20px; border-radius: 4px; color: #6E6960; font-size: 11px;">&#10005;</button>
-        </div>
-
-        <button aria-label="Новая вкладка" style="width: 38px; display: flex; align-items: center; justify-content: center; color: #9C968C; border-right: 1px solid #2B2825;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"></path></svg>
-        </button>
-
-        <div style="flex-grow: 1;"></div>
-
-        <div style="display: flex; align-items: center; gap: 7px; padding: 0 14px 0 10px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">
-          <div style="width: 6px; height: 6px; border-radius: 3px; background: #D97757;"></div>
-          1 ждёт ввода
-        </div>
+    <div class="main">
+      <div class="tabs">
+        <div class="tab active" style="width:216px" title="kassa · возвраты"><span class="dot s-busy"></span><span class="ttl">kassa · возвраты</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div><div class="tab" style="width:200px" title="kassa · миграция БД"><span class="dot s-awaiting"></span><span class="ttl">kassa · миграция БД</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div><div class="tab" style="width:200px" title="kassa · ревью PR 412"><span class="dot s-background"></span><span class="ttl">kassa · ревью PR 412</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg><span class="pending"></span></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div><div class="tab" style="width:200px" title="kassa · тесты"><span class="dot s-idle"></span><span class="ttl">kassa · тесты</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div><div class="tab" style="width:210px" title="kassa · нагрузочный прогон"><span class="dot s-unknown"></span><span class="ttl">kassa · нагрузочный прогон</span><span class="badge-exit" title="Процесс сессии упал">код 1</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg></button><button class="tb" aria-label="Перезапустить сессию"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke="var(--exit-failure)" stroke-width="1.3"><path d="M9.25,3.1 A4.5,4.5 0 1 1 4.75,3.1 M4.75,3.1 L3.55,5.2 M4.75,3.1 L2.35,3.1"/></svg></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div>
+        <button class="newtab" aria-label="Новая вкладка" title="Новая сессия в активном проекте (Ctrl+Shift+T)"><svg class="i" width="14" height="14" viewBox="0 0 14 14" stroke="var(--muted)" stroke-width="2"><path d="M7,1.5 L7,12.5 M1.5,7 L12.5,7"/></svg></button>
+        <button class="awaiting" title="Перейти к первой сессии, которая ждёт ввода"><span class="dot s-awaiting"></span>2 ждёт ввода</button>
       </div>
-
-      <!-- terminal: everything below is the real claude TUI, untouched -->
-      <div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 16px 18px 14px 18px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.62; color: #C9C4BB; overflow: hidden; display: flex; flex-direction: column;">
-        <div style="flex-grow: 1; min-height: 0; overflow: hidden;">
-          <div style="color: #6FA8A0;">PS D:\src\core-api&gt; claude --resume 0d41f2a7</div>
-          <div style="height: 10px;"></div>
-          <div style="color: #E9E6E0;">&gt; добавь GetByCustomerAsync в OrderRepository и тест на него</div>
-          <div style="height: 10px;"></div>
-          <div><span style="color: #D97757;">&#9679;</span> <span style="color: #E9E6E0;">Read</span>(src/Core/Repositories/OrderRepository.cs)</div>
-          <div style="color: #8A857C;">&#8735; прочитано 142 строки</div>
-          <div style="height: 6px;"></div>
-          <div><span style="color: #D97757;">&#9679;</span> <span style="color: #E9E6E0;">Edit</span>(src/Core/Repositories/OrderRepository.cs)</div>
-          <div style="color: #8A857C;">&#8735; <span style="color: #6FA8A0;">+21</span> <span style="color: #D97757;">&#8722;2</span></div>
-          <div style="height: 6px;"></div>
-          <div><span style="color: #D97757;">&#9679;</span> <span style="color: #E9E6E0;">Write</span>(tests/Core.Tests/OrderRepositoryTests.cs)</div>
-          <div style="color: #8A857C;">&#8735; создан файл, 68 строк</div>
-          <div style="height: 6px;"></div>
-          <div><span style="color: #D97757;">&#9679;</span> <span style="color: #E9E6E0;">Bash</span>(dotnet test tests/Core.Tests -v q)</div>
-          <div style="color: #8A857C;">&#8735; Passed! &#8212; Failed: 0, Passed: 47, Skipped: 0</div>
-          <div style="height: 10px;"></div>
-          <div style="color: #E9E6E0;">Готово. Метод берёт заказы по <span style="color: #6FA8A0;">CustomerId</span> через существующий индекс,</div>
-          <div style="color: #E9E6E0;">тест покрывает пустой список и фильтр по статусу заказа.</div>
-        </div>
-
-        <div style="flex-shrink: 0;">
-          <div style="box-sizing: border-box; border: 1px solid #332F2B; border-radius: 8px; padding: 9px 12px; display: flex; align-items: center; gap: 8px; background: #121211;">
-            <span style="color: #D97757;">&gt;</span>
-            <span style="color: #6E6960;">спроси что-нибудь…</span>
-            <span style="width: 7px; height: 15px; background: #D97757; display: inline-block;"></span>
-          </div>
-          <div style="margin-top: 7px; font-size: 11px; color: #6E6960;">opus &#183; acceptEdits &#183; контекст 38% &#183; 5ч 62% &#183; неделя 41%</div>
-        </div>
-      </div>
+      <div class="termhost"><div class="term"><div style="background:#1A1917"><span style="color:#6E6960">&gt; </span><span style="color:#C9C4BB">сначала покажи, где считается сумма возврата</span></div>
+<div> </div>
+<div><span style="color:#E9E6E0">● </span><span style="color:#E9E6E0">Сумма берётся целиком из payment.Amount в RefundService.RefundAsync (строка 87).</span></div>
+<div><span style="color:#C9C4BB">  </span><span style="color:#E9E6E0">Частичных возвратов модель не знает: у Payment нет поля RefundedAmount.</span></div>
+<div> </div>
+<div style="background:#1A1917"><span style="color:#6E6960">&gt; </span><span style="color:#C9C4BB">добавь частичные возвраты: сумма не больше остатка, повтор с тем же ключом — тот же результат</span></div>
+<div> </div>
+<div><span style="color:#E9E6E0">● </span><span style="color:#E9E6E0">Посмотрю, где хранится ключ идемпотентности, и начну с сервиса.</span></div>
+<div> </div>
+<div><span style="color:#4EBA65">● </span><span style="color:#E9E6E0;font-weight:700">Read</span><span style="color:#C9C4BB">(src/Payments/RefundService.cs)</span></div>
+<div><span style="color:#8A857C">  ⎿  </span><span style="color:#8A857C">Read 186 lines</span></div>
+<div> </div>
+<div><span style="color:#4EBA65">● </span><span style="color:#E9E6E0;font-weight:700">Search</span><span style="color:#C9C4BB">(pattern: &quot;IdempotencyKey&quot;, path: &quot;src&quot;)</span></div>
+<div><span style="color:#8A857C">  ⎿  </span><span style="color:#8A857C">Found 7 files</span></div>
+<div> </div>
+<div><span style="color:#4EBA65">● </span><span style="color:#E9E6E0;font-weight:700">Update</span><span style="color:#C9C4BB">(src/Payments/RefundService.cs)</span></div>
+<div><span style="color:#8A857C">  ⎿  </span><span style="color:#8A857C">Updated src/Payments/RefundService.cs with 7 additions and 2 removals</span></div>
+<div><span style="color:#6E6960">      86  </span><span style="color:#8A857C">      var payment = await _payments.GetAsync(request.PaymentId, ct);</span></div>
+<div style="background:#3F2225"><span style="color:#6E6960">      87 </span><span style="color:#E07A7A">-</span><span style="color:#C9C4BB">      if (request.Amount != payment.Amount)</span></div>
+<div style="background:#3F2225"><span style="color:#6E6960">      88 </span><span style="color:#E07A7A">-</span><span style="color:#C9C4BB">          return RefundResult.Rejected(&quot;only full refunds&quot;);</span></div>
+<div style="background:#1B3322"><span style="color:#6E6960">      87 </span><span style="color:#7FC98F">+</span><span style="color:#C9C4BB">      var remaining = payment.Amount - payment.RefundedAmount;</span></div>
+<div style="background:#1B3322"><span style="color:#6E6960">      88 </span><span style="color:#7FC98F">+</span><span style="color:#C9C4BB">      if (request.Amount &lt;= 0 || request.Amount &gt; remaining)</span></div>
+<div style="background:#1B3322"><span style="color:#6E6960">      89 </span><span style="color:#7FC98F">+</span><span style="color:#C9C4BB">          return RefundResult.Rejected(&quot;amount exceeds remaining&quot;);</span></div>
+<div style="background:#1B3322"><span style="color:#6E6960">      90 </span><span style="color:#7FC98F">+</span><span style="color:#C9C4BB"></span></div>
+<div style="background:#1B3322"><span style="color:#6E6960">      91 </span><span style="color:#7FC98F">+</span><span style="color:#C9C4BB">      if (await _idempotency.TryGetAsync(request.Key, ct) is { } cached)</span></div>
+<div style="background:#1B3322"><span style="color:#6E6960">      92 </span><span style="color:#7FC98F">+</span><span style="color:#C9C4BB">          return cached;</span></div>
+<div><span style="color:#6E6960">      93  </span><span style="color:#8A857C"></span></div>
+<div> </div>
+<div><span style="color:#4EBA65">● </span><span style="color:#E9E6E0;font-weight:700">Write</span><span style="color:#C9C4BB">(src/Payments/PartialRefund.cs)</span></div>
+<div><span style="color:#8A857C">  ⎿  </span><span style="color:#8A857C">Wrote 41 lines to src/Payments/PartialRefund.cs</span></div>
+<div><span style="color:#6E6960">       1  </span><span style="color:#8A857C">namespace Kassa.Payments;</span></div>
+<div><span style="color:#6E6960">       2  </span><span style="color:#8A857C"></span></div>
+<div><span style="color:#6E6960">       3  </span><span style="color:#8A857C">/// &lt;summary&gt;Частичный возврат: сумма и ключ повтора.&lt;/summary&gt;</span></div>
+<div><span style="color:#6E6960">       4  </span><span style="color:#8A857C">public sealed record PartialRefund(Guid PaymentId, decimal Amount, string Key);</span></div>
+<div><span style="color:#8A857C">     … +37 lines (ctrl+o to expand)</span></div>
+<div> </div>
+<div><span style="color:#E9E6E0">● </span><span style="color:#E9E6E0;font-weight:700">Bash</span><span style="color:#C9C4BB">(dotnet test tests/Payments.Tests --filter Refund)</span></div>
+<div><span style="color:#8A857C">  ⎿  </span><span style="color:#8A857C">Running…</span></div>
+<div> </div>
+<div><span style="color:#D77757">✻ </span><span style="color:#D77757">Проверяю тесты… </span><span style="color:#8A857C">(1m 12s · ↓ 2.4k tokens · esc to interrupt)</span></div>
+<div> </div>
+<div class="rule"></div>
+<div><span style="color:#C9C4BB">&gt; </span><span class="cur"> </span></div>
+<div class="rule"></div>
+<div><span style="color:#AF87FF">  ⏵⏵ accept edits on </span><span style="color:#8A857C">(shift+tab to cycle)</span></div></div></div>
     </div>
   </div>
-
-</div>
-</div>
+</div></div>
+<div class="legend"><div><span class="dot s-busy"></span>работает</div><div><span class="dot s-awaiting"></span>ждёт ввода</div><div><span class="dot s-background"></span>работа в фоне</div><div><span class="dot s-idle"></span>простаивает</div><div><span class="dot s-unknown"></span>хуки не подключились / процесс завершён</div><div><span class="mono" style="color:var(--exit-failure)">код 1</span>процесс сессии упал — рядом «перезапустить»</div><div><span style="position:relative;width:12px;height:12px"><span class="dot s-awaiting" style="position:absolute;width:5px;height:5px;right:-2px;top:-1px"></span></span>на кнопке diff — агент открыл diff в фоновой вкладке</div></div>
 </section>
-<section style="margin: 0 0 56px 0;">
-<h2 style="margin: 0 0 14px 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #8A857C;">Продолжить — история сессий</h2>
-<div style="display: inline-block; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,0.45);">
-<div style="width: 720px; height: 540px; box-sizing: border-box; background: #191816; border: 1px solid #332F2B; border-radius: 12px; display: flex; flex-direction: column; color: #E9E6E0; overflow: hidden;">
 
-  <div style="box-sizing: border-box; padding: 14px 16px; border-bottom: 1px solid #2B2825; display: flex; align-items: center; gap: 10px;">
-    <div style="box-sizing: border-box; flex-grow: 1; height: 36px; padding: 0 12px; display: flex; align-items: center; gap: 9px; background: #121211; border: 1px solid #2B2825; border-radius: 8px;">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A857C" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
-      <label for="hq" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Поиск по сессиям</label>
-      <input id="hq" type="text" placeholder="Поиск по первому сообщению…" style="flex-grow: 1; min-width: 0; background: none; border: 0; outline: none; color: #E9E6E0; font-size: 13px;">
-    </div>
-    <button aria-label="Закрыть" style="width: 32px; height: 32px; border-radius: 7px; color: #9C968C; font-size: 13px;">&#10005;</button>
+<section>
+<h2>Панель diff</h2>
+<p class="note">Ctrl+Shift+D или кнопка diff на вкладке открывают панель поверх терминала этой вкладки; Esc в панели
+закрывает её. Оглавление ветки против базы, фильтр по пути и по расширениям, свёрнутые сгенерированные и большие файлы,
+«без пробелов (-w)», выбор рабочего дерева (когда их больше одного), плашка «есть изменения» после правок агента.</p>
+
+<div class="frame"><div class="win">
+  <div class="titlebar">
+    <svg width="16" height="16" viewBox="0 0 32 32"><path d="M7,0 L25,0 A7,7 0 0 1 32,7 L32,25 A7,7 0 0 1 25,32 L7,32 A7,7 0 0 1 0,25 L0,7 A7,7 0 0 1 7,0 Z M6,8 L10,8 L10,10 L12,10 L12,12 L14,12 L14,14 L16,14 L16,18 L14,18 L14,20 L12,20 L12,22 L10,22 L10,24 L6,24 L6,22 L8,22 L8,20 L10,20 L10,18 L12,18 L12,14 L10,14 L10,12 L8,12 L8,10 L6,10 Z M18,20 L26,20 L26,24 L18,24 Z" fill="var(--accent)" fill-rule="evenodd"/></svg><div class="name">Claude Agents Shell</div>
+    <button class="caption" aria-label="Свернуть"><svg class="i" width="14" height="14" viewBox="0 0 14 14" stroke="var(--muted)" stroke-width="1.3"><path d="M1,7 L13,7"/></svg></button>
+    <button class="caption" aria-label="Развернуть"><svg class="i" width="13" height="13" viewBox="0 0 13 13" stroke="var(--muted)" stroke-width="1.3"><path d="M2,2 L11,2 L11,11 L2,11 Z"/></svg></button>
+    <button class="caption" aria-label="Закрыть"><svg class="i" width="14" height="14" viewBox="0 0 14 14" stroke="var(--muted)" stroke-width="1.3"><path d="M2.5,2.5 L11.5,11.5 M11.5,2.5 L2.5,11.5"/></svg></button>
   </div>
-
-  <div style="box-sizing: border-box; padding: 10px 16px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid #2B2825;">
-    <button style="box-sizing: border-box; height: 28px; padding: 0 12px; border-radius: 14px; background: #2E2A26; color: #E9E6E0; font-size: 12px; font-weight: 500;">core-api</button>
-    <button style="box-sizing: border-box; height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid #332F2B; color: #9C968C; font-size: 12px;">build-pipeline</button>
-    <button style="box-sizing: border-box; height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid #332F2B; color: #9C968C; font-size: 12px;">billing-sync</button>
-    <div style="flex-grow: 1;"></div>
-    <button style="box-sizing: border-box; height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid #332F2B; color: #9C968C; font-size: 12px;">все проекты</button>
+  <div class="body">
+    <div class="projects">
+      <div class="phead"><div class="caption-text">ПРОЕКТЫ</div><button class="outlined" aria-label="Добавить проект"><svg class="i" width="15" height="15" viewBox="0 0 15 15" stroke="var(--secondary)" stroke-width="1.8"><path d="M1.9,4.4 L1.9,11.9 L13.1,11.9 L13.1,5.6 L6.9,5.6 L5.6,4.4 Z"/><path d="M7.5,6.9 L7.5,10.6 M5.7,8.7 L9.3,8.7"/></svg></button></div>
+      <div class="plist">
+        <div class="prow current"><div class="text"><div class="pname">kassa</div><div class="ppath">D:\work\kassa · feat/refunds</div></div><div class="prest"><span class="dot s-awaiting"></span><span>5</span></div></div><div class="prow hover"><div class="text"><div class="pname">storefront</div><div class="ppath">D:\work\storefront · develop</div></div><div class="pbtns"><button class="flat hot" aria-label="Новая сессия в проекте"><svg class="i" width="15" height="15" viewBox="0 0 15 15" stroke="var(--primary)" stroke-width="1.8"><path d="M7.5,3 L7.5,12 M3,7.5 L12,7.5"/></svg></button><button class="flat" aria-label="История сессий проекта"><svg class="i" width="15" height="15" viewBox="0 0 15 15" stroke="var(--primary)" stroke-width="1.4"><path d="M1.9,7.5 A5.6,5.6 0 1 0 3.5,3.5"/><path d="M1.9,2.5 L1.9,5.6 L5,5.6"/><path d="M7.5,5 L7.5,7.5 L9.4,8.7"/></svg></button></div></div><div class="prow"><div class="text"><div class="pname">infra-scripts</div><div class="ppath">D:\ops\infra-scripts · main</div></div><div class="prest"><span class="dot s-background"></span><span>1</span></div></div><div class="prow"><div class="text"><div class="pname">docs-portal</div><div class="ppath">D:\work\docs-portal · main</div></div><div class="prest"><span>—</span></div></div><div class="prow missing" title="Каталог проекта недоступен"><div class="text"><div class="pname">legacy-crm</div><div class="ppath">D:\old\legacy-crm</div></div><div class="prest"><span>—</span></div></div>
+      </div>
+      <div class="version" title="v0.2.4+3c1f9e2">v0.2.4</div>
+    </div>
+    <div class="main">
+      <div class="tabs">
+        <div class="tab active" style="width:216px" title="kassa · возвраты"><span class="dot s-busy"></span><span class="ttl">kassa · возвраты</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div><div class="tab" style="width:200px" title="kassa · миграция БД"><span class="dot s-awaiting"></span><span class="ttl">kassa · миграция БД</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div><div class="tab" style="width:200px" title="kassa · ревью PR 412"><span class="dot s-background"></span><span class="ttl">kassa · ревью PR 412</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg><span class="pending"></span></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div><div class="tab" style="width:200px" title="kassa · тесты"><span class="dot s-idle"></span><span class="ttl">kassa · тесты</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div><div class="tab" style="width:210px" title="kassa · нагрузочный прогон"><span class="dot s-unknown"></span><span class="ttl">kassa · нагрузочный прогон</span><span class="badge-exit" title="Процесс сессии упал">код 1</span><button class="tb" aria-label="Показать diff" title="Показать diff (Ctrl+Shift+D)"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke-width="1.4"><path d="M6,1 L6,7 M3,4 L9,4" stroke="var(--diff-added)"/><path d="M3,10.5 L9,10.5" stroke="var(--diff-removed)"/></svg></button><button class="tb" aria-label="Перезапустить сессию"><svg class="i" width="12" height="12" viewBox="0 0 12 12" stroke="var(--exit-failure)" stroke-width="1.3"><path d="M9.25,3.1 A4.5,4.5 0 1 1 4.75,3.1 M4.75,3.1 L3.55,5.2 M4.75,3.1 L2.35,3.1"/></svg></button><button class="tb" aria-label="Закрыть вкладку"><svg class="i" width="11" height="11" viewBox="0 0 11 11" stroke="var(--faint)" stroke-width="1.4"><path d="M2,2 L9,9 M9,2 L2,9"/></svg></button></div>
+        <button class="newtab" aria-label="Новая вкладка" title="Новая сессия в активном проекте (Ctrl+Shift+T)"><svg class="i" width="14" height="14" viewBox="0 0 14 14" stroke="var(--muted)" stroke-width="2"><path d="M7,1.5 L7,12.5 M1.5,7 L12.5,7"/></svg></button>
+        <button class="awaiting" title="Перейти к первой сессии, которая ждёт ввода"><span class="dot s-awaiting"></span>2 ждёт ввода</button>
+      </div>
+      <div class="termhost">
+<div class="diff-panel" role="region" aria-label="Diff">
+  <div class="diff-bar">
+    <div class="diff-heading"><div class="diff-title">Изменения ветки</div><div class="diff-info">база main · 3f9c2a1e · D:\work\kassa</div></div>
+    <div class="diff-controls">
+      <label class="diff-ws"><input type="checkbox"> без пробелов (-w)</label>
+      <select class="diff-worktree" title="Рабочее дерево"><option>D:\work\kassa · feat/refunds</option><option>D:\work\kassa\.claude\worktrees\agent-7f3a · agent/7f3a</option></select>
+      <button class="diff-btn">Обновить</button>
+      <button class="diff-btn diff-close" title="Закрыть (Esc)">×</button>
+    </div>
   </div>
-
-  <div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 8px; display: flex; flex-direction: column; gap: 2px; overflow: hidden;">
-
-    <div style="box-sizing: border-box; padding: 10px 12px; border-radius: 9px; background: #262320; border-left: 2px solid #D97757; display: flex; align-items: center; gap: 12px;">
-      <div style="flex-grow: 1; min-width: 0;">
-        <div style="font-size: 13px; color: #E9E6E0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">добавь GetByCustomerAsync в OrderRepository и тест на него</div>
-        <div style="margin-top: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">сегодня 14:36 &#183; 18 сообщений &#183; feat/orders-repo &#183; 0d41f2a7</div>
-      </div>
-      <div style="box-sizing: border-box; height: 28px; padding: 0 12px; display: flex; align-items: center; border-radius: 7px; background: #D97757; color: #1A0E08; font-size: 12px; font-weight: 600; flex-shrink: 0;">Enter</div>
+  <button class="diff-stale">Есть изменения — обновить</button>
+  <div class="diff-body">
+    <div class="diff-side">
+      <input class="diff-search" placeholder="Фильтр по пути" spellcheck="false">
+      <div class="diff-exts"><button class="diff-ext" aria-pressed="true">.cs (7)</button><button class="diff-ext" aria-pressed="true">.json (3)</button><button class="diff-ext off" aria-pressed="false">.md (1)</button></div>
+      <div class="diff-summary">10 из 11 файлов · +2266 −220</div>
+      <div class="diff-toc"><div class="toc-row"><span class="toc-kind k-M">M</span><span class="toc-path"><span class="toc-dir">src/Api/Controllers/</span><span class="toc-name">RefundsController.cs</span></span><span class="toc-stat">+22 −4</span></div><div class="toc-row"><span class="toc-kind k-M">M</span><span class="toc-path"><span class="toc-dir">src/Api/</span><span class="toc-name">appsettings.json</span></span><span class="toc-stat">+3 −1</span></div><div class="toc-row"><span class="toc-kind k-M">M</span><span class="toc-path"><span class="toc-dir">src/Payments/</span><span class="toc-name">IdempotencyStore.cs</span></span><span class="toc-stat">+17 −6</span></div><div class="toc-row"><span class="toc-kind k-D">D</span><span class="toc-path"><span class="toc-dir">src/Payments/</span><span class="toc-name">LegacyRefundAdapter.cs</span></span><span class="toc-stat">+0 −41</span></div><div class="toc-row"><span class="toc-kind k-A">A</span><span class="toc-path"><span class="toc-dir">src/Payments/</span><span class="toc-name">PartialRefund.cs</span></span><span class="toc-stat">+41 −0</span></div><div class="toc-row hover"><span class="toc-kind k-M">M</span><span class="toc-path"><span class="toc-dir">src/Payments/</span><span class="toc-name">RefundService.cs</span></span><span class="toc-stat">+58 −9</span></div><div class="toc-row"><span class="toc-kind k-M">M</span><span class="toc-path"><span class="toc-dir">src/Payments/</span><span class="toc-name">packages.lock.json</span></span><span class="badge">Сгенерированный</span><span class="toc-stat">+212 −148</span></div><div class="toc-row"><span class="toc-kind k-A">A</span><span class="toc-path"><span class="toc-dir">tests/Payments.Tests/</span><span class="toc-name">PartialRefundTests.cs</span></span><span class="toc-stat">+64 −0</span></div><div class="toc-row"><span class="toc-kind k-M">M</span><span class="toc-path"><span class="toc-dir">tests/Payments.Tests/</span><span class="toc-name">RefundServiceTests.cs</span></span><span class="toc-stat">+9 −11</span></div><div class="toc-row"><span class="toc-kind k-A">A</span><span class="toc-path"><span class="toc-dir">tests/Payments.Tests/Snapshots/</span><span class="toc-name">refunds.verified.json</span></span><span class="badge">Большой diff</span><span class="toc-stat">+1840 −0</span></div></div>
     </div>
-
-    <div style="box-sizing: border-box; padding: 10px 12px; border-radius: 9px; display: flex; align-items: center; gap: 12px;">
-      <div style="flex-grow: 1; min-width: 0;">
-        <div style="font-size: 13px; color: #C9C4BB; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">почему клиент не переподключается после обрыва соединения</div>
-        <div style="margin-top: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">сегодня 14:02 &#183; 41 сообщение &#183; main &#183; 7be0c193</div>
-      </div>
-      <div style="font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #6FA8A0; flex-shrink: 0;">открыта</div>
-    </div>
-
-    <div style="box-sizing: border-box; padding: 10px 12px; border-radius: 9px; display: flex; align-items: center; gap: 12px;">
-      <div style="flex-grow: 1; min-width: 0;">
-        <div style="font-size: 13px; color: #C9C4BB; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">разбери логи воркера за ночь, найди паттерн падений</div>
-        <div style="margin-top: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">вчера 21:48 &#183; 7 сообщений &#183; main &#183; c40a5f2e</div>
-      </div>
-    </div>
-
-    <div style="box-sizing: border-box; padding: 10px 12px; border-radius: 9px; display: flex; align-items: center; gap: 12px;">
-      <div style="flex-grow: 1; min-width: 0;">
-        <div style="font-size: 13px; color: #C9C4BB; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">вынеси правила скидок в отдельный движок, без ломки публичного API</div>
-        <div style="margin-top: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">вчера 16:11 &#183; 63 сообщения &#183; feat/discounts &#183; 91d7ab60</div>
-      </div>
-    </div>
-
-    <div style="box-sizing: border-box; padding: 10px 12px; border-radius: 9px; display: flex; align-items: center; gap: 12px;">
-      <div style="flex-grow: 1; min-width: 0;">
-        <div style="font-size: 13px; color: #C9C4BB; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">набросай схему хранения событий, sqlite против parquet</div>
-        <div style="margin-top: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">15 сен 11:24 &#183; 22 сообщения &#183; main &#183; 55e1c7d4</div>
-      </div>
-    </div>
-
-    <div style="box-sizing: border-box; padding: 10px 12px; border-radius: 9px; display: flex; align-items: center; gap: 12px;">
-      <div style="flex-grow: 1; min-width: 0;">
-        <div style="font-size: 13px; color: #C9C4BB; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">почини флакающий тест SchedulerTests.FiresOnceADay</div>
-        <div style="margin-top: 4px; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #8A857C;">12 сен 09:50 &#183; 9 сообщений &#183; main &#183; 2ae90b17</div>
-      </div>
-    </div>
-
+    <div class="diff-main"><div class="r line-row t-a"><span class="no"></span><span class="no">36</span><span class="sign">+</span><span class="code">        if (Amount &lt;= 0)</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">37</span><span class="sign">+</span><span class="code">            throw new ArgumentOutOfRangeException(nameof(Amount));</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">38</span><span class="sign">+</span><span class="code">        ArgumentException.ThrowIfNullOrWhiteSpace(Key);</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">39</span><span class="sign">+</span><span class="code">    }</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">40</span><span class="sign">+</span><span class="code">}</span></div><div class="r"></div><div class="r file-row"><span class="toc-kind k-M">M</span><span class="file-path">src/Payments/RefundService.cs</span><span class="toc-stat">+58 −9</span><button class="row-btn">Свернуть</button><button class="row-btn">Весь файл</button></div><div class="r line-row t-h"><span class="no"></span><span class="no"></span><span class="sign"></span><span class="code">@@ -84,9 +84,16 @@ public async Task&lt;RefundResult&gt; RefundAsync(RefundRequest request, CancellationToken ct)</span></div><div class="r line-row t-c"><span class="no">84</span><span class="no">84</span><span class="sign"></span><span class="code">    {</span></div><div class="r line-row t-c"><span class="no">85</span><span class="no">85</span><span class="sign"></span><span class="code">        ArgumentNullException.ThrowIfNull(request);</span></div><div class="r line-row t-c"><span class="no">86</span><span class="no">86</span><span class="sign"></span><span class="code">        var payment = await _payments.GetAsync(request.PaymentId, ct);</span></div><div class="r line-row t-d"><span class="no">87</span><span class="no"></span><span class="sign">−</span><span class="code">        if (request.Amount != payment.Amount)</span></div><div class="r line-row t-d"><span class="no">88</span><span class="no"></span><span class="sign">−</span><span class="code">            return RefundResult.Rejected(&quot;only full refunds&quot;);</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">87</span><span class="sign">+</span><span class="code">        var remaining = payment.Amount - payment.RefundedAmount;</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">88</span><span class="sign">+</span><span class="code">        if (request.Amount &lt;= 0 || request.Amount &gt; remaining)</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">89</span><span class="sign">+</span><span class="code">            return RefundResult.Rejected(&quot;amount exceeds remaining&quot;);</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">90</span><span class="sign">+</span><span class="code"></span></div><div class="r line-row t-a"><span class="no"></span><span class="no">91</span><span class="sign">+</span><span class="code">        if (await _idempotency.TryGetAsync(request.Key, ct) is { } cached)</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">92</span><span class="sign">+</span><span class="code">            return cached;</span></div><div class="r line-row t-c"><span class="no">89</span><span class="no">93</span><span class="sign"></span><span class="code"></span></div><div class="r line-row t-c"><span class="no">90</span><span class="no">94</span><span class="sign"></span><span class="code">        var result = await _gateway.RefundAsync(payment, request.Amount, ct);</span></div><div class="r line-row t-c"><span class="no">91</span><span class="no">95</span><span class="sign"></span><span class="code">        await _payments.SaveAsync(payment, ct);</span></div><div class="r line-row t-c"><span class="no">92</span><span class="no">96</span><span class="sign"></span><span class="code">        return result;</span></div><div class="r line-row t-h"><span class="no"></span><span class="no"></span><span class="sign"></span><span class="code">@@ -131,6 +138,14 @@ private static RefundResult Map(GatewayResponse response)</span></div><div class="r line-row t-c"><span class="no">131</span><span class="no">138</span><span class="sign"></span><span class="code">    }</span></div><div class="r line-row t-c"><span class="no">132</span><span class="no">139</span><span class="sign"></span><span class="code"></span></div><div class="r line-row t-a"><span class="no"></span><span class="no">140</span><span class="sign">+</span><span class="code">    private async Task RememberAsync(string key, RefundResult result, CancellationToken ct)</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">141</span><span class="sign">+</span><span class="code">    {</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">142</span><span class="sign">+</span><span class="code">        if (result.IsAccepted)</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">143</span><span class="sign">+</span><span class="code">            await _idempotency.StoreAsync(key, result, TimeSpan.FromHours(24), ct);</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">144</span><span class="sign">+</span><span class="code">    }</span></div><div class="r"></div><div class="r file-row"><span class="toc-kind k-M">M</span><span class="file-path">src/Payments/packages.lock.json</span><span class="toc-stat">+212 −148</span><span class="badge">Сгенерированный</span><button class="row-btn">Развернуть</button><button class="row-btn">Весь файл</button></div><div class="r note-row">Сгенерированный файл. <button class="row-btn">Загрузить diff</button></div><div class="r"></div><div class="r file-row"><span class="toc-kind k-A">A</span><span class="file-path">tests/Payments.Tests/PartialRefundTests.cs</span><span class="toc-stat">+64 −0</span><button class="row-btn">Свернуть</button><button class="row-btn">Весь файл</button></div><div class="r line-row t-h"><span class="no"></span><span class="no"></span><span class="sign"></span><span class="code">@@ -0,0 +1,64 @@</span></div><div class="r line-row t-a"><span class="no"></span><span class="no">1</span><span class="sign">+</span><span class="code">namespace Kassa.Payments.Tests;</span></div><div class="vscroll"></div></div>
   </div>
-
-  <div style="box-sizing: border-box; padding: 11px 16px; border-top: 1px solid #2B2825; display: flex; align-items: center; gap: 10px;">
-    <div style="flex-grow: 1; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #6E6960;">&#8593;&#8595; выбрать &#183; Enter &#8212; открыть во вкладке &#183; Esc &#8212; закрыть</div>
-    <div style="font-size: 11px; font-family: 'JetBrains Mono', monospace; color: #6E6960;">~/.claude/projects</div>
+</div></div>
+    </div>
   </div>
-
-</div>
-</div>
+</div></div>
 </section>
-<section style="margin: 0 0 56px 0;">
-<h2 style="margin: 0 0 14px 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #8A857C;">Настройки проекта</h2>
-<div style="display: inline-block; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,0.45);">
-<div style="width: 560px; height: 470px; box-sizing: border-box; background: #191816; border: 1px solid #332F2B; border-radius: 12px; display: flex; flex-direction: column; color: #E9E6E0; overflow: hidden;">
 
-  <div style="box-sizing: border-box; padding: 18px 20px 14px 20px; border-bottom: 1px solid #2B2825; display: flex; align-items: center; gap: 10px;">
-    <div style="flex-grow: 1;">
-      <div style="font-size: 15px; font-weight: 600;">Добавить проект</div>
-      <div style="margin-top: 3px; font-size: 12px; color: #8A857C;">папка становится рабочим каталогом сессий</div>
-    </div>
-    <button aria-label="Закрыть" style="width: 30px; height: 30px; border-radius: 7px; color: #9C968C; font-size: 13px;">&#10005;</button>
+<section>
+<h2>Продолжить — история сессий</h2>
+<p class="note">Открывается кнопкой «часы» на строке проекта; показывает только сессии этого проекта. Сессия из живой
+вкладки помечена «открыта» — выбор переключает на неё. Сессия без заголовка деградирует до имени файла.</p>
+
+<div class="frame" style="border-radius:0"><div class="dlg hist">
+  <div class="dlg-title"><span style="color:var(--faint)">История сессий</span><b style="margin-left:8px;font-weight:600">kassa</b>
+    <button class="caption" aria-label="Закрыть" style="margin-right:4px"><svg class="i" width="14" height="14" viewBox="0 0 14 14" stroke="var(--muted)" stroke-width="1.3"><path d="M2.5,2.5 L11.5,11.5 M11.5,2.5 L2.5,11.5"/></svg></button></div>
+  <div class="hsearch"><div class="box"><svg class="i" width="14" height="14" viewBox="0 0 24 24" stroke="var(--faint)" stroke-width="2.4"><path d="M4,11 A7,7 0 1 0 18,11 A7,7 0 1 0 4,11 Z M20,20 L16.5,16.5"/></svg><input placeholder="Поиск по первому сообщению…" aria-label="Поиск по сессиям" autofocus></div></div>
+  <div class="hlist"><div class="hrows"><div class="hrow"><div class="text"><div class="htitle">добавь частичные возвраты: сумма не больше остатка, повтор с тем же ключом — тот же результат</div><div class="hdetails">сегодня 14:36 · feat/refunds · 0d41f2a7</div></div><span class="open-mark">открыта</span></div><div class="hrow"><div class="text"><div class="htitle">миграция: колонка refunded_amount, заполнить из истории операций</div><div class="hdetails">сегодня 13:05 · feat/refunds · 7be0c193</div></div><span class="open-mark">открыта</span></div><div class="hrow sel"><div class="text"><div class="htitle">почему RefundServiceTests.RetriesOnTimeout падает только на CI</div><div class="hdetails">вчера 21:48 · main · c40a5f2e</div></div><button class="accept" title="Открыть во вкладке (Enter)">Открыть</button></div><div class="hrow"><div class="text"><div class="htitle">набросай нагрузочный сценарий на k6: 200 rps на /refunds, отчёт в markdown</div><div class="hdetails">вчера 16:11 · perf/k6 · 91d7ab60</div></div></div><div class="hrow"><div class="text"><div class="htitle missing">3f2a9e1b-5c7d-4e8a-9b0c-1d2e3f4a5b6c.jsonl</div><div class="hdetails">18 сен 11:24 · main · 3f2a9e1b</div></div></div><div class="hrow"><div class="text"><div class="htitle">вынеси расчёт комиссии в отдельный сервис, публичный API не ломай</div><div class="hdetails">15 сен 10:02 · feat/fees · 55e1c7d4</div></div></div><div class="hrow"><div class="text"><div class="htitle">разбери логи воркера за ночь и найди, почему дублируются чеки</div><div class="hdetails">12 сен 09:50 · main · 2ae90b17</div></div></div></div><div class="thin-scroll"><div></div></div></div>
+  <div class="hfoot">
+    <span style="margin-right:6px">↑↓ выбрать</span>
+    <button class="hint"><span class="kcap">Enter</span>открыть во вкладке</button>
+    <button class="hint"><span class="kcap">Esc</span>закрыть</button>
+    <span class="status">~/.claude/projects</span>
   </div>
+</div></div>
+</section>
 
-  <div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 16px 20px; display: flex; flex-direction: column; gap: 15px;">
+<section>
+<h2>Настройки проекта</h2>
+<p class="note">Тот же диалог служит для добавления («Новый проект» / «Добавить») и правки («Настройки проекта» / «Сохранить»).</p>
 
-    <div>
-      <label for="path" style="display: block; font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em; color: #8A857C; margin-bottom: 7px;">ПАПКА</label>
-      <div style="display: flex; gap: 8px;">
-        <input id="path" type="text" value="D:\src\core-api" style="box-sizing: border-box; flex-grow: 1; min-width: 0; height: 38px; padding: 0 10px; background: #121211; border: 1px solid #2B2825; border-radius: 7px; color: #E9E6E0; font-size: 12.5px; font-family: 'JetBrains Mono', monospace;">
-        <button style="box-sizing: border-box; height: 38px; padding: 0 14px; border-radius: 7px; border: 1px solid #332F2B; color: #C9C4BB; font-size: 12.5px;">Обзор…</button>
-      </div>
-    </div>
-
-    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
-      <div>
-        <label for="name" style="display: block; font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em; color: #8A857C; margin-bottom: 7px;">ИМЯ В СПИСКЕ</label>
-        <input id="name" type="text" value="core-api" style="box-sizing: border-box; width: 100%; height: 38px; padding: 0 10px; background: #121211; border: 1px solid #2B2825; border-radius: 7px; color: #E9E6E0; font-size: 12.5px;">
-      </div>
-      <div>
-        <label for="shell" style="display: block; font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em; color: #8A857C; margin-bottom: 7px;">ОБОЛОЧКА</label>
-        <select id="shell" style="box-sizing: border-box; width: 100%; height: 38px; padding: 0 10px; background: #121211; border: 1px solid #2B2825; border-radius: 7px; color: #E9E6E0; font-size: 12.5px;">
-          <option>pwsh 7</option>
-          <option>Windows PowerShell 5.1</option>
-          <option>cmd</option>
-        </select>
-      </div>
-    </div>
-
-    <div>
-      <div style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em; color: #8A857C; margin-bottom: 8px;">ПРОФИЛЬ ПО УМОЛЧАНИЮ</div>
-      <div style="box-sizing: border-box; border: 1px solid #2B2825; border-radius: 8px; background: #121211; padding: 11px 12px; display: flex; flex-direction: column; gap: 9px;">
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <div style="width: 118px; font-size: 12px; color: #9C968C;">модель</div>
-          <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: #E9E6E0;">opus</div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <div style="width: 118px; font-size: 12px; color: #9C968C;">режим прав</div>
-          <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: #E9E6E0;">acceptEdits</div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <div style="width: 118px; font-size: 12px; color: #9C968C;">доп. флаги</div>
-          <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: #E9E6E0;">&#8212;</div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <div style="width: 118px; font-size: 12px; color: #9C968C;">перед стартом</div>
-          <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: #E9E6E0;">git fetch --prune</div>
-        </div>
-      </div>
-    </div>
-
-    <div style="display: flex; align-items: center; gap: 9px; box-sizing: border-box; padding: 9px 12px; border-radius: 8px; background: #1F2321; border: 1px solid #2E3936;">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6FA8A0" stroke-width="2" style="flex-shrink: 0;"><path d="M20 6L9 17l-5-5"></path></svg>
-      <div style="font-size: 12px; color: #C9C4BB;">Найдены <span style="font-family: 'JetBrains Mono', monospace; color: #E9E6E0;">CLAUDE.md</span> и <span style="font-family: 'JetBrains Mono', monospace; color: #E9E6E0;">.mcp.json</span> — подхватятся автоматически</div>
-    </div>
-
+<div class="frame" style="border-radius:0"><div class="dlg settings">
+  <div class="dlg-title">Новый проект<button class="caption" aria-label="Закрыть" style="margin-right:4px"><svg class="i" width="14" height="14" viewBox="0 0 14 14" stroke="var(--muted)" stroke-width="1.3"><path d="M2.5,2.5 L11.5,11.5 M11.5,2.5 L2.5,11.5"/></svg></button></div>
+  <div class="sform">
+    <label class="flabel" for="s-path">Каталог проекта</label>
+    <div style="display:flex;gap:8px"><input id="s-path" class="field mono" value="D:\work\kassa" style="flex:1">
+      <button class="dbtn" style="min-width:88px;height:30px;font-size:12px">Обзор…</button></div>
+    <div class="fhint" style="margin-top:7px">CLAUDE.md — найден<span style="margin:0 8px;color:var(--disabled)">·</span>.mcp.json — не найден</div>
+    <label class="flabel" for="s-name">Отображаемое имя</label>
+    <input id="s-name" class="field" value="kassa">
+    <label class="flabel" for="s-shell">Оболочка</label>
+    <select id="s-shell" class="field"><option>pwsh — PowerShell 7+</option><option>powershell — Windows PowerShell 5.1</option><option>cmd — cmd.exe</option></select>
+    <label class="flabel" for="s-pre">Команда перед запуском</label>
+    <input id="s-pre" class="field mono" value="git fetch --prune">
+    <div class="fhint">Выполняется в терминале до запуска claude. Пусто — ничего не выполняется.</div>
+    <label class="flabel" for="s-args">Дополнительные аргументы claude</label>
+    <input id="s-args" class="field mono" value="--model opus">
+    <div class="fhint">Разделяются пробелами. Аргумент с пробелом берите в кавычки; кавычка внутри кавычек удваивается.</div>
   </div>
-
-  <div style="box-sizing: border-box; padding: 14px 20px; border-top: 1px solid #2B2825; display: flex; align-items: center; gap: 10px; justify-content: flex-end;">
-    <button style="box-sizing: border-box; height: 38px; padding: 0 16px; border-radius: 8px; border: 1px solid #332F2B; color: #C9C4BB; font-size: 13px;">Отмена</button>
-    <button style="box-sizing: border-box; height: 38px; padding: 0 18px; border-radius: 8px; background: #D97757; color: #1A0E08; font-size: 13px; font-weight: 600;">Добавить</button>
-  </div>
-
-</div>
-</div>
+  <div class="sfoot"><button class="dbtn">Отмена</button><button class="dbtn primary">Добавить</button></div>
+</div></div>
 </section>
 </body>
 </html>
