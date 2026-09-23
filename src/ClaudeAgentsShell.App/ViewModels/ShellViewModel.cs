@@ -217,7 +217,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     public ICommand RestartTabCommand { get; }
 
     /// <summary>
-    /// Клик по счётчику «N ждёт ввода»: показать первую ждущую вкладку (раздел 6.3 ТЗ).
+    /// Клик по счётчику «N ждёт ввода»: показать следующую ждущую вкладку по кругу (раздел 6.3 ТЗ).
     /// Ждущих вкладок нет — команда недоступна, а сам счётчик в разметке скрыт.
     /// </summary>
     public ICommand ShowAwaitingTabCommand { get; }
@@ -666,7 +666,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     }
 
     /// <summary>
-    /// Показывает первую вкладку, ждущую ввода. Ждущих вкладок нет — не делает ничего.
+    /// Показывает следующую после активной вкладку, ждущую ввода, по кругу: повторные клики
+    /// обходят все ждущие вкладки. Ждущих вкладок нет — не делает ничего.
     /// <para>
     /// Счётчик считает вкладки всех проектов, а полоса показывает вкладки одного, поэтому
     /// переход идёт обычным <see cref="ActivateTabAsync"/>: он же переключает выбранный
@@ -675,7 +676,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// </para>
     /// </summary>
     public Task ShowAwaitingTabAsync(CancellationToken cancellationToken) =>
-        ActivateIfAnyAsync(Tabs.FirstAwaitingInput(), cancellationToken);
+        ActivateIfAnyAsync(Tabs.NextAwaitingInput(Tabs.ActiveTab), cancellationToken);
 
     /// <summary>
     /// Закрывает вкладку. Живой процесс — сначала подтверждение: отказ оставляет вкладку на месте.
