@@ -211,14 +211,67 @@ public sealed class TabReorderTests
 
         tabs[1].State = TabState.AwaitingInput;
         tabs[2].State = TabState.AwaitingInput;
-        Assert.Same(tabs[1], strip.FirstAwaitingInput());
+        Assert.Same(tabs[1], strip.NextAwaitingInput(null));
 
         // После перестановки «первая ждущая» — та, что стоит левее в полосе, а не та,
         // что открыта раньше: порядок полосы задаёт пользователь.
         strip.Reorder(tabs[2], 0);
 
-        Assert.Same(tabs[2], strip.FirstAwaitingInput());
+        Assert.Same(tabs[2], strip.NextAwaitingInput(null));
         Assert.Equal(2, strip.AwaitingInputCount);
+    }
+
+    [Fact]
+    public void The_awaiting_input_counter_cycles_through_waiting_tabs_across_projects()
+    {
+        var strip = new TabStripViewModel();
+        var first = Open(strip, FirstProject, "a", "b", "c");
+        var second = Open(strip, SecondProject, "d");
+        strip.ShowProject(FirstProject);
+
+        first[0].State = TabState.AwaitingInput;
+        first[2].State = TabState.AwaitingInput;
+        second[0].State = TabState.AwaitingInput;
+
+        // Повторные клики обходят все ждущие вкладки, включая чужой проект, и замыкаются в круг.
+        Assert.Same(first[2], strip.NextAwaitingInput(first[0]));
+        Assert.Same(second[0], strip.NextAwaitingInput(first[2]));
+        Assert.Same(first[0], strip.NextAwaitingInput(second[0]));
+
+        // С вкладки, которая сама не ждёт, — ближайшая ждущая справа от неё.
+        Assert.Same(first[2], strip.NextAwaitingInput(first[1]));
+    }
+
+    [Fact]
+    public void The_only_waiting_tab_stays_the_target_of_the_counter()
+    {
+        var strip = new TabStripViewModel();
+        var tabs = Open(strip, FirstProject, "a", "b");
+        strip.ShowProject(FirstProject);
+
+        tabs[1].State = TabState.AwaitingInput;
+
+        Assert.Same(tabs[1], strip.NextAwaitingInput(tabs[1]));
+    }
+
+    [Fact]
+    public void A_closed_current_tab_leads_the_counter_to_the_leftmost_waiting_tab()
+    {
+        var strip = new TabStripViewModel();
+        var tabs = Open(strip, FirstProject, "a", "b", "c");
+        strip.ShowProject(FirstProject);
+
+        tabs[0].State = TabState.AwaitingInput;
+        tabs[2].State = TabState.AwaitingInput;
+        strip.Remove(tabs[1]);
+
+        Assert.Same(tabs[0], strip.NextAwaitingInput(tabs[1]));
+    }
+
+    [Fact]
+    public void An_empty_strip_has_no_awaiting_target()
+    {
+        Assert.Null(new TabStripViewModel().NextAwaitingInput(null));
     }
 
     [Fact]

@@ -943,14 +943,17 @@ public sealed class ShellViewModelTests
     }
 
     [Fact]
-    public async Task Counter_leads_to_the_tab_that_was_opened_first_not_the_one_waiting_longest()
+    public async Task Counter_follows_strip_order_after_the_active_tab_not_hook_order()
     {
         var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
         var first = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
         var second = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+        var third = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
 
-        // Ждать начала вторая, но «первая» считается в порядке открытия: так цель клика
+        // Активна third — в полосе она после first и second. Ждать начала second раньше
+        // всех, но следующая после активной по порядку полосы — first (по кругу): цель клика
         // не зависит от того, в каком порядке пришли события хуков.
+        Assert.Same(third, harness.Shell.Tabs.ActiveTab);
         second!.State = TabState.AwaitingInput;
         first!.State = TabState.AwaitingInput;
 
@@ -958,6 +961,28 @@ public sealed class ShellViewModelTests
 
         Assert.Same(first, harness.Shell.Tabs.ActiveTab);
         Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+    }
+
+    [Fact]
+    public async Task Repeated_clicks_on_the_counter_cycle_through_waiting_tabs()
+    {
+        var harness = await StartedAsync(Project("alpha", PathA, 0), Project("beta", PathB, 1));
+        var first = await harness.Shell.OpenSessionAsync(harness.Row(0), CancellationToken.None);
+        var second = await harness.Shell.OpenSessionAsync(harness.Row(1), CancellationToken.None);
+        first!.State = TabState.AwaitingInput;
+        second!.State = TabState.AwaitingInput;
+
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+        Assert.Same(first, harness.Shell.Tabs.ActiveTab);
+
+        // Переход на вкладку не снимает «ждёт ввода», поэтому без обхода по кругу второй
+        // клик вёл бы туда же, а вторая ждущая сессия оставалась бы недостижимой.
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+        Assert.Same(second, harness.Shell.Tabs.ActiveTab);
+        Assert.Same(harness.Row(1), harness.Shell.ActiveProjectRow);
+
+        await harness.Shell.ShowAwaitingTabAsync(CancellationToken.None);
+        Assert.Same(first, harness.Shell.Tabs.ActiveTab);
     }
 
     [Fact]

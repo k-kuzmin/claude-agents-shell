@@ -229,7 +229,7 @@
             </Grid>
         </ScrollViewer>
 
-        <!-- Счётчик «N ждёт ввода»: кнопка перехода на первую ждущую вкладку (раздел 6.3 ТЗ).
+        <!-- Счётчик «N ждёт ввода»: кнопка перехода на следующую ждущую вкладку по кругу (раздел 6.3 ТЗ).
              Считает вкладки всех проектов, поэтому переход меняет и выбранный проект.
              Ждущих вкладок нет — кнопки не видно. -->
         <Button Grid.Column="1"
@@ -238,7 +238,7 @@
                 Style="{StaticResource FlatButtonStyle}"
                 Command="{Binding ShowAwaitingTabCommand}"
                 Visibility="{Binding Tabs.HasAwaitingInput, Converter={StaticResource BoolToVisibility}}"
-                ToolTip="Перейти к первой сессии, которая ждёт ввода"
+                ToolTip="Перейти к следующей сессии, которая ждёт ввода"
                 AutomationProperties.Name="Сессии, ждущие ввода">
             <StackPanel Orientation="Horizontal">
                 <Ellipse Width="6" Height="6" Margin="0,0,7,0" VerticalAlignment="Center" Fill="{StaticResource AccentBrush}" />
