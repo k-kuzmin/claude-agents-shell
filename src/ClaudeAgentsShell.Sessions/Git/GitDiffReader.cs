@@ -326,7 +326,7 @@ public sealed class GitDiffReader : IGitDiffReader
             parallel,
             async (i, token) =>
             {
-                var counts = await DiffUntrackedFile.CountLinesAsync(Path.Combine(root, paths[i]), _options, budget, token).ConfigureAwait(false);
+                var counts = await DiffUntrackedFile.CountLinesAsync(root, paths[i], _options, budget, token).ConfigureAwait(false);
                 entries[i] = new DiffFileEntry(paths[i], null, DiffChangeKind.Untracked, counts.Added, counts.Deleted, DiffCollapseReason.None);
             }).ConfigureAwait(false);
 
@@ -400,17 +400,9 @@ public sealed class GitDiffReader : IGitDiffReader
 
     private async Task<FileDiff> ReadUntrackedAsync(DiffIndex index, DiffFileEntry file, DiffContext context, CancellationToken cancellationToken)
     {
-        var root = Path.GetFullPath(index.RepositoryRoot);
-        var fullPath = Path.GetFullPath(Path.Combine(root, file.Path));
-        var relative = Path.GetRelativePath(root, fullPath);
-        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathFullyQualified(relative))
-        {
-            throw new DiffUnavailableException(DiffFailure.GitFailed, "Файл вне репозитория: " + file.Path);
-        }
-
         try
         {
-            var diff = await DiffUntrackedFile.BuildDiffAsync(fullPath, file.Path, _options, cancellationToken).ConfigureAwait(false);
+            var diff = await DiffUntrackedFile.BuildDiffAsync(index.RepositoryRoot, file.Path, _options, cancellationToken).ConfigureAwait(false);
             return new FileDiff(file.Path, context, diff.Text, diff.Truncated);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

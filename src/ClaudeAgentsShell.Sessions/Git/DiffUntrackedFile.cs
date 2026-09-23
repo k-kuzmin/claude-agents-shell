@@ -17,6 +17,11 @@ public readonly record struct UntrackedFileDiff(string Text, bool Truncated);
 /// Неотслеживаемый файл: строки и diff считаются в процессе, без запуска git на каждый файл.
 /// Файл только читается; разделяемый доступ не мешает редактору и агенту писать в него.
 /// </summary>
+/// <remarks>
+/// Ссылка (symlink, junction) — сама изменённый объект, как у git: её цель не открывается,
+/// diff — одна строка с текстом цели. Путь, проходящий через ссылку-каталог, и путь вне корня
+/// не читаются вовсе: иначе в панель и агенту ушло бы содержимое файла вне репозитория.
+/// </remarks>
 public static class DiffUntrackedFile
 {
     private const int ChunkSize = 64 * 1024;
@@ -24,21 +29,36 @@ public static class DiffUntrackedFile
     /// <summary>
     /// Считает строки: NUL в первых <see cref="GitDiffOptions.BinarySniffBytes"/> — бинарный
     /// (<c>null</c>/<c>null</c>), больше <see cref="GitDiffOptions.FileOutputCeilingBytes"/> или
-    /// не читается — <c>null</c>/0. Каталог (вложенный репозиторий) — 0/0.
+    /// не читается — <c>null</c>/0. Каталог (вложенный репозиторий) — 0/0. Ссылка — 1/0 (строка с целью),
+    /// путь через ссылку-каталог или вне корня — <c>null</c>/0.
     /// Файл читается потоком фиксированным буфером, целиком в памяти не держится.
     /// </summary>
-    /// <param name="fullPath">Файл на диске.</param>
+    /// <param name="root">Корень рабочего дерева.</param>
+    /// <param name="path">Путь от корня.</param>
     /// <param name="options">Потолок и размер проверки на бинарность.</param>
     /// <param name="budget">
     /// Общий на оглавление бюджет чтения. Не хватило — строки не считаются (<c>null</c>/0),
     /// читается только начало файла для проверки на бинарность.
     /// </param>
     /// <param name="cancellationToken">Отмена чтения.</param>
-    public static async Task<DiffLineCounts> CountLinesAsync(string fullPath, GitDiffOptions options, DiffReadBudget budget, CancellationToken cancellationToken)
+    public static async Task<DiffLineCounts> CountLinesAsync(
+        string root, string path, GitDiffOptions options, DiffReadBudget budget, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(fullPath);
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(budget);
+
+        var target = Resolve(root, path);
+        if (target.LinkText is not null)
+        {
+            return new DiffLineCounts(1, 0);
+        }
+
+        if (target.FullPath is not { } fullPath)
+        {
+            return new DiffLineCounts(null, 0);
+        }
 
         if (Directory.Exists(fullPath))
         {
@@ -99,17 +119,24 @@ public static class DiffUntrackedFile
     /// Собирает unified diff «новый файл» так же, как его напечатал бы git для добавленного файла.
     /// Больше потолка — начало до последней целой строки и <see cref="UntrackedFileDiff.Truncated"/>.
     /// </summary>
-    /// <param name="fullPath">Файл на диске.</param>
-    /// <param name="path">Путь от корня через <c>/</c> — для заголовков.</param>
+    /// <param name="root">Корень рабочего дерева.</param>
+    /// <param name="path">Путь от корня через <c>/</c> — и для заголовков.</param>
     /// <param name="options">Потолок и размер проверки на бинарность.</param>
     /// <param name="cancellationToken">Отмена чтения.</param>
-    /// <exception cref="IOException">Файл не читается.</exception>
-    public static async Task<UntrackedFileDiff> BuildDiffAsync(string fullPath, string path, GitDiffOptions options, CancellationToken cancellationToken)
+    /// <exception cref="IOException">Файл не читается, лежит вне корня или за ссылкой-каталогом.</exception>
+    public static async Task<UntrackedFileDiff> BuildDiffAsync(string root, string path, GitDiffOptions options, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(fullPath);
+        ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(options);
 
+        var target = Resolve(root, path);
+        if (target.LinkText is { } linkText)
+        {
+            return new UntrackedFileDiff(LinkDiff(path, linkText), false);
+        }
+
+        var fullPath = target.FullPath ?? throw new IOException("Файл вне репозитория или за ссылкой: " + path);
         var header = new StringBuilder()
             .Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
             .Append("new file mode 100644\n");
@@ -179,6 +206,64 @@ public static class DiffUntrackedFile
         return (filled == size ? content : content[..filled], truncated);
     }
 
+    /// <summary>
+    /// Куда смотрит путь от корня, не разыменовывая ссылок: обычный файл (<see cref="UntrackedTarget.FullPath"/>),
+    /// сама ссылка (<see cref="UntrackedTarget.LinkText"/>) или ничего — путь вне корня, проходит через
+    /// ссылку-каталог или атрибуты не читаются. Точка повторной обработки без цели ссылки (облачный
+    /// файл и т. п.) — обычный файл: её содержимое — она сама.
+    /// </summary>
+    private static UntrackedTarget Resolve(string root, string path)
+    {
+        try
+        {
+            var fullRoot = Path.GetFullPath(root);
+            var fullPath = Path.GetFullPath(Path.Combine(fullRoot, path));
+            var relative = Path.GetRelativePath(fullRoot, fullPath);
+            if (relative == "." || Path.IsPathFullyQualified(relative)
+                || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                return default;
+            }
+
+            var segments = relative.Split(Path.DirectorySeparatorChar);
+            var current = fullRoot;
+            for (var i = 0; i < segments.Length; i++)
+            {
+                current = Path.Combine(current, segments[i]);
+                var attributes = File.GetAttributes(current);
+                if ((attributes & FileAttributes.ReparsePoint) == 0)
+                {
+                    continue;
+                }
+
+                FileSystemInfo info = (attributes & FileAttributes.Directory) != 0 ? new DirectoryInfo(current) : new FileInfo(current);
+                if (info.LinkTarget is not { } linkTarget)
+                {
+                    continue;
+                }
+
+                return i == segments.Length - 1 ? new UntrackedTarget(null, linkTarget) : default;
+            }
+
+            return new UntrackedTarget(fullPath, null);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return default;
+        }
+    }
+
+    /// <summary>Diff новой ссылки, как его печатает git: режим 120000, одна строка с целью без перевода строки.</summary>
+    private static string LinkDiff(string path, string linkTarget) => new StringBuilder()
+        .Append("diff --git a/").Append(path).Append(" b/").Append(path).Append('\n')
+        .Append("new file mode 120000\n")
+        .Append("--- /dev/null\n")
+        .Append("+++ b/").Append(path).Append('\n')
+        .Append("@@ -0,0 +1 @@\n")
+        .Append('+').Append(linkTarget.Replace('\n', ' ')).Append('\n')
+        .Append("\\ No newline at end of file\n")
+        .ToString();
+
     private static bool ContainsNul(byte[] buffer, int length) => buffer.AsSpan(0, length).Contains((byte)0);
 
     private static int CountNewLines(byte[] buffer, int length) => buffer.AsSpan(0, length).Count((byte)'\n');
@@ -191,3 +276,8 @@ public static class DiffUntrackedFile
         ChunkSize,
         FileOptions.Asynchronous | FileOptions.SequentialScan);
 }
+
+/// <summary>Разрешённый путь неотслеживаемого элемента; оба <c>null</c> — не читается.</summary>
+/// <param name="FullPath">Обычный файл или каталог на диске.</param>
+/// <param name="LinkText">Элемент — ссылка; текст её цели.</param>
+internal readonly record struct UntrackedTarget(string? FullPath, string? LinkText);
