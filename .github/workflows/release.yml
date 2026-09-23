@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: write
+  # Найти смерженный PR по коммиту — ради заметок к релизу.
+  pull-requests: read
 
 jobs:
   release:
@@ -99,14 +101,20 @@ jobs:
       # Заметки берутся из раздела «## Заметки к релизу» описания смерженного PR
       # (правило — .claude/CLAUDE.md, раздел 5; шаблон — .github/pull_request_template.md).
       # Раздела нет или сборка запущена вручную — остаётся только ссылка на PR.
+      # Заметки необязательны: сбой API не должен ронять релиз.
       - name: Заметки к релизу
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $section = ''
-          $pr = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/pulls" |
-            ConvertFrom-Json | Where-Object { $_.merged_at } | Select-Object -First 1
+          $pr = $null
+          $json = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/pulls"
+          if ($LASTEXITCODE -eq 0) {
+            $pr = $json | ConvertFrom-Json | Where-Object { $_.merged_at } | Select-Object -First 1
+          } else {
+            Write-Host "PR по коммиту не найден (gh api: $LASTEXITCODE) — заметки без раздела."
+          }
           if ($pr) {
             $body = "$($pr.body)" -replace "`r`n", "`n"
             $match = [regex]::Match($body, '(?ms)^##[ \t]+Заметки к релизу[ \t]*\n(.*?)(?=^##[ \t]|\z)')
@@ -118,6 +126,8 @@ jobs:
             $section = if ($section) { "$section`n`n$link" } else { $link }
           }
           Set-Content -Path release-notes.md -Encoding utf8 -Value $section
+          # Actions завершает pwsh-шаг кодом $LASTEXITCODE — провал gh api выше не должен его задать.
+          $global:LASTEXITCODE = 0
 
       - name: Релиз
         shell: pwsh
