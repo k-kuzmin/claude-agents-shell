@@ -1,9 +1,11 @@
 name: release
 
-# Мердж PR в main — это push в main, поэтому триггер здесь один.
-# Изменения только в документации релиза не создают: собирать нечего.
+# Релиз собирается только при мерже PR в main — не на каждый push в main.
+# PR, закрытый без мержа, релиза не даёт (условие на job).
+# PR, менявший только документацию, релиза не создаёт: собирать нечего.
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches: [main]
     paths-ignore:
       - '**.md'
@@ -14,16 +16,20 @@ on:
 
 permissions:
   contents: write
-  # Найти смерженный PR по коммиту — ради заметок к релизу.
-  pull-requests: read
 
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     # WPF собирается только на Windows.
     runs-on: windows-latest
+    env:
+      # Для закрытого PR github.sha — не коммит в main, собирается коммит мержа.
+      RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -100,34 +106,27 @@ jobs:
 
       # Заметки берутся из раздела «## Заметки к релизу» описания смерженного PR
       # (правило — .claude/CLAUDE.md, раздел 5; шаблон — .github/pull_request_template.md).
-      # Раздела нет или сборка запущена вручную — остаётся только ссылка на PR.
-      # Заметки необязательны: сбой API не должен ронять релиз.
+      # Описание приходит в событии через env, а не подстановкой в скрипт: в нём бывают кавычки.
+      # Раздела нет — остаётся ссылка на PR; ручной запуск — заметок нет.
       - name: Заметки к релизу
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           $section = ''
-          $pr = $null
-          $json = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/pulls"
-          if ($LASTEXITCODE -eq 0) {
-            $pr = $json | ConvertFrom-Json | Where-Object { $_.merged_at } | Select-Object -First 1
-          } else {
-            Write-Host "PR по коммиту не найден (gh api: $LASTEXITCODE) — заметки без раздела."
-          }
-          if ($pr) {
-            $body = "$($pr.body)" -replace "`r`n", "`n"
+          if ($env:PR_NUMBER) {
+            $body = "$env:PR_BODY" -replace "`r`n", "`n"
             $match = [regex]::Match($body, '(?ms)^##[ \t]+Заметки к релизу[ \t]*\n(.*?)(?=^##[ \t]|\z)')
             if ($match.Success) {
               # Подсказки шаблона и строка авторства в конце описания PR в релиз не идут.
               $section = ($match.Groups[1].Value -replace '(?s)<!--.*?-->', '' -replace '(?m)^🤖.*$', '').Trim()
             }
-            $link = "Подробности — PR #$($pr.number): $($pr.html_url)"
+            $link = "Подробности — PR #$($env:PR_NUMBER): $($env:PR_URL)"
             $section = if ($section) { "$section`n`n$link" } else { $link }
           }
           Set-Content -Path release-notes.md -Encoding utf8 -Value $section
-          # Actions завершает pwsh-шаг кодом $LASTEXITCODE — провал gh api выше не должен его задать.
-          $global:LASTEXITCODE = 0
 
       - name: Релиз
         shell: pwsh
@@ -136,7 +135,7 @@ jobs:
         run: |
           $changes = Get-Content -Path release-notes.md -Raw -Encoding utf8
           $install = @"
-          Сборка из коммита $env:GITHUB_SHA.
+          Сборка из коммита $env:RELEASE_SHA.
 
           **Установка:** распаковать архив и запустить ``ClaudeAgentsShell.exe``.
 
