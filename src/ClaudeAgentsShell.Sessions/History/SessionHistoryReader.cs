@@ -23,6 +23,12 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
     private const string TranscriptPattern = "*.jsonl";
     private const int SessionIdLimit = 128;
 
+    /// <summary>
+    /// Сколько транскриптов читается одновременно. Чтение останавливается на заголовке и упирается
+    /// в открытие файла и первые килобайты, а не в процессор: больше нескольких потоков не нужно.
+    /// </summary>
+    private const int ReadParallelism = 8;
+
     private readonly IAppDataPaths _paths;
     private readonly long _scanLimit;
     private readonly ConcurrentDictionary<string, CachedSummary> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -44,16 +50,21 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
     {
         ArgumentNullException.ThrowIfNull(workingDirectory);
 
+        string directoryPath;
         FileInfo[] files;
         try
         {
             var directory = new DirectoryInfo(ProjectDirectory(workingDirectory));
+            directoryPath = directory.FullName;
             if (!directory.Exists)
             {
                 // Каталога нет — история пустая, это не ошибка (раздел 8 ТЗ).
+                PruneCache(directoryPath, []);
                 return [];
             }
 
+            // Время изменения и размер приходят из перечисления каталога: на неизменный файл
+            // ни открытия, ни отдельного запроса метаданных не тратится — его сводка из кэша.
             files = directory.GetFiles(TranscriptPattern);
         }
         catch (Exception exception) when (exception is IOException
@@ -64,15 +75,30 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
             return [];
         }
 
-        var summaries = new List<SessionSummary>(files.Length);
-        foreach (var file in files.OrderByDescending(static f => f.LastWriteTimeUtc))
-        {
-            // Списку сводка нужна всегда: не дочитанный и не открывшийся файл всё равно
-            // показывается строкой «имя файла и дата» (раздел 8 ТЗ).
-            var parsed = await ReadFileAsync(file, cancellationToken).ConfigureAwait(false);
-            summaries.Add(parsed.Summary);
-        }
+        Array.Sort(files, static (left, right) => right.LastWriteTimeUtc.CompareTo(left.LastWriteTimeUtc));
 
+        // Списку сводка нужна всегда: не дочитанный и не открывшийся файл всё равно
+        // показывается строкой «имя файла и дата» (раздел 8 ТЗ). Файлы читаются параллельно,
+        // с ограничением: на сотне транскриптов последовательное чтение даёт заметную паузу,
+        // а неограниченное — сотню одновременных дескрипторов. Порядок держится индексом.
+        var summaries = new SessionSummary[files.Length];
+        var options = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = ReadParallelism,
+            CancellationToken = cancellationToken,
+        };
+
+        await Parallel.ForEachAsync(
+                Enumerable.Range(0, files.Length),
+                options,
+                async (index, token) =>
+                {
+                    var parsed = await ReadFileAsync(files[index], token).ConfigureAwait(false);
+                    summaries[index] = parsed.Summary;
+                })
+            .ConfigureAwait(false);
+
+        PruneCache(directoryPath, files);
         return summaries;
     }
 
@@ -146,8 +172,41 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         }
 
         var parsed = await ParseAsync(file, modified, size, _scanLimit, cancellationToken).ConfigureAwait(false);
-        _cache[file.FullName] = new CachedSummary(modified, size, parsed);
+        if (parsed.Readable)
+        {
+            _cache[file.FullName] = new CachedSummary(modified, size, parsed);
+        }
+        else
+        {
+            // Не открылся или оборвался — запоминать нечего: иначе однажды занятый файл так и
+            // оставался бы без заголовка, пока не изменится.
+            _cache.TryRemove(file.FullName, out _);
+        }
+
         return parsed;
+    }
+
+    /// <summary>
+    /// Убирает из кэша транскрипты каталога, которых в нём больше нет. Так кэш ограничен
+    /// существующими файлами просмотренных проектов, а не всем, что когда-либо читалось.
+    /// </summary>
+    private void PruneCache(string directory, FileInfo[] present)
+    {
+        var alive = new HashSet<string>(present.Length, StringComparer.OrdinalIgnoreCase);
+        foreach (var file in present)
+        {
+            alive.Add(file.FullName);
+        }
+
+        var directoryKey = Path.TrimEndingDirectorySeparator(directory);
+        foreach (var key in _cache.Keys)
+        {
+            if (!alive.Contains(key)
+                && string.Equals(Path.GetDirectoryName(key), directoryKey, StringComparison.OrdinalIgnoreCase))
+            {
+                _cache.TryRemove(key, out _);
+            }
+        }
     }
 
     private static async Task<ParsedTranscript> ParseAsync(

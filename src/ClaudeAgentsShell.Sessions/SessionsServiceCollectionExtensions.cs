@@ -18,7 +18,7 @@ public static class SessionsServiceCollectionExtensions
     /// журнал сбоев, чтение и слежение за веткой, сборку команд запуска, приёмник хуков,
     /// открытие ссылок, журнал принятых хуков,
     /// генератор настроек с хуками, MCP-маршрут с инструментом <c>show_diff</c> и его конфиг,
-    /// чтение истории сессий и запуск проводника.
+    /// чтение истории сессий и слежение за ней, запуск проводника.
     /// </summary>
     public static IServiceCollection AddSessionsLayer(this IServiceCollection services)
     {
@@ -57,6 +57,7 @@ public static class SessionsServiceCollectionExtensions
         services.TryAddSingleton<McpJsonRpcHandler>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoopbackRoute, McpRoute>());
         services.TryAddSingleton<ISessionHistoryReader, SessionHistoryReader>();
+        services.TryAddSingleton<ISessionHistoryWatcher, SessionHistoryWatcher>();
 
         return services;
     }
