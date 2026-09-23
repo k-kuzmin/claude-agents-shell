@@ -38,7 +38,7 @@
                 <ResourceDictionary Source="Theme.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
-            <!-- Текст на акцентной плашке «Enter». -->
+            <!-- Текст на акцентной плашке «Открыть». -->
             <SolidColorBrush x:Key="OnAccentTextBrush" Color="#1A0E08" />
 
             <!-- Полоса прокрутки списка — тонкая тёмная из темы, а не системная. -->
@@ -191,10 +191,10 @@
                         <Button Margin="10,0,0,0"
                                 Style="{StaticResource AcceptBadgeStyle}"
                                 Command="{Binding DataContext.AcceptCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                ToolTip="Открыть во вкладке"
+                                ToolTip="Открыть во вкладке (Enter)"
                                 AutomationProperties.Name="Открыть сессию во вкладке"
                                 Visibility="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}, Converter={StaticResource BoolToVisibility}}">
-                            <TextBlock Text="Enter"
+                            <TextBlock Text="Открыть"
                                        VerticalAlignment="Center"
                                        FontSize="12"
                                        FontWeight="SemiBold"
