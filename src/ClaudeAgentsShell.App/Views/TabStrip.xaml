@@ -117,13 +117,17 @@
                                                     ToolTip="Показать diff (Ctrl+Shift+D)"
                                                     AutomationProperties.Name="Показать diff">
                                                 <Grid Width="12" Height="12">
-                                                    <Path x:Name="DiffIcon"
-                                                          Style="{StaticResource IconPathStyle}"
-                                                          StrokeThickness="1.3"
-                                                          Stroke="{StaticResource FaintTextBrush}"
-                                                          HorizontalAlignment="Center"
-                                                          VerticalAlignment="Center"
-                                                          Data="M5.5,1.5 L5.5,6.5 M3,4 L8,4 M3,9.5 L8,9.5" />
+                                                    <!-- Координаты заданы во всей сетке 12×12, без выравнивания по
+                                                         центру: Path без Stretch меряется от нуля до края фигуры,
+                                                         и Center сдвигал бы знак влево-вверх. -->
+                                                    <Path Style="{StaticResource IconPathStyle}"
+                                                          StrokeThickness="1.4"
+                                                          Stroke="{StaticResource DiffAddedBrush}"
+                                                          Data="M6,1 L6,7 M3,4 L9,4" />
+                                                    <Path Style="{StaticResource IconPathStyle}"
+                                                          StrokeThickness="1.4"
+                                                          Stroke="{StaticResource DiffRemovedBrush}"
+                                                          Data="M3,10.5 L9,10.5" />
                                                     <Ellipse x:Name="PendingDiffDot"
                                                              Width="5" Height="5"
                                                              HorizontalAlignment="Right"
