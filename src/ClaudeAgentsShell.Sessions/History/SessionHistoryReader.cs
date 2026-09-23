@@ -19,6 +19,10 @@ namespace ClaudeAgentsShell.Sessions.History;
 /// Файлы только читаются: ни записи, ни удаления, ни создания каталога (раздел 7 CLAUDE.md).
 /// Любой сбой разбора деградирует до «имя файла и дата» и не роняет приложение.
 /// </para>
+/// <para>
+/// Транскрипты сабагентов и запусков без терминала в список не попадают (<see cref="AuxiliarySession"/>).
+/// <see cref="ReadOneAsync"/> их не отсекает: его спрашивают по id уже идущей сессии из хука.
+/// </para>
 /// </summary>
 public sealed class SessionHistoryReader : ISessionHistoryReader
 {
@@ -73,7 +77,11 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
 
             // Время изменения и размер приходят из перечисления каталога: на неизменный файл
             // ни открытия, ни отдельного запроса метаданных не тратится — его сводка из кэша.
-            files = directory.GetFiles(TranscriptPattern);
+            // Сабагенты старой раскладки (agent-*.jsonl рядом с сессией) отсекаются по имени,
+            // без открытия. Новая раскладка кладёт их в подкаталог, и сюда они не попадают.
+            files = Array.FindAll(
+                directory.GetFiles(TranscriptPattern),
+                static file => !AuxiliarySession.IsAgentFileName(file.Name));
         }
         catch (Exception exception) when (exception is IOException
                                               or UnauthorizedAccessException
@@ -89,7 +97,7 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         // показывается строкой «имя файла и дата» (раздел 8 ТЗ). Файлы читаются параллельно,
         // с ограничением: на сотне транскриптов последовательное чтение даёт заметную паузу,
         // а неограниченное — сотню одновременных дескрипторов. Порядок держится индексом.
-        var summaries = new SessionSummary[files.Length];
+        var summaries = new SessionSummary?[files.Length];
         var options = new ParallelOptions
         {
             MaxDegreeOfParallelism = ReadParallelism,
@@ -102,12 +110,24 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
                 async (index, token) =>
                 {
                     var parsed = await ReadFileAsync(files[index], token).ConfigureAwait(false);
-                    summaries[index] = parsed.Summary;
+                    // Сабагент или запуск без терминала: продолжать его через --resume нельзя.
+                    // Признак прочитан тем же проходом, что и заголовок, и лежит в кэше вместе с ним.
+                    summaries[index] = parsed.Auxiliary ? null : parsed.Summary;
                 })
             .ConfigureAwait(false);
 
         PruneCache(directoryPath, files);
-        return summaries;
+
+        var visible = new List<SessionSummary>(summaries.Length);
+        foreach (var summary in summaries)
+        {
+            if (summary is not null)
+            {
+                visible.Add(summary);
+            }
+        }
+
+        return visible;
     }
 
     /// <inheritdoc />
@@ -250,6 +270,8 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         var sessionId = Path.GetFileNameWithoutExtension(file.Name);
         string? title = null;
         var branch = resume.Branch;
+        var entrypoint = resume.Entrypoint;
+        var sidechain = resume.Sidechain;
         var readable = true;
 
         // Позиция — байтовое смещение сразу за последней целой строкой: строки режутся по байту
@@ -287,6 +309,8 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
                         {
                             var tail = Inspect(buffer.AsSpan(start, end - start), offset == 0);
                             branch ??= tail.Branch;
+                            entrypoint ??= tail.Entrypoint;
+                            sidechain ??= tail.Sidechain;
                             title = tail.Title;
                         }
 
@@ -327,6 +351,11 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
                 start += newline + 1;
                 offset += newline + 1;
                 branch ??= parsed.Branch;
+
+                // Первые встреченные значения: у главной сессии isSidechain бывает true в дальних
+                // строках, а решает то, с чего транскрипт начался.
+                entrypoint ??= parsed.Entrypoint;
+                sidechain ??= parsed.Sidechain;
 
                 if (parsed.Title is { } found)
                 {
@@ -370,13 +399,16 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         // MessageCount остаётся null умышленно: чтобы его посчитать, пришлось бы дочитать файл
         // до конца, а это прямо противоречит требованию остановиться на заголовке.
         var summary = new SessionSummary(sessionId, file.FullName, modified, size, title, null, branch);
-        return (new ParsedTranscript(summary, readable), new ScanProgress(offset, scanned, limitReached, branch));
+        var auxiliary = AuxiliarySession.IsAuxiliary(entrypoint, sidechain);
+        return (
+            new ParsedTranscript(summary, readable, auxiliary),
+            new ScanProgress(offset, scanned, limitReached, branch, entrypoint, sidechain));
     }
 
     /// <summary>Разбирает одну строку транскрипта из байтов UTF-8.</summary>
     /// <param name="line">Байты строки без завершающего <c>\n</c>.</param>
     /// <param name="fileStart">Строка первая в файле — у неё может быть метка порядка байтов.</param>
-    private static (string? Title, string? Branch, int Chars) Inspect(ReadOnlySpan<byte> line, bool fileStart)
+    private static (string? Title, string? Branch, string? Entrypoint, bool? Sidechain, int Chars) Inspect(ReadOnlySpan<byte> line, bool fileStart)
     {
         if (fileStart && line.StartsWith(Utf8Bom))
         {
@@ -390,7 +422,7 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
 
         var text = Encoding.UTF8.GetString(line);
         var parsed = TranscriptLineParser.Parse(text);
-        return (parsed.Title, parsed.Branch, text.Length);
+        return (parsed.Title, parsed.Branch, parsed.Entrypoint, parsed.Sidechain, text.Length);
     }
 
     /// <summary>Разобранный транскрипт и признак того, что файл удалось прочитать.</summary>
@@ -399,16 +431,28 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
     /// <c>false</c> — файл не открылся или чтение оборвалось. Отсутствие заголовка в этом случае
     /// ничего не доказывает, и спросить позже имеет смысл.
     /// </param>
-    private readonly record struct ParsedTranscript(SessionSummary Summary, bool Readable);
+    /// <param name="Auxiliary">
+    /// Транскрипт сабагента или запуска без терминала (<see cref="AuxiliarySession"/>): в список
+    /// истории не попадает. Не прочитан признак — <c>false</c>, сессия остаётся.
+    /// </param>
+    private readonly record struct ParsedTranscript(SessionSummary Summary, bool Readable, bool Auxiliary);
 
     /// <summary>Докуда просмотрен транскрипт без заголовка.</summary>
     /// <param name="Offset">Байтовое смещение сразу за последней целой просмотренной строкой.</param>
     /// <param name="ScannedChars">Сколько символов уже засчитано в предел просмотра.</param>
     /// <param name="LimitReached">Проход упёрся в предел: дальше заголовок не ищется.</param>
     /// <param name="Branch">Ветка, найденная в просмотренной части.</param>
-    private sealed record ScanProgress(long Offset, long ScannedChars, bool LimitReached, string? Branch)
+    /// <param name="Entrypoint">Первое <c>entrypoint</c> в просмотренной части.</param>
+    /// <param name="Sidechain">Первое <c>isSidechain</c> в просмотренной части.</param>
+    private sealed record ScanProgress(
+        long Offset,
+        long ScannedChars,
+        bool LimitReached,
+        string? Branch,
+        string? Entrypoint,
+        bool? Sidechain)
     {
-        public static ScanProgress Start { get; } = new(0, 0, false, null);
+        public static ScanProgress Start { get; } = new(0, 0, false, null, null, null);
     }
 
     /// <summary>Запись кэша разбора.</summary>

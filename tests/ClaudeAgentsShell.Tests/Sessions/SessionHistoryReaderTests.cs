@@ -355,6 +355,170 @@ public sealed class SessionHistoryReaderTests
         }
     }
 
+    private const string MainSessionId = "11111111-2222-3333-4444-555555555555";
+
+    private static string CliUser(string text) =>
+        "{\"type\":\"user\",\"entrypoint\":\"cli\",\"isSidechain\":false,\"message\":{\"role\":\"user\",\"content\":\"" + text + "\"}}";
+
+    /// <summary>Главная сессия рядом со служебной: проверяет, что отсечена только служебная.</summary>
+    private static void WriteMainSession(TempDirectory temp) =>
+        WriteTranscript(temp, MainSessionId, """{"type":"last-prompt"}""", CliUser("главная"));
+
+    [Fact]
+    public async Task Сабагент_старой_раскладки_отсекается_по_имени_без_открытия()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteMainSession(temp);
+        var agent = WriteTranscript(temp, "agent-a1b2c3d4", CliUser("задача сабагента"));
+
+        // Файл заперт: попытка его открыть дала бы строку «имя и дата», а не пропуск.
+        using var locked = new FileStream(agent, FileMode.Open, FileAccess.Read, FileShare.None);
+        var list = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        Assert.Equal([MainSessionId], list.Select(static s => s.SessionId));
+    }
+
+    [Theory]
+    [InlineData("sdk-py")]
+    [InlineData("sdk-ts")]
+    [InlineData("sdk-cli")]
+    public async Task Запуск_без_терминала_в_историю_не_попадает(string entrypoint)
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteMainSession(temp);
+
+        // Форма из реального корпуса: две записи очереди, затем сообщение с entrypoint.
+        WriteTranscript(temp, SessionId,
+            """{"type":"queue-operation","operation":"enqueue"}""",
+            """{"type":"queue-operation","operation":"dequeue"}""",
+            "{\"type\":\"user\",\"entrypoint\":\"" + entrypoint + "\",\"isSidechain\":false,\"message\":{\"role\":\"user\",\"content\":\"ревью\"}}");
+
+        var list = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        Assert.Equal([MainSessionId], list.Select(static s => s.SessionId));
+    }
+
+    [Fact]
+    public async Task Запуск_без_терминала_с_заголовком_ИИ_в_начале_тоже_отсекается()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteMainSession(temp);
+        WriteTranscript(temp, SessionId,
+            """{"type":"ai-title","aiTitle":"Ревью"}""",
+            """{"type":"queue-operation","operation":"enqueue"}""",
+            """{"type":"user","entrypoint":"sdk-py","message":{"role":"user","content":"ревью"}}""");
+
+        var list = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        Assert.Equal([MainSessionId], list.Select(static s => s.SessionId));
+    }
+
+    [Fact]
+    public async Task Ветка_сабагента_с_первой_записи_отсекается()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteMainSession(temp);
+        WriteTranscript(temp, SessionId,
+            """{"type":"user","isSidechain":true,"entrypoint":"cli","message":{"role":"user","content":"задача"}}""",
+            """{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":"ок"}}""");
+
+        var list = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        Assert.Equal([MainSessionId], list.Select(static s => s.SessionId));
+    }
+
+    [Fact]
+    public async Task Главная_сессия_с_признаками_в_дальних_строках_остаётся()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+
+        // Заголовок не на первой строке, поэтому дальние строки просматриваются: признаки в них
+        // не должны перебивать то, с чего сессия началась.
+        WriteTranscript(temp, SessionId,
+            """{"type":"mode","entrypoint":"cli","isSidechain":false}""",
+            """{"type":"assistant","isSidechain":true,"entrypoint":"sdk-py","message":{"role":"assistant","content":"x"}}""",
+            """{"type":"user","isSidechain":true,"message":{"role":"user","content":"ответ сабагента"}}""",
+            """{"type":"user","message":{"role":"user","content":"главная"}}""");
+
+        var list = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        var summary = Assert.Single(list);
+        Assert.Equal(SessionId, summary.SessionId);
+        Assert.Equal("главная", summary.Title);
+    }
+
+    [Fact]
+    public async Task Без_признаков_и_с_битой_первой_строкой_сессия_остаётся_с_деградацией()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteTranscript(temp, SessionId, "{ не json", Assistant("без заголовка"));
+        var locked = WriteTranscript(temp, MainSessionId, CliUser("не откроется"));
+
+        // Не открывшийся файл признак не прочитал — он тоже остаётся строкой «имя и дата».
+        using var lockStream = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None);
+        var list = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        Assert.Equal(2, list.Count);
+        Assert.All(list, static summary => Assert.Null(summary.Title));
+        Assert.Contains(list, static summary => summary.SessionId == SessionId);
+        Assert.Contains(list, static summary => summary.SessionId == MainSessionId);
+    }
+
+    [Fact]
+    public async Task Признак_запоминается_в_кэше_и_повторно_файл_не_открывается()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteMainSession(temp);
+        var sdk = WriteTranscript(temp, SessionId,
+            """{"type":"user","entrypoint":"sdk-py","message":{"role":"user","content":"ревью"}}""");
+
+        Assert.Single(await reader.ReadAsync(WorkingDirectory, CancellationToken.None));
+
+        // Открой повторный вызов служебный файл — признак бы не прочитался и строка вернулась бы.
+        using var locked = new FileStream(sdk, FileMode.Open, FileAccess.Read, FileShare.None);
+        var second = await reader.ReadAsync(WorkingDirectory, CancellationToken.None);
+
+        Assert.Equal([MainSessionId], second.Select(static s => s.SessionId));
+    }
+
+    [Fact]
+    public async Task Признак_из_просмотренного_начала_переживает_дозапись()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var sdkFiller = "{\"type\":\"assistant\",\"entrypoint\":\"sdk-py\",\"text\":\"" + new string('a', 110) + "\"}";
+        var path = WriteTranscript(temp, SessionId, sdkFiller, Assistant("без заголовка"));
+
+        Assert.Empty(await reader.ReadAsync(WorkingDirectory, CancellationToken.None));
+
+        // Начало подменено строкой без признака: скан с нуля показал бы сессию, продолжение с
+        // сохранённой позиции помнит entrypoint из уже просмотренной части.
+        OverwriteHead(path, "подменённое начало");
+        AppendLines(path, """{"type":"user","message":{"role":"user","content":"дописанный вопрос"}}""");
+
+        Assert.Empty(await reader.ReadAsync(WorkingDirectory, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Чтение_по_id_из_хука_служебные_сессии_не_отсекает()
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        WriteTranscript(temp, SessionId,
+            """{"type":"user","entrypoint":"sdk-py","message":{"role":"user","content":"ревью"}}""");
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("ревью", summary?.Title);
+    }
+
     [Fact]
     public async Task Удалённый_транскрипт_вычищается_из_кэша()
     {
