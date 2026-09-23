@@ -180,11 +180,12 @@ working set 321 МБ без роста. WebView2 — 430 МБ в шести пр
 - **Число сообщений не показывается** (отступление от ТЗ 6.4): оно требует читать транскрипт целиком.
 - **`--continue`** — пункт «Продолжить последнюю сессию» в контекстном меню строки проекта.
 - **Сессия уже открыта во вкладке** — выбор в истории переключает на неё, второй `claude` не запускается; строка помечена «открыта».
-- **Фильтр по проектам — как в ТЗ**: окно открывается с фильтром на проекте строки, фильтр можно сменить.
+- **Фильтра по проектам нет** (отступление от ТЗ 6.4, пересмотр 23.09 после первой реализации): окно показывает историю только проекта строки, с которой его открыли. Контракт `SessionHistoryRequest(Project, OpenSessionIds)`.
+- **«Открыта» = только живые вкладки** (процесс работает, сессия не завершена): сессия из мёртвой вкладки открывается новой с `--resume`.
 
 ### Контракты
 - `Application/Ports/ISessionHistoryWatcher` — `IDisposable Watch(workingDirectory, Action changed)`, только FileSystemWatcher; ждёт появления каталога истории.
-- `App/Services/ISessionHistoryDialog` — `Task<SessionHistoryChoice?> ShowAsync(SessionHistoryRequest, ct)`; записи `SessionHistoryRequest(Projects, InitialProjectId, OpenSessionIds)`, `SessionHistoryProject`, `SessionHistoryChoice(ProjectId, SessionId)`.
+- `App/Services/ISessionHistoryDialog` — `Task<SessionHistoryChoice?> ShowAsync(SessionHistoryRequest, ct)`; записи `SessionHistoryRequest(Project, OpenSessionIds)`, `SessionHistoryProject`, `SessionHistoryChoice(ProjectId, SessionId)`.
 
 ### Блоки и владение файлами
 - **B1 — Sessions/History:** `SessionHistoryWatcher`, регистрация в `SessionsServiceCollectionExtensions`, скорость `ReadAsync` на сотне файлов (приёмка ТЗ M3).
