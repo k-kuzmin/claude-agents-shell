@@ -84,25 +84,10 @@ public static class GitDiffOutputParser
                 continue;
             }
 
-            var parts = field.Split('\t', 3);
-            if (parts.Length < 3)
+            if (!ReadNumstat(field, fields, ref i, counts))
             {
-                continue;
+                break;
             }
-
-            var numstatPath = parts[2];
-            if (numstatPath.Length == 0)
-            {
-                if (i + 1 >= fields.Count)
-                {
-                    break;
-                }
-
-                i++; // старый путь
-                numstatPath = fields[i++];
-            }
-
-            counts[numstatPath] = (ParseCount(parts[0]), ParseCount(parts[1]));
         }
 
         for (var index = 0; index < entries.Count; index++)
@@ -113,6 +98,85 @@ public static class GitDiffOutputParser
         }
 
         return entries;
+    }
+
+    /// <summary>
+    /// Разбирает <c>git diff --numstat -z</c> без raw: путь → счётчики, у бинарного <c>null</c>/<c>null</c>.
+    /// У переименования ключ — новый путь.
+    /// </summary>
+    public static IReadOnlyDictionary<string, (int? Added, int? Deleted)> ParseNumstat(string output)
+    {
+        var fields = SplitNul(output);
+        var counts = new Dictionary<string, (int? Added, int? Deleted)>(StringComparer.Ordinal);
+        var i = 0;
+        while (i < fields.Count)
+        {
+            var field = fields[i++];
+            if (field.Length > 0 && !ReadNumstat(field, fields, ref i, counts))
+            {
+                break;
+            }
+        }
+
+        return counts;
+    }
+
+    /// <summary>
+    /// Заменяет счётчики строк оглавления, построенного без <c>-w</c>, счётчиками numstat с <c>-w</c>.
+    /// Нет записи — под <c>-w</c> строк не изменилось: 0/0. Бинарный (<c>null</c>/<c>null</c>) остаётся бинарным.
+    /// </summary>
+    /// <remarks>
+    /// Список файлов строится без <c>-w</c> намеренно: git 2.55 под <c>-w</c> не выдаёт raw-запись
+    /// файла, где изменены только пробелы (2.45 выдаёт), а файл должен оставаться в оглавлении.
+    /// </remarks>
+    public static IReadOnlyList<DiffFileEntry> WithWhitespaceIgnoredCounts(
+        IReadOnlyList<DiffFileEntry> entries, IReadOnlyDictionary<string, (int? Added, int? Deleted)> counts)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(counts);
+        var result = new List<DiffFileEntry>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (entry.AddedLines is null && entry.DeletedLines is null)
+            {
+                result.Add(entry);
+                continue;
+            }
+
+            var count = counts.TryGetValue(entry.Path, out var found) ? found : (0, 0);
+            result.Add(entry with { AddedLines = count.Added, DeletedLines = count.Deleted });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Читает одну запись numstat, начатую полем <paramref name="field"/>; у переименования
+    /// забирает из <paramref name="fields"/> ещё два пути. <c>false</c> — вывод оборван.
+    /// </summary>
+    private static bool ReadNumstat(
+        string field, IReadOnlyList<string> fields, ref int i, Dictionary<string, (int? Added, int? Deleted)> counts)
+    {
+        var parts = field.Split('\t', 3);
+        if (parts.Length < 3)
+        {
+            return true;
+        }
+
+        var path = parts[2];
+        if (path.Length == 0)
+        {
+            if (i + 1 >= fields.Count)
+            {
+                return false;
+            }
+
+            i++; // старый путь
+            path = fields[i++];
+        }
+
+        counts[path] = (ParseCount(parts[0]), ParseCount(parts[1]));
+        return true;
     }
 
     /// <summary>

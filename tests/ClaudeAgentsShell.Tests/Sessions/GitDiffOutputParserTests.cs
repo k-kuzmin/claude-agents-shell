@@ -116,4 +116,33 @@ public sealed class GitDiffOutputParserTests
                 worktrees);
         }
     }
+
+    [Fact]
+    public void Numstat_без_raw_читает_счётчики_бинарный_и_переименование()
+    {
+        var counts = GitDiffOutputParser.ParseNumstat("3\t1\ta.txt\0-\t-\tbin.dat\0" + "2\t0\t\0old.txt\0новое.txt\0");
+
+        Assert.Equal((3, 1), counts["a.txt"]);
+        Assert.Equal((null, null), counts["bin.dat"]);
+        Assert.Equal((2, 0), counts["новое.txt"]);
+        Assert.Equal(3, counts.Count);
+    }
+
+    [Fact]
+    public void Счётчики_с_w_заменяют_прежние_а_файл_без_записи_получает_ноль()
+    {
+        DiffFileEntry[] entries =
+        [
+            new("a.txt", null, DiffChangeKind.Modified, 5, 2, DiffCollapseReason.None),
+            new("spaces.txt", null, DiffChangeKind.Modified, 1, 1, DiffCollapseReason.None),
+            new("bin.dat", null, DiffChangeKind.Modified, null, null, DiffCollapseReason.None),
+        ];
+
+        var result = GitDiffOutputParser.WithWhitespaceIgnoredCounts(entries, GitDiffOutputParser.ParseNumstat("4\t1\ta.txt\0"));
+
+        Assert.Equal(["a.txt", "spaces.txt", "bin.dat"], result.Select(static e => e.Path));
+        Assert.Equal((4, 1), (result[0].AddedLines, result[0].DeletedLines));
+        Assert.Equal((0, 0), (result[1].AddedLines, result[1].DeletedLines));
+        Assert.Equal((null, null), (result[2].AddedLines, result[2].DeletedLines));
+    }
 }

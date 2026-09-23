@@ -6,7 +6,8 @@ namespace ClaudeAgentsShell.Sessions.Git;
 
 /// <summary>
 /// Diff ветки против базы из git (issue #5). Оглавление — пять-шесть запусков git независимо от
-/// числа файлов: корень, база, <c>merge-base</c>, <c>diff --raw --numstat</c>, <c>ls-files --others</c>,
+/// числа файлов: корень, база, <c>merge-base</c>, <c>diff --raw --numstat</c> (с <c>-w</c> — ещё
+/// <c>diff --numstat -w</c> для счётчиков), <c>ls-files --others</c>,
 /// <c>check-attr</c>. Строки неотслеживаемых файлов считаются в процессе. Содержимое файла — один
 /// запуск с потолком вывода. Индекс и рабочее дерево не меняются.
 /// </summary>
@@ -228,7 +229,57 @@ public sealed class GitDiffReader : IGitDiffReader
     private async Task<IReadOnlyList<DiffFileEntry>> ListTrackedAsync(
         string root, string mergeBase, bool ignoreWhitespace, IReadOnlyList<string> requested, CancellationToken cancellationToken)
     {
-        var arguments = new List<string> { "diff", "--raw", "--numstat", "-z" };
+        // Список файлов — всегда без -w: git 2.55 под -w не выдаёт raw-запись файла, где изменены
+        // только пробелы, а файл должен остаться в оглавлении. С -w берутся только счётчики строк,
+        // второй командой параллельно — тем же пулом процессов и той же отменой.
+        using var scope = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var countsTask = ignoreWhitespace
+            ? ListWhitespaceIgnoredCountsAsync(root, mergeBase, requested, scope.Token)
+            : null;
+
+        IReadOnlyList<DiffFileEntry> entries;
+        try
+        {
+            var result = await RunAsync(root, DiffArguments(["--raw", "--numstat"], ignoreWhitespace: false, mergeBase, requested), cancellationToken)
+                .ConfigureAwait(false);
+            if (!result.Succeeded)
+            {
+                throw Failed("git diff", result);
+            }
+
+            entries = GitDiffOutputParser.ParseRawNumstat(Decode(result.Output));
+        }
+        catch when (countsTask is not null)
+        {
+            await scope.CancelAsync().ConfigureAwait(false);
+            await ObserveAsync(countsTask).ConfigureAwait(false);
+            throw;
+        }
+
+        return countsTask is null
+            ? entries
+            : GitDiffOutputParser.WithWhitespaceIgnoredCounts(entries, await countsTask.ConfigureAwait(false));
+    }
+
+    private async Task<IReadOnlyDictionary<string, (int? Added, int? Deleted)>> ListWhitespaceIgnoredCountsAsync(
+        string root, string mergeBase, IReadOnlyList<string> requested, CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(root, DiffArguments(["--numstat"], ignoreWhitespace: true, mergeBase, requested), cancellationToken)
+            .ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            throw Failed("git diff -w", result);
+        }
+
+        return GitDiffOutputParser.ParseNumstat(Decode(result.Output));
+    }
+
+    private static List<string> DiffArguments(
+        IReadOnlyList<string> formats, bool ignoreWhitespace, string mergeBase, IReadOnlyList<string> requested)
+    {
+        var arguments = new List<string> { "diff" };
+        arguments.AddRange(formats);
+        arguments.Add("-z");
         arguments.AddRange(DiffFlags);
         if (ignoreWhitespace)
         {
@@ -238,14 +289,7 @@ public sealed class GitDiffReader : IGitDiffReader
         arguments.Add(mergeBase);
         arguments.Add("--");
         arguments.AddRange(requested);
-
-        var result = await RunAsync(root, arguments, cancellationToken).ConfigureAwait(false);
-        if (!result.Succeeded)
-        {
-            throw Failed("git diff", result);
-        }
-
-        return GitDiffOutputParser.ParseRawNumstat(Decode(result.Output));
+        return arguments;
     }
 
     private async Task<IReadOnlyList<DiffFileEntry>> ListUntrackedAsync(string root, IReadOnlyList<string> requested, CancellationToken cancellationToken)
