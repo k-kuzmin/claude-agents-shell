@@ -149,13 +149,6 @@
                                  ViewModel через Tag строки, а строка — у её же DataContext. -->
                             <Border.ContextMenu>
                                 <ContextMenu Style="{StaticResource RowContextMenuStyle}">
-                                    <!-- Действие над сессиями проекта — первым, отдельной группой:
-                                         это то же, что «+» и «часы» на строке, а не обслуживание проекта. -->
-                                    <MenuItem Header="Продолжить последнюю сессию"
-                                              Style="{StaticResource RowMenuItemStyle}"
-                                              Command="{Binding PlacementTarget.Tag.ContinueLastSessionCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
-                                    <Separator Style="{StaticResource RowMenuSeparatorStyle}" />
                                     <MenuItem Header="Открыть папку в проводнике"
                                               Style="{StaticResource RowMenuItemStyle}"
                                               Command="{Binding PlacementTarget.Tag.OpenProjectFolderCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"

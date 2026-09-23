@@ -24,7 +24,6 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     private readonly DiffCoordinator _diff;
     private readonly DiffStaleTracker _diffStale;
     private readonly ISessionHistoryDialog _historyDialog;
-    private readonly ISessionHistoryReader _historyReader;
 
     private bool _terminalPageReady;
     private bool _disposed;
@@ -40,10 +39,6 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// <param name="diffStale">Плашка «есть изменения» у открытой панели diff по хукам.</param>
     /// <param name="appVersion">Версия приложения для подписи в углу окна.</param>
     /// <param name="historyDialog">Окно истории сессий (раздел 6.4 ТЗ).</param>
-    /// <param name="historyReader">
-    /// История проекта для «продолжить последнюю»: самая свежая сессия, уже живая во вкладке,
-    /// не запускается второй раз.
-    /// </param>
     public ShellViewModel(
         ITerminalWorkspace workspace,
         ProjectListViewModel projects,
@@ -54,8 +49,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         DiffCoordinator diff,
         DiffStaleTracker diffStale,
         IAppVersion appVersion,
-        ISessionHistoryDialog historyDialog,
-        ISessionHistoryReader historyReader)
+        ISessionHistoryDialog historyDialog)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(projects);
@@ -67,7 +61,6 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         ArgumentNullException.ThrowIfNull(diffStale);
         ArgumentNullException.ThrowIfNull(appVersion);
         ArgumentNullException.ThrowIfNull(historyDialog);
-        ArgumentNullException.ThrowIfNull(historyReader);
 
         _workspace = workspace;
         _prompt = prompt;
@@ -77,7 +70,6 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         _diff = diff;
         _diffStale = diffStale;
         _historyDialog = historyDialog;
-        _historyReader = historyReader;
 
         Projects = projects;
         Tabs = new TabStripViewModel();
@@ -109,11 +101,6 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // привязкой к PlacementTarget и на первом вычислении может быть ещё не разрешён,
         // а проверка самого параметра погасила бы пункт на первом открытии меню.
         // Не строка — команда просто ничего не делает.
-        ContinueLastSessionCommand = new AsyncRelayCommand(
-            parameter => parameter is ProjectRowViewModel row
-                ? ContinueLastSessionAsync(row, CancellationToken.None)
-                : Task.CompletedTask,
-            onError: ReportError);
         OpenProjectFolderCommand = new AsyncRelayCommand(
             parameter => parameter is ProjectRowViewModel row
                 ? OpenProjectFolderAsync(row, CancellationToken.None)
@@ -200,12 +187,6 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// панели проектов: фильтр окна стоит на её проекте.
     /// </summary>
     public ICommand ShowHistoryCommand { get; }
-
-    /// <summary>
-    /// «Продолжить последнюю сессию» из контекстного меню строки: вкладка с <c>--continue</c>
-    /// в проекте строки. Параметр — строка панели проектов.
-    /// </summary>
-    public ICommand ContinueLastSessionCommand { get; }
 
     /// <summary>Открыть каталог проекта в проводнике. Параметр — строка панели проектов.</summary>
     public ICommand OpenProjectFolderCommand { get; }
@@ -344,48 +325,6 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     {
         ArgumentNullException.ThrowIfNull(row);
         return OpenTabAsync(row, new SessionLaunch.NewSession(), shortTitle: null, reportFailures: true, cancellationToken);
-    }
-
-    /// <summary>
-    /// Продолжает последнюю сессию проекта. <c>claude --continue</c> берёт самый свежий
-    /// транскрипт проекта; если эта сессия уже живёт во вкладке, выбирается вкладка — второй
-    /// <c>claude</c> на тот же транскрипт не запускается. Иначе — новая вкладка с
-    /// <c>--continue</c>; заголовок она получит по хуку <c>SessionStart</c>, как и любая другая.
-    /// </summary>
-    /// <remarks>
-    /// Истории нет или она не прочиталась — тоже <c>--continue</c>: что сказать в этом случае,
-    /// решает сам <c>claude</c>. Вкладка, чей хук ещё не сообщил идентификатор сессии, живой
-    /// для этой проверки не считается.
-    /// </remarks>
-    /// <returns>Вкладка последней сессии (найденная или открытая) либо <c>null</c>, если запуск не состоялся.</returns>
-    public async Task<TabViewModel?> ContinueLastSessionAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(row);
-
-        if (await LatestSessionIdAsync(row.Path, cancellationToken).ConfigureAwait(true) is { } latest
-            && FindLiveTab(latest) is { } open)
-        {
-            await ActivateTabAsync(open, cancellationToken).ConfigureAwait(true);
-            return open;
-        }
-
-        return await OpenTabAsync(row, new SessionLaunch.ContinueLast(), shortTitle: null, reportFailures: true, cancellationToken)
-            .ConfigureAwait(true);
-    }
-
-    // Порт отдаёт историю от свежих к старым: первая — та, которую взял бы claude --continue.
-    private async Task<string?> LatestSessionIdAsync(string workingDirectory, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var sessions = await _historyReader.ReadAsync(workingDirectory, cancellationToken).ConfigureAwait(true);
-            return sessions.Count > 0 ? sessions[0].SessionId : null;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            // История справочная: не прочиталась — продолжаем, как если бы её не было.
-            return null;
-        }
     }
 
     /// <summary>

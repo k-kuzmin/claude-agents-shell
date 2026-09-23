@@ -38,7 +38,7 @@
                 <ResourceDictionary Source="Theme.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
-            <!-- Текст на акцентной плашке «Открыть». -->
+            <!-- Текст на акцентной плашке «Enter». -->
             <SolidColorBrush x:Key="OnAccentTextBrush" Color="#1A0E08" />
 
             <!-- Полоса прокрутки списка — тонкая тёмная из темы, а не системная. -->
@@ -191,23 +191,14 @@
                         <Button Margin="10,0,0,0"
                                 Style="{StaticResource AcceptBadgeStyle}"
                                 Command="{Binding DataContext.AcceptCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                ToolTip="Открыть во вкладке (Enter)"
+                                ToolTip="Открыть во вкладке"
                                 AutomationProperties.Name="Открыть сессию во вкладке"
                                 Visibility="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}, Converter={StaticResource BoolToVisibility}}">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="Открыть"
-                                           VerticalAlignment="Center"
-                                           FontSize="12"
-                                           FontWeight="SemiBold"
-                                           Foreground="{StaticResource OnAccentTextBrush}" />
-                                <TextBlock Text="Enter"
-                                           Margin="7,0,0,0"
-                                           VerticalAlignment="Center"
-                                           FontSize="10.5"
-                                           FontFamily="{StaticResource MonoFontFamily}"
-                                           Foreground="{StaticResource OnAccentTextBrush}"
-                                           Opacity="0.65" />
-                            </StackPanel>
+                            <TextBlock Text="Enter"
+                                       VerticalAlignment="Center"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource OnAccentTextBrush}" />
                         </Button>
                     </StackPanel>
                 </Grid>
