@@ -40,7 +40,7 @@ public sealed class ShellHistoryTests
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, new FakeLayoutStore().CreateService(),
-                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("0.0.0"), History);
+                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("0.0.0"), History, HistoryReader);
         }
 
         public FakeProjectStore Store { get; } = new();
@@ -54,6 +54,8 @@ public sealed class ShellHistoryTests
         public LaunchRecordingWorkspace Workspace { get; } = new();
 
         public FakeSessionHistoryDialog History { get; } = new();
+
+        public ScriptedHistoryReader HistoryReader { get; } = new();
 
         public ShellViewModel Shell { get; }
 
@@ -246,6 +248,82 @@ public sealed class ShellHistoryTests
         Assert.IsType<SessionLaunch.ContinueLast>(launch.Launch);
         Assert.Null(tab!.SessionId);
         Assert.Same(tab, harness.Shell.Tabs.ActiveTab);
+    }
+
+    private static SessionSummary Summary(string sessionId, DateTimeOffset modifiedUtc) =>
+        new(sessionId, $@"C:\transcripts\{sessionId}.jsonl", modifiedUtc, 0, "задача", null, null);
+
+    [Fact]
+    public async Task Continue_last_switches_to_the_tab_where_the_latest_session_is_live()
+    {
+        var alpha = Project("alpha", 0);
+        var beta = Project("beta", 1);
+        var harness = await StartedAsync(alpha, beta);
+        var open = await OpenWithSessionAsync(harness, 0, "a-new");
+        await OpenWithSessionAsync(harness, 1, "b-1");
+        var launches = harness.Workspace.Launches.Count;
+        var now = DateTimeOffset.UtcNow;
+        harness.HistoryReader.Set(alpha.Path, Summary("a-new", now), Summary("a-old", now.AddHours(-1)));
+
+        var tab = await harness.Shell.ContinueLastSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.Same(open, tab);
+        Assert.Equal(launches, harness.Workspace.Launches.Count);
+        Assert.Same(open, harness.Shell.Tabs.ActiveTab);
+        Assert.Same(harness.Row(0), harness.Shell.ActiveProjectRow);
+        Assert.Equal(open.TerminalId, harness.Workspace.Inner.VisibleTerminal);
+    }
+
+    [Fact]
+    public async Task Continue_last_launches_continue_when_the_latest_session_is_not_live()
+    {
+        var alpha = Project("alpha", 0);
+        var harness = await StartedAsync(alpha);
+
+        // Живая вкладка держит старую сессию, а мёртвая — самую свежую: ни на одну не переключаемся.
+        var older = await OpenWithSessionAsync(harness, 0, "a-old");
+        var dead = await OpenWithSessionAsync(harness, 0, "a-new");
+        dead.MarkExited(0);
+        var launches = harness.Workspace.Launches.Count;
+        var now = DateTimeOffset.UtcNow;
+        harness.HistoryReader.Set(alpha.Path, Summary("a-new", now), Summary("a-old", now.AddHours(-1)));
+
+        var tab = await harness.Shell.ContinueLastSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.NotNull(tab);
+        Assert.NotSame(older, tab);
+        Assert.NotSame(dead, tab);
+        Assert.Equal(launches + 1, harness.Workspace.Launches.Count);
+        Assert.IsType<SessionLaunch.ContinueLast>(harness.Workspace.Launches[^1].Launch);
+    }
+
+    [Fact]
+    public async Task Continue_last_launches_continue_when_the_project_has_no_history()
+    {
+        var alpha = Project("alpha", 0);
+        var harness = await StartedAsync(alpha);
+        await OpenWithSessionAsync(harness, 0, "a-1");
+        var launches = harness.Workspace.Launches.Count;
+
+        var tab = await harness.Shell.ContinueLastSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.NotNull(tab);
+        Assert.Equal(launches + 1, harness.Workspace.Launches.Count);
+        Assert.IsType<SessionLaunch.ContinueLast>(harness.Workspace.Launches[^1].Launch);
+    }
+
+    [Fact]
+    public async Task Continue_last_launches_continue_when_history_cannot_be_read()
+    {
+        var alpha = Project("alpha", 0);
+        var harness = await StartedAsync(alpha);
+        harness.HistoryReader.Fail(alpha.Path);
+
+        var tab = await harness.Shell.ContinueLastSessionAsync(harness.Row(0), CancellationToken.None);
+
+        Assert.NotNull(tab);
+        Assert.IsType<SessionLaunch.ContinueLast>(Assert.Single(harness.Workspace.Launches).Launch);
+        Assert.Empty(harness.Prompt.Errors);
     }
 
     [Fact]

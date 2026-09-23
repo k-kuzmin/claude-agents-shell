@@ -436,6 +436,55 @@ public sealed class HistoryViewModelTests
         Assert.Equal("не удалось прочитать", vm.FooterStatus);
     }
 
+    [Fact]
+    public async Task Accept_command_is_unavailable_until_a_row_is_selected()
+    {
+        _reader.Set(CoreDir, Session("a", "первая", Now.AddHours(-1)));
+        using var vm = Create();
+        var closed = 0;
+        vm.CloseRequested += (_, _) => closed++;
+
+        Assert.False(vm.AcceptCommand.CanExecute(null));
+        vm.AcceptCommand.Execute(null);
+        Assert.Equal(0, closed);
+        Assert.Null(vm.Result);
+
+        await vm.LoadAsync(CancellationToken.None);
+
+        Assert.True(vm.AcceptCommand.CanExecute(null));
+        vm.AcceptCommand.Execute(null);
+        Assert.Equal(1, closed);
+        Assert.Equal(new SessionHistoryChoice(Core.Id, "a"), vm.Result);
+    }
+
+    [Fact]
+    public async Task Accept_command_is_unavailable_when_nothing_matches_the_search()
+    {
+        _reader.Set(CoreDir, Session("a", "первая", Now.AddHours(-1)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+
+        vm.SearchText = "нет такого";
+
+        Assert.False(vm.AcceptCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task Cancel_command_closes_without_a_choice()
+    {
+        _reader.Set(CoreDir, Session("a", "первая", Now.AddHours(-1)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+        var closed = 0;
+        vm.CloseRequested += (_, _) => closed++;
+
+        Assert.True(vm.CancelCommand.CanExecute(null));
+        vm.CancelCommand.Execute(null);
+
+        Assert.Equal(1, closed);
+        Assert.Null(vm.Result);
+    }
+
     private SessionHistoryViewModel Create(
         IReadOnlySet<string>? openSessionIds = null,
         IUiDispatcher? dispatcher = null) =>
