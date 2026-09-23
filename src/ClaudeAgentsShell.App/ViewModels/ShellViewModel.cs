@@ -23,6 +23,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     private readonly WorkspaceLayoutService _layout;
     private readonly DiffCoordinator _diff;
     private readonly DiffStaleTracker _diffStale;
+    private readonly ISessionHistoryDialog _historyDialog;
 
     private bool _terminalPageReady;
     private bool _disposed;
@@ -37,6 +38,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// <param name="diff">Панель diff вкладок (issue #5).</param>
     /// <param name="diffStale">Плашка «есть изменения» у открытой панели diff по хукам.</param>
     /// <param name="appVersion">Версия приложения для подписи в углу окна.</param>
+    /// <param name="historyDialog">Окно истории сессий (раздел 6.4 ТЗ).</param>
     public ShellViewModel(
         ITerminalWorkspace workspace,
         ProjectListViewModel projects,
@@ -46,7 +48,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         WorkspaceLayoutService layout,
         DiffCoordinator diff,
         DiffStaleTracker diffStale,
-        IAppVersion appVersion)
+        IAppVersion appVersion,
+        ISessionHistoryDialog historyDialog)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(projects);
@@ -57,6 +60,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         ArgumentNullException.ThrowIfNull(diff);
         ArgumentNullException.ThrowIfNull(diffStale);
         ArgumentNullException.ThrowIfNull(appVersion);
+        ArgumentNullException.ThrowIfNull(historyDialog);
 
         _workspace = workspace;
         _prompt = prompt;
@@ -65,6 +69,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         _layout = layout;
         _diff = diff;
         _diffStale = diffStale;
+        _historyDialog = historyDialog;
 
         Projects = projects;
         Tabs = new TabStripViewModel();
@@ -83,13 +88,24 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
                 : Task.CompletedTask,
             onError: ReportError);
 
-        // Окно истории сессий — этап M3. Кнопка на месте, но пока отключена.
-        ShowHistoryCommand = new RelayCommand(static _ => { }, static _ => false);
+        // Кнопка «часы» стоит рядом с «+» и гаснет вместе с ним: из истории недоступного
+        // каталога продолжить сессию всё равно нельзя.
+        ShowHistoryCommand = new AsyncRelayCommand(
+            parameter => parameter is ProjectRowViewModel row
+                ? ShowHistoryAsync(row, CancellationToken.None)
+                : Task.CompletedTask,
+            parameter => parameter is ProjectRowViewModel { IsAvailable: true },
+            ReportError);
 
         // У пунктов контекстного меню проверки доступности нет: параметр приезжает
         // привязкой к PlacementTarget и на первом вычислении может быть ещё не разрешён,
         // а проверка самого параметра погасила бы пункт на первом открытии меню.
         // Не строка — команда просто ничего не делает.
+        ContinueLastSessionCommand = new AsyncRelayCommand(
+            parameter => parameter is ProjectRowViewModel row
+                ? ContinueLastSessionAsync(row, CancellationToken.None)
+                : Task.CompletedTask,
+            onError: ReportError);
         OpenProjectFolderCommand = new AsyncRelayCommand(
             parameter => parameter is ProjectRowViewModel row
                 ? OpenProjectFolderAsync(row, CancellationToken.None)
@@ -171,8 +187,17 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// <summary>Клик по строке проекта.</summary>
     public ICommand SelectProjectCommand { get; }
 
-    /// <summary>История сессий проекта. Отключена до этапа M3.</summary>
+    /// <summary>
+    /// Окно истории сессий (раздел 6.4 ТЗ), кнопка «часы» на строке. Параметр — строка
+    /// панели проектов: фильтр окна стоит на её проекте.
+    /// </summary>
     public ICommand ShowHistoryCommand { get; }
+
+    /// <summary>
+    /// «Продолжить последнюю сессию» из контекстного меню строки: вкладка с <c>--continue</c>
+    /// в проекте строки. Параметр — строка панели проектов.
+    /// </summary>
+    public ICommand ContinueLastSessionCommand { get; }
 
     /// <summary>Открыть каталог проекта в проводнике. Параметр — строка панели проектов.</summary>
     public ICommand OpenProjectFolderCommand { get; }
@@ -312,6 +337,86 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         ArgumentNullException.ThrowIfNull(row);
         return OpenTabAsync(row, new SessionLaunch.NewSession(), shortTitle: null, reportFailures: true, cancellationToken);
     }
+
+    /// <summary>
+    /// Открывает вкладку, которая продолжает последнюю сессию проекта (<c>claude --continue</c>).
+    /// Какая сессия последняя, решает сам <c>claude</c>; заголовок вкладка получит по хуку
+    /// <c>SessionStart</c>, как и любая другая.
+    /// </summary>
+    /// <returns>Открытая вкладка либо <c>null</c>, если запуск не состоялся.</returns>
+    public Task<TabViewModel?> ContinueLastSessionAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return OpenTabAsync(row, new SessionLaunch.ContinueLast(), shortTitle: null, reportFailures: true, cancellationToken);
+    }
+
+    /// <summary>
+    /// Окно истории с фильтром на проекте строки. Выбрана сессия, живая в одной из вкладок, —
+    /// переход на эту вкладку: второй <c>claude</c> на тот же транскрипт не запускается.
+    /// Иначе — новая вкладка с <c>--resume</c> в проекте выбранной сессии. Окно закрыли
+    /// без выбора — ничего.
+    /// </summary>
+    /// <returns>Вкладка выбранной сессии (найденная или открытая) либо <c>null</c>.</returns>
+    public async Task<TabViewModel?> ShowHistoryAsync(ProjectRowViewModel row, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var request = new SessionHistoryRequest(
+            [.. Projects.Rows.Select(static candidate =>
+                new SessionHistoryProject(candidate.Id, candidate.Name, candidate.Path))],
+            row.Id,
+            LiveSessionIds());
+
+        var choice = await _historyDialog.ShowAsync(request, cancellationToken).ConfigureAwait(true);
+        if (choice is null)
+        {
+            return null;
+        }
+
+        // Вкладки перебираются заново, уже после окна: живость берётся на момент выбора.
+        if (FindLiveTab(choice.SessionId) is { } open)
+        {
+            await ActivateTabAsync(open, cancellationToken).ConfigureAwait(true);
+            return open;
+        }
+
+        if (FindRow(choice.ProjectId) is not { } target)
+        {
+            _prompt.ShowError("Проект не найден", "Проект выбранной сессии убран из списка.");
+            return null;
+        }
+
+        return await OpenTabAsync(
+                target,
+                new SessionLaunch.ResumeSession(choice.SessionId),
+                shortTitle: null,
+                reportFailures: true,
+                cancellationToken)
+            .ConfigureAwait(true);
+    }
+
+    // «Открытая» для истории — вкладка, чей claude ещё может писать в транскрипт. Мёртвая
+    // вкладка или вкладка с завершённой сессией в счёт не идут: переход на неё не вернул бы
+    // сессию, а перезапуск там открывает новую, не эту.
+    private static bool IsLiveSession(TabViewModel tab) => tab.IsRunning && !tab.SessionEnded;
+
+    private HashSet<string> LiveSessionIds()
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tab in Tabs.AllTabs)
+        {
+            if (IsLiveSession(tab) && !string.IsNullOrEmpty(tab.SessionId))
+            {
+                ids.Add(tab.SessionId);
+            }
+        }
+
+        return ids;
+    }
+
+    private TabViewModel? FindLiveTab(string sessionId) =>
+        Tabs.AllTabs.FirstOrDefault(tab =>
+            IsLiveSession(tab) && string.Equals(tab.SessionId, sessionId, StringComparison.Ordinal));
 
     /// <summary>
     /// Общий путь открытия вкладки: и для новой сессии, и для восстановления раскладки.
