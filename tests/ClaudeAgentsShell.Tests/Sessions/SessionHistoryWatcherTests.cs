@@ -3,6 +3,7 @@ using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Sessions;
 using ClaudeAgentsShell.Sessions.History;
 using ClaudeAgentsShell.Sessions.Storage;
+using ClaudeAgentsShell.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -67,18 +68,35 @@ public sealed class SessionHistoryWatcherTests
         using var temp = new TempDirectory();
         var history = CreateHistoryDirectory(temp);
         var counter = new CallCounter();
+        var time = new ManualTimeProvider();
 
-        // Окно пошире: на каждый файл FileSystemWatcher шлёт и Created, и Changed, с задержкой.
-        using var subscription = CreateWatcher(temp, TimeSpan.FromMilliseconds(500)).Watch(WorkingDirectory, counter.Increment);
+        // Время управляемое: пока его не двигают, окно не закрывается, сколько бы ни тянулась
+        // доставка событий FileSystemWatcher. Поэтому исход не зависит от нагрузки машины.
+        var watcher = new SessionHistoryWatcher(
+            new AppDataPaths(temp.Combine("appdata"), ProjectsDirectory(temp)), time, Debounce);
+        using var subscription = watcher.Watch(WorkingDirectory, counter.Increment);
         for (var index = 0; index < 20; index++)
         {
             File.WriteAllText(Path.Combine(history, $"s{index}.jsonl"), "{}\n");
         }
 
-        await counter.WaitForAsync(1);
-        await Task.Delay(TimeSpan.FromMilliseconds(700));
+        await WaitUntilAsync(() => time.ArmedTimers > 0);
+        Assert.Equal(0, counter.Count);
 
+        // Таймер срабатывает внутри Advance, синхронно: сколько событий ни пришло к этому
+        // моменту, все они свернулись в один вызов.
+        time.Advance(Debounce);
         Assert.Equal(1, counter.Count);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!condition())
+        {
+            Assert.True(clock.Elapsed < WaitLimit, "Условие не выполнилось за отведённое время.");
+            await Task.Delay(20);
+        }
     }
 
     [Fact]
