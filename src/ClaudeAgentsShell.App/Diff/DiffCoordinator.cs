@@ -399,7 +399,10 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
                             generation.Index = index;
                         }
 
-                        return _view.ShowIndexAsync(terminalId, index, worktrees, query.Note, query.Files, token);
+                        // Разворот сверяется с путями оглавления точным совпадением — пути агента
+                        // приводятся к той же форме, что и при сужении оглавления.
+                        var expand = DiffPaths.NormalizeRequested(query.Files, index.RepositoryRoot);
+                        return _view.ShowIndexAsync(terminalId, index, worktrees, query.Note, expand, token);
                     },
                     cancellationToken)
                 .ConfigureAwait(false);

@@ -126,6 +126,6 @@ public sealed class GitDiffOutputParserTests
     [InlineData("  ", null)]
     public void Путь_агента_приводится_к_pathspec_от_корня(string input, string? expected)
     {
-        Assert.Equal(expected, GitDiffOutputParser.NormalizeRequestedPath(input, @"D:\repo"));
+        Assert.Equal(expected, DiffPaths.NormalizeRequested(input, @"D:\repo"));
     }
 }

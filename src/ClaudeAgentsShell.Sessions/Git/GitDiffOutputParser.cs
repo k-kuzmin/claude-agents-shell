@@ -228,42 +228,6 @@ public static class GitDiffOutputParser
         return result;
     }
 
-    /// <summary>
-    /// Приводит путь, названный агентом или пользователем, к виду pathspec от корня:
-    /// разделители <c>/</c>, без <c>./</c> в начале; абсолютный путь внутри корня становится
-    /// относительным. <c>null</c> — путь пустой или вне корня.
-    /// </summary>
-    public static string? NormalizeRequestedPath(string path, string repositoryRoot)
-    {
-        ArgumentNullException.ThrowIfNull(path);
-        ArgumentNullException.ThrowIfNull(repositoryRoot);
-        var trimmed = path.Trim();
-        if (trimmed.Length == 0)
-        {
-            return null;
-        }
-
-        if (Path.IsPathFullyQualified(trimmed))
-        {
-            var relative = Path.GetRelativePath(repositoryRoot, trimmed);
-            if (relative == "." || relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathFullyQualified(relative))
-            {
-                return null;
-            }
-
-            trimmed = relative;
-        }
-
-        trimmed = trimmed.Replace('\\', '/');
-        while (trimmed.StartsWith("./", StringComparison.Ordinal))
-        {
-            trimmed = trimmed[2..];
-        }
-
-        trimmed = trimmed.TrimStart('/');
-        return trimmed.Length == 0 ? null : trimmed;
-    }
-
     /// <summary>Каталог из вывода git (<c>D:/r</c>) в родной форме ОС (<c>D:\r</c>).</summary>
     public static string NormalizeDirectory(string path)
     {

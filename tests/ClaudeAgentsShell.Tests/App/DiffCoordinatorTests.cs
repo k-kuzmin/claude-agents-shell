@@ -125,6 +125,24 @@ public sealed class DiffCoordinatorTests
     }
 
     [Fact]
+    public async Task Файлы_к_развороту_уходят_на_страницу_в_форме_путей_оглавления()
+    {
+        await using var harness = new Harness();
+        harness.AddTab("t1", active: true);
+        harness.Git.DefaultFiles = [FakeGitDiffReader.Entry("папка/файл.cs"), FakeGitDiffReader.Entry("src/a.cs"), FakeGitDiffReader.Entry("src/b.cs")];
+
+        var outcome = await harness.Coordinator.HandleAsync(
+            FakeDiffTabs.TokenFor("t1"),
+            new ShowDiffRequest(null, Directory: null, [@"папка\файл.cs", "./src/a.cs", ProjectPath + @"\src\b.cs", @"D:\other\c.cs", "src/a.cs"], null),
+            CancellationToken.None);
+
+        Assert.IsType<ShowDiffOutcome.Shown>(outcome);
+        var index = Assert.Single(harness.View.CallsOf("index"));
+        Assert.Equal(["папка/файл.cs", "src/a.cs", "src/b.cs"], index.ExpandFiles!);
+        Assert.All(index.ExpandFiles!, path => Assert.Contains(index.Index!.Files, file => file.Path == path));
+    }
+
+    [Fact]
     public async Task show_diff_с_относительным_каталогом_считает_его_от_каталога_вкладки()
     {
         await using var harness = new Harness();

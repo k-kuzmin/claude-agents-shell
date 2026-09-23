@@ -114,7 +114,7 @@ public sealed class GitDiffReader : IGitDiffReader
     private async Task<DiffIndex> ListCoreAsync(DiffRequest request, CancellationToken cancellationToken)
     {
         var root = await ResolveRootAsync(request.Directory, cancellationToken).ConfigureAwait(false);
-        var requested = NormalizeRequested(request.Files, root);
+        var requested = DiffPaths.NormalizeRequested(request.Files, root);
         if (request.Files.Count > 0 && requested.Count == 0)
         {
             throw new DiffUnavailableException(DiffFailure.GitFailed, "Указанные файлы лежат вне репозитория " + root + ".");
@@ -371,22 +371,6 @@ public sealed class GitDiffReader : IGitDiffReader
 
     private DiffUnavailableException TimeoutFailure() =>
         new(DiffFailure.Timeout, $"git не уложился в {_options.Timeout.TotalSeconds:0} с.");
-
-    private static IReadOnlyList<string> NormalizeRequested(IReadOnlyList<string> files, string root)
-    {
-        var result = new List<string>(files.Count);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var file in files)
-        {
-            var normalized = GitDiffOutputParser.NormalizeRequestedPath(file, root);
-            if (normalized is not null && seen.Add(normalized))
-            {
-                result.Add(normalized);
-            }
-        }
-
-        return result;
-    }
 
     private static async Task ObserveAsync(Task task)
     {
