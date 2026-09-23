@@ -6,7 +6,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         d:DataContext="{d:DesignInstance Type=history:SessionHistoryViewModel}"
-        Title="История сессий"
+        Title="{Binding WindowTitle}"
         Width="720"
         Height="540"
         ResizeMode="NoResize"
@@ -20,12 +20,11 @@
 
     <!--
         Разметка — по docs/mockup.html, секция «Продолжить — история сессий».
-        Обрамление своё, как у диалога настроек проекта. Системной полосы заголовка в макете
-        нет: окно тянется за шапку с полем поиска, поэтому поле и крестик видимы для
-        hit-test в обрамлении.
+        Обрамление своё, как у диалога настроек проекта: полоса заголовка с именем проекта
+        (фильтра по проектам нет — решение пользователя по M3) и крестиком, под ней поиск.
     -->
     <WindowChrome.WindowChrome>
-        <WindowChrome CaptionHeight="64"
+        <WindowChrome CaptionHeight="40"
                       ResizeBorderThickness="0"
                       CornerRadius="0"
                       GlassFrameThickness="0"
@@ -39,8 +38,6 @@
                 <ResourceDictionary Source="Theme.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
-            <!-- Заливка выбранного фильтра — из макета, в общей теме такой нет. -->
-            <SolidColorBrush x:Key="ChipSelectedBrush" Color="#2E2A26" />
             <!-- Текст на акцентной плашке «Enter». -->
             <SolidColorBrush x:Key="OnAccentTextBrush" Color="#1A0E08" />
 
@@ -64,45 +61,6 @@
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
-            </Style>
-
-            <!-- Кнопка фильтра. Не забирает фокус: стрелки и ввод остаются в поле поиска. -->
-            <Style x:Key="ChipButtonStyle" TargetType="Button">
-                <Setter Property="Height" Value="28" />
-                <Setter Property="FontSize" Value="12" />
-                <Setter Property="Focusable" Value="False" />
-                <Setter Property="Cursor" Value="Hand" />
-                <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
-                <Setter Property="Background" Value="Transparent" />
-                <Setter Property="BorderBrush" Value="{StaticResource OutlineBrush}" />
-                <Setter Property="SnapsToDevicePixels" Value="True" />
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="Button">
-                            <Border x:Name="Root"
-                                    Background="{TemplateBinding Background}"
-                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="14"
-                                    Padding="12,0">
-                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
-                <Style.Triggers>
-                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                        <Setter Property="Background" Value="{StaticResource ChipSelectedBrush}" />
-                        <Setter Property="BorderBrush" Value="{StaticResource ChipSelectedBrush}" />
-                        <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
-                        <Setter Property="FontWeight" Value="Medium" />
-                    </DataTrigger>
-                </Style.Triggers>
             </Style>
 
             <!-- Строка списка. Фокус не берёт: выделением управляет ViewModel, клавиши — окно. -->
@@ -208,71 +166,27 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- шапка: поиск и закрытие -->
+            <!-- полоса заголовка: чья это история, и закрытие -->
             <Border Grid.Row="0"
-                    Padding="16,14"
+                    Height="40"
                     BorderBrush="{StaticResource SeparatorBrush}"
                     BorderThickness="0,0,0,1">
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="16,0,0,0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="История сессий"
+                                   FontSize="12.5"
+                                   Foreground="{StaticResource FaintTextBrush}" />
+                        <TextBlock Text="{Binding ProjectName}"
+                                   Margin="8,0,0,0"
+                                   FontSize="12.5"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="560" />
+                    </StackPanel>
 
-                    <Border Grid.Column="0"
-                            Height="36"
-                            Padding="12,0"
-                            Background="{StaticResource WindowBackgroundBrush}"
-                            BorderBrush="{StaticResource SeparatorBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            WindowChrome.IsHitTestVisibleInChrome="True">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <Path Grid.Column="0"
-                                  Width="14"
-                                  Height="14"
-                                  Margin="0,0,9,0"
-                                  Stretch="Uniform"
-                                  Style="{StaticResource IconPathStyle}"
-                                  StrokeThickness="2"
-                                  Stroke="{StaticResource FaintTextBrush}"
-                                  Data="M4,11 A7,7 0 1 0 18,11 A7,7 0 1 0 4,11 Z M20,20 L16.5,16.5" />
-
-                            <TextBlock Grid.Column="1"
-                                       Text="Поиск по первому сообщению…"
-                                       VerticalAlignment="Center"
-                                       FontSize="13"
-                                       Foreground="{StaticResource DisabledTextBrush}"
-                                       IsHitTestVisible="False">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-
-                            <TextBox x:Name="SearchBox"
-                                     Grid.Column="1"
-                                     Style="{StaticResource SearchTextBoxStyle}"
-                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                                     AutomationProperties.Name="Поиск по сессиям" />
-                        </Grid>
-                    </Border>
-
-                    <Button Grid.Column="1"
-                            Width="32"
-                            Height="32"
-                            Margin="10,0,0,0"
+                    <!-- Не IsCancel: Esc обрабатывает окно, второй обладатель клавиши не нужен. -->
+                    <Button HorizontalAlignment="Right"
+                            Margin="0,0,4,0"
                             Style="{StaticResource CaptionButtonStyle}"
                             Focusable="False"
                             Click="OnCloseClick"
@@ -286,38 +200,58 @@
                 </Grid>
             </Border>
 
-            <!-- фильтр по проектам -->
+            <!-- поиск -->
             <Border Grid.Row="1"
-                    Padding="16,10"
+                    Padding="16,14"
                     BorderBrush="{StaticResource SeparatorBrush}"
                     BorderThickness="0,0,0,1">
-                <DockPanel LastChildFill="True">
-                    <Button DockPanel.Dock="Right"
-                            Margin="7,0,0,0"
-                            VerticalAlignment="Top"
-                            DataContext="{Binding AllProjectsFilter}"
-                            Content="{Binding Label}"
-                            Command="{Binding DataContext.SelectFilterCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                            CommandParameter="{Binding}"
-                            Style="{StaticResource ChipButtonStyle}" />
+                <Border Height="36"
+                        Padding="12,0"
+                        Background="{StaticResource WindowBackgroundBrush}"
+                        BorderBrush="{StaticResource SeparatorBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
 
-                    <ItemsControl ItemsSource="{Binding ProjectFilters}" Focusable="False">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <WrapPanel />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate DataType="{x:Type history:SessionHistoryFilterViewModel}">
-                                <Button Margin="0,0,7,4"
-                                        Content="{Binding Label}"
-                                        Command="{Binding DataContext.SelectFilterCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                        CommandParameter="{Binding}"
-                                        Style="{StaticResource ChipButtonStyle}" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </DockPanel>
+                        <Path Grid.Column="0"
+                              Width="14"
+                              Height="14"
+                              Margin="0,0,9,0"
+                              Stretch="Uniform"
+                              Style="{StaticResource IconPathStyle}"
+                              StrokeThickness="2"
+                              Stroke="{StaticResource FaintTextBrush}"
+                              Data="M4,11 A7,7 0 1 0 18,11 A7,7 0 1 0 4,11 Z M20,20 L16.5,16.5" />
+
+                        <TextBlock Grid.Column="1"
+                                   Text="Поиск по первому сообщению…"
+                                   VerticalAlignment="Center"
+                                   FontSize="13"
+                                   Foreground="{StaticResource DisabledTextBrush}"
+                                   IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+
+                        <TextBox x:Name="SearchBox"
+                                 Grid.Column="1"
+                                 Style="{StaticResource SearchTextBoxStyle}"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 AutomationProperties.Name="Поиск по сессиям" />
+                    </Grid>
+                </Border>
             </Border>
 
             <!-- список: без внешней прокрутки, иначе виртуализация отключится -->

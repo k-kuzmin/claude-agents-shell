@@ -3,12 +3,11 @@ namespace ClaudeAgentsShell.App.History;
 /// <summary>
 /// Строка окна истории: заголовок и строка сведений «дата · ветка · короткий id».
 /// Неизменяемая — при обновлении списка строки пересобираются, а выделение переносится
-/// по <see cref="ProjectId"/> и <see cref="SessionId"/>.
+/// по <see cref="SessionId"/>.
 /// </summary>
 public sealed class SessionHistoryRowViewModel
 {
     /// <inheritdoc cref="SessionHistoryRowViewModel" />
-    /// <param name="projectId">Проект сессии.</param>
     /// <param name="sessionId">Идентификатор сессии Claude Code.</param>
     /// <param name="title">Первое сообщение одной строкой либо имя файла, если заголовка нет.</param>
     /// <param name="isTitleMissing">Заголовка нет — в <paramref name="title"/> имя файла.</param>
@@ -16,7 +15,6 @@ public sealed class SessionHistoryRowViewModel
     /// <param name="isOpen">Сессия открыта сейчас во вкладке.</param>
     /// <param name="modifiedUtc">Время изменения транскрипта — ключ сортировки.</param>
     public SessionHistoryRowViewModel(
-        Guid projectId,
         string sessionId,
         string title,
         bool isTitleMissing,
@@ -28,7 +26,6 @@ public sealed class SessionHistoryRowViewModel
         ArgumentNullException.ThrowIfNull(title);
         ArgumentNullException.ThrowIfNull(details);
 
-        ProjectId = projectId;
         SessionId = sessionId;
         Title = title;
         IsTitleMissing = isTitleMissing;
@@ -36,9 +33,6 @@ public sealed class SessionHistoryRowViewModel
         IsOpen = isOpen;
         ModifiedUtc = modifiedUtc;
     }
-
-    /// <summary>Проект сессии.</summary>
-    public Guid ProjectId { get; }
 
     /// <summary>Идентификатор сессии Claude Code.</summary>
     public string SessionId { get; }
@@ -50,7 +44,7 @@ public sealed class SessionHistoryRowViewModel
     public bool IsTitleMissing { get; }
 
     /// <summary>
-    /// «сегодня 14:36 · main · 0d41f2a7»; в режиме «все проекты» впереди имя проекта.
+    /// «сегодня 14:36 · main · 0d41f2a7».
     /// Числа сообщений нет — решение пользователя по M3.
     /// </summary>
     public string Details { get; }

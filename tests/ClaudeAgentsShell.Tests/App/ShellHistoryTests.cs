@@ -76,7 +76,7 @@ public sealed class ShellHistoryTests
     }
 
     [Fact]
-    public async Task Request_lists_all_projects_in_order_starts_on_the_row_and_carries_live_sessions()
+    public async Task Request_carries_the_row_project_and_live_sessions()
     {
         var alpha = Project("alpha", 0);
         var beta = Project("beta", 1);
@@ -92,10 +92,7 @@ public sealed class ShellHistoryTests
         await harness.Shell.ShowHistoryAsync(harness.Row(1), CancellationToken.None);
 
         var request = Assert.Single(harness.History.Requests);
-        Assert.Equal(
-            [(alpha.Id, "alpha", alpha.Path), (beta.Id, "beta", beta.Path)],
-            request.Projects.Select(static project => (project.Id, project.Name, project.WorkingDirectory)));
-        Assert.Equal(beta.Id, request.InitialProjectId);
+        Assert.Equal(new SessionHistoryProject(beta.Id, "beta", beta.Path), request.Project);
 
         // Вкладка без сессии, мёртвая и с завершённой сессией транскрипт не держат.
         Assert.Equal(["a-1", "b-1"], request.OpenSessionIds.Order(StringComparer.Ordinal));
@@ -130,7 +127,7 @@ public sealed class ShellHistoryTests
         var harness = await StartedAsync(alpha, beta);
         harness.History.Choice = new SessionHistoryChoice(beta.Id, "b-7");
 
-        // Окно открыто со строки alpha, а выбрана сессия beta: фильтр в окне сменили.
+        // Сессия запускается в проекте из выбора, а не строки, с которой открыли окно.
         var tab = await harness.Shell.ShowHistoryAsync(harness.Row(0), CancellationToken.None);
 
         Assert.NotNull(tab);
@@ -228,7 +225,7 @@ public sealed class ShellHistoryTests
         harness.Shell.ShowHistoryCommand.Execute(harness.Row(0));
 
         var request = await harness.History.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(alpha.Id, request.InitialProjectId);
+        Assert.Equal(alpha.Id, request.Project.Id);
     }
 
     [Fact]
