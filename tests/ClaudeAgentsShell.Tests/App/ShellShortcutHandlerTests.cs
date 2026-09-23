@@ -1,6 +1,5 @@
 ﻿using System.Windows.Input;
 using ClaudeAgentsShell.App.Input;
-using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Domain;
@@ -36,7 +35,7 @@ public sealed class ShellShortcutHandlerTests
             var layouts = new FakeLayoutStore();
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts.CreateService(),
-                Diff.Coordinator, Diff.Tracker, new AssemblyAppVersion(typeof(ShellViewModel).Assembly));
+                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("0.0.0"));
             Handler = new ShellShortcutHandler(Shell, Prompt);
         }
 

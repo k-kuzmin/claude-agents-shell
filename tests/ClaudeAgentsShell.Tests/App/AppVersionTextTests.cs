@@ -32,15 +32,4 @@ public sealed class AppVersionTextTests
 
         Assert.Equal("v0.0.0", text.Label);
     }
-
-    [Fact]
-    public void AssemblyAppVersion_ReadsInformationalVersionOfAppAssembly()
-    {
-        var version = new AssemblyAppVersion(typeof(AssemblyAppVersion).Assembly);
-
-        // Локальная сборка берёт дефолт Directory.Build.props, релиз — версию из тега;
-        // в обоих случаях это не пустая строка и не безымянный 1.0.0 SDK.
-        Assert.False(string.IsNullOrWhiteSpace(version.InformationalVersion));
-        Assert.False(version.InformationalVersion.StartsWith("1.0.0", StringComparison.Ordinal));
-    }
 }

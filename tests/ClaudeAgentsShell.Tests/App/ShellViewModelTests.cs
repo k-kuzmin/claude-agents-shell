@@ -38,7 +38,7 @@ public sealed class ShellViewModelTests
             var layouts = new FakeLayoutStore();
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts.CreateService(),
-                Diff.Coordinator, Diff.Tracker, new AssemblyAppVersion(typeof(ShellViewModel).Assembly));
+                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("1.2.3+abc"));
         }
 
         public FakeProjectStore Store { get; } = new();
@@ -77,6 +77,15 @@ public sealed class ShellViewModelTests
         var harness = new Harness(projects);
         await harness.InitializeAsync();
         return harness;
+    }
+
+    [Fact]
+    public void Version_label_is_built_from_the_version_port()
+    {
+        var harness = new Harness();
+
+        Assert.Equal("v1.2.3", harness.Shell.Version.Label);
+        Assert.Equal("Версия 1.2.3+abc", harness.Shell.Version.ToolTip);
     }
 
     [Fact]

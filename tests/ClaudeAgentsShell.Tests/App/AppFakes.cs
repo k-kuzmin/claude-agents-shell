@@ -90,6 +90,12 @@ internal sealed class FakeFolderPicker : IFolderPicker
     public string? PickFolder(string title) => NextFolder;
 }
 
+/// <summary>Версия приложения: строку задаёт тест.</summary>
+internal sealed class FakeAppVersion(string informationalVersion) : IAppVersion
+{
+    public string InformationalVersion { get; } = informationalVersion;
+}
+
 /// <summary>Диалог настроек проекта: правку задаёт тест, показанное запоминается.</summary>
 internal sealed class FakeProjectSettingsDialog : IProjectSettingsDialog
 {
