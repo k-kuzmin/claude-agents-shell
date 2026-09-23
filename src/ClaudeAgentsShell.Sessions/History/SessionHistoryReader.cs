@@ -259,7 +259,9 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         var offset = resume.Offset;
         var scanned = resume.ScannedChars;
         var limitReached = false;
-        var buffer = ArrayPool<byte>.Shared.Rent(ReadBufferSize);
+        // В пул возвращается только взятый из него буфер исходного размера.
+        byte[]? rented = ArrayPool<byte>.Shared.Rent(ReadBufferSize);
+        var buffer = rented;
 
         try
         {
@@ -301,9 +303,17 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
 
                     if (end == buffer.Length)
                     {
-                        var larger = ArrayPool<byte>.Shared.Rent(buffer.Length * 2);
+                        // Расширенный буфер берётся мимо пула и достаётся сборщику. Строки бывают
+                        // в мегабайты (base64-картинки), и такие массивы, вернувшись в общий пул,
+                        // оседали бы там надолго — по одному на каждое параллельное чтение.
+                        var larger = new byte[buffer.Length * 2];
                         buffer.AsSpan(0, end).CopyTo(larger);
-                        ArrayPool<byte>.Shared.Return(buffer);
+                        if (ReferenceEquals(buffer, rented))
+                        {
+                            ArrayPool<byte>.Shared.Return(rented);
+                            rented = null;
+                        }
+
                         buffer = larger;
                     }
 
@@ -351,7 +361,10 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
         }
 
         // MessageCount остаётся null умышленно: чтобы его посчитать, пришлось бы дочитать файл
