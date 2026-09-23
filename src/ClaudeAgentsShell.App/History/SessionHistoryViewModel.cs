@@ -1,3 +1,4 @@
+using System.Windows.Input;
 using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
@@ -77,6 +78,9 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
         _timeProvider = timeProvider;
         _project = request.Project;
         _openSessionIds = request.OpenSessionIds;
+
+        AcceptCommand = new RelayCommand(_ => Accept(), _ => _selectedRow is not null);
+        CancelCommand = new RelayCommand(_ => Cancel());
     }
 
     /// <summary>Окно просит закрыть себя. <see cref="Result"/> уже выставлен.</summary>
@@ -112,8 +116,26 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
     public SessionHistoryRowViewModel? SelectedRow
     {
         get => _selectedRow;
-        private set => SetProperty(ref _selectedRow, value);
+        private set
+        {
+            var hadSelection = _selectedRow is not null;
+            if (SetProperty(ref _selectedRow, value) && hadSelection != value is not null)
+            {
+                // Выделение появляется после чтения, без жеста пользователя, а сам WPF
+                // доступность команд перепроверяет только по жестам.
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
     }
+
+    /// <summary>
+    /// Щелчок по подсказке «Enter» в подвале или по плашке выделенной строки — то же, что
+    /// <c>Enter</c>. Без выделения недоступна.
+    /// </summary>
+    public ICommand AcceptCommand { get; }
+
+    /// <summary>Щелчок по подсказке «Esc» — то же, что <c>Esc</c>.</summary>
+    public ICommand CancelCommand { get; }
 
     /// <summary>Идёт чтение истории.</summary>
     public bool IsLoading => _reading;
