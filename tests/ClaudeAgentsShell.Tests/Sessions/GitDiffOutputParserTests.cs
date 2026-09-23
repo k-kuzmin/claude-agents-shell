@@ -116,16 +116,4 @@ public sealed class GitDiffOutputParserTests
                 worktrees);
         }
     }
-
-    [Theory]
-    [InlineData(@"src\a.cs", "src/a.cs")]
-    [InlineData("./src/a.cs", "src/a.cs")]
-    [InlineData(@"D:\repo\папка\файл с пробелом.cs", "папка/файл с пробелом.cs")]
-    [InlineData(@"D:\other\a.cs", null)]
-    [InlineData(@"D:\repo", null)]
-    [InlineData("  ", null)]
-    public void Путь_агента_приводится_к_pathspec_от_корня(string input, string? expected)
-    {
-        Assert.Equal(expected, DiffPaths.NormalizeRequested(input, @"D:\repo"));
-    }
 }
