@@ -128,7 +128,8 @@ M4 и M5 живут в ветках `stage/m4-state` и `stage/m5-polish` (вт�
 - .NET 8 SDK
 - [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (Evergreen)
 - Node.js — только чтобы разложить ассеты xterm.js локально
-- `pwsh` или `powershell.exe`; `claude` в `PATH`
+- `pwsh` или `powershell.exe`
+- Установленный Claude Code: команда `claude` должна запускаться в PowerShell (проверка — `claude --version`)
 
 ## Сборка и запуск
 

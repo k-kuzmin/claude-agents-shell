@@ -144,7 +144,9 @@ jobs:
           [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
           В Windows 11 он уже установлен. .NET ставить не нужно — сборка self-contained.
 
-          Для работы сессий нужен ``claude`` в ``PATH``.
+          **Нужен установленный Claude Code.** Приложение запускает в каждой вкладке команду ``claude``,
+          поэтому она должна работать в обычном окне PowerShell. Проверить: открыть PowerShell и выполнить
+          ``claude --version``. Если команда не найдена — установить Claude Code и открыть новое окно.
           "@
           $notes = if ($changes.Trim()) { "$($changes.Trim())`n`n---`n`n$install" } else { $install }
           # Через файл, а не аргументом: в заметках бывают кавычки и обратные апострофы.
