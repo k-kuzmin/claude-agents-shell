@@ -5,7 +5,8 @@ namespace ClaudeAgentsShell.Terminal.Protocol;
 /// <summary>
 /// Сообщение со страницы терминалов в C#. Разбор соответствует разделу 3.2 ТЗ:
 /// <c>in</c>, <c>resize</c>, <c>ready</c>; служебное <c>ack</c>; сообщения панели diff
-/// <c>diff.refresh</c>, <c>diff.file.request</c>, <c>diff.closed</c> (issue #5). Неизвестные типы игнорируются.
+/// <c>diff.refresh</c>, <c>diff.file.request</c>, <c>diff.closed</c> (issue #5); вставка не-текста
+/// <c>paste.request</c> и <c>drop</c>. Неизвестные типы игнорируются.
 /// </summary>
 public abstract record InboundBridgeMessage(TerminalId TerminalId)
 {
@@ -65,4 +66,22 @@ public abstract record InboundBridgeMessage(TerminalId TerminalId)
     /// <summary>Пользователь закрыл панель: <c>{"type":"diff.closed","id":"t1"}</c>.</summary>
     /// <param name="TerminalId">Вкладка.</param>
     public sealed record DiffClosed(TerminalId TerminalId) : InboundBridgeMessage(TerminalId);
+
+    /// <summary>
+    /// В буфере обмена нет текста — страница просит хост посмотреть, что там:
+    /// <c>{"type":"paste.request","id":"t1"}</c>. Ответ — <c>paste.result</c>
+    /// (<see cref="IBridgeMessageWriter.PasteResult"/>) той же вкладке, а не активной.
+    /// </summary>
+    /// <param name="TerminalId">Вкладка, в которой нажали Ctrl+V.</param>
+    public sealed record PasteRequest(TerminalId TerminalId) : InboundBridgeMessage(TerminalId);
+
+    /// <summary>
+    /// На терминал перетащили файлы: <c>{"type":"drop","id":"t1"}</c>, отправленное через
+    /// <c>chrome.webview.postMessageWithAdditionalObjects</c>. Пути в JSON не передаются —
+    /// страница их не знает; их достаёт хост из <c>AdditionalObjects</c> (<c>CoreWebView2File.Path</c>).
+    /// Парсер возвращает пустой список, хост подставляет пути.
+    /// </summary>
+    /// <param name="TerminalId">Вкладка, на которую бросили файлы.</param>
+    /// <param name="Paths">Полные пути файлов в порядке перетаскивания.</param>
+    public sealed record FilesDropped(TerminalId TerminalId, IReadOnlyList<string> Paths) : InboundBridgeMessage(TerminalId);
 }

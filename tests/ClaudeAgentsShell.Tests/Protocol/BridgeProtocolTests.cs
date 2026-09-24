@@ -88,6 +88,38 @@ public sealed class BridgeMessageWriterTests
         Assert.Equal("exited", exited.RootElement.GetProperty("type").GetString());
         Assert.Equal(-1, exited.RootElement.GetProperty("code").GetInt32());
     }
+
+    [Fact]
+    public void PasteResult_text_экранирует_обратные_слеши_и_кириллицу()
+    {
+        const string text = @"""C:\Папка с пробелом\a.png"" D:\b.txt";
+
+        string json = _writer.PasteResult(Id, new PasteContent.Text(text));
+
+        Assert.Contains(@"C:\\Папка с пробелом\\a.png", json, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal("paste.result", root.GetProperty("type").GetString());
+        Assert.Equal("t1", root.GetProperty("id").GetString());
+        Assert.Equal("text", root.GetProperty("kind").GetString());
+        Assert.Equal(text, root.GetProperty("text").GetString());
+    }
+
+    [Theory]
+    [InlineData("image")]
+    [InlineData("none")]
+    public void PasteResult_без_текста_не_несёт_поля_text(string kind)
+    {
+        PasteContent content = kind == "image" ? new PasteContent.Image() : new PasteContent.None();
+
+        using var document = JsonDocument.Parse(_writer.PasteResult(Id, content));
+        var root = document.RootElement;
+
+        Assert.Equal("paste.result", root.GetProperty("type").GetString());
+        Assert.Equal("t1", root.GetProperty("id").GetString());
+        Assert.Equal(kind, root.GetProperty("kind").GetString());
+        Assert.False(root.TryGetProperty("text", out _));
+    }
 }
 
 public sealed class Utf8ChunkBoundaryTests
@@ -187,6 +219,35 @@ public sealed class BridgeMessageParserTests
 
         var resize = Assert.IsType<InboundBridgeMessage.Resize>(message);
         Assert.False(resize.Size.IsValid);
+    }
+
+    [Fact]
+    public void Разбирает_запрос_вставки()
+    {
+        Assert.True(_parser.TryParse("""{"type":"paste.request","id":"t3"}""", out var message));
+
+        Assert.Equal("t3", Assert.IsType<InboundBridgeMessage.PasteRequest>(message).TerminalId.Value);
+    }
+
+    [Fact]
+    public void Бросок_файлов_разбирается_с_пустым_списком_путей()
+    {
+        Assert.True(_parser.TryParse("""{"type":"drop","id":"t4"}""", out var message));
+
+        var dropped = Assert.IsType<InboundBridgeMessage.FilesDropped>(message);
+        Assert.Equal("t4", dropped.TerminalId.Value);
+        Assert.Empty(dropped.Paths);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"paste.request"}""")]
+    [InlineData("""{"type":"paste.request","id":""}""")]
+    [InlineData("""{"type":"drop"}""")]
+    [InlineData("""{"type":"drop","id":" "}""")]
+    public void Вставка_без_вкладки_игнорируется(string json)
+    {
+        Assert.False(_parser.TryParse(json, out var message));
+        Assert.Null(message);
     }
 
     [Fact]

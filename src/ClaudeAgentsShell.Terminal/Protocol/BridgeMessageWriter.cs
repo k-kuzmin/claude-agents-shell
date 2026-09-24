@@ -98,6 +98,36 @@ public sealed partial class BridgeMessageWriter : IBridgeMessageWriter
             exitCode.ToString(CultureInfo.InvariantCulture),
             "}");
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Экранирование то же, что у сообщений панели diff (<c>Head</c> и <c>AppendString</c>):
+    /// кириллица в путях остаётся как есть, а не превращается в <c>\uXXXX</c>.
+    /// </remarks>
+    public string PasteResult(TerminalId terminalId, PasteContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        var builder = Head("paste.result", terminalId);
+
+        switch (content)
+        {
+            case PasteContent.Text text:
+                builder.Append(",\"kind\":\"text\",\"text\":");
+                AppendString(builder, text.Value);
+                break;
+
+            case PasteContent.Image:
+                builder.Append(",\"kind\":\"image\"");
+                break;
+
+            default:
+                builder.Append(",\"kind\":\"none\"");
+                break;
+        }
+
+        return builder.Append('}').ToString();
+    }
+
     internal static int Base64Length(int byteCount) => ((byteCount + 2) / 3) * 4;
 
     private static int CountDigits(long value)
