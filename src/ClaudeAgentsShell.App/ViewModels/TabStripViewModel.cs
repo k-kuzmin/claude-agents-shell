@@ -1,5 +1,6 @@
 ﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
+using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.Domain;
 
 namespace ClaudeAgentsShell.App.ViewModels;
@@ -14,7 +15,7 @@ namespace ClaudeAgentsShell.App.ViewModels;
 /// к проекту всё на месте. Меняется только то, какие вкладки показаны.
 /// </para>
 /// </summary>
-public sealed class TabStripViewModel : ObservableObject
+public sealed class TabStripViewModel : ObservableObject, IAwaitingTabs
 {
     // Все открытые вкладки в порядке полосы: сначала в порядке открытия, а после того как
     // пользователь перетащил вкладку мышью — в том порядке, в каком он их расставил.
@@ -29,6 +30,11 @@ public sealed class TabStripViewModel : ObservableObject
     // Какая вкладка проекта была активной последней: возврат к проекту возвращает
     // пользователя именно туда, а не на первую попавшуюся вкладку.
     private readonly Dictionary<Guid, TabViewModel> _lastActiveByProject = [];
+
+    // Вкладки, которые сейчас ждут ввода. Из него — и счётчик без прохода по всем вкладкам,
+    // и грани «пришла/ушла» по каждой вкладке: сравнение счётчиков их не различает, когда
+    // одна вкладка уходит из ожидания, а другая в него приходит.
+    private readonly HashSet<TabViewModel> _awaiting = [];
 
     private Guid? _projectId;
     private TabViewModel? _activeTab;
@@ -87,6 +93,14 @@ public sealed class TabStripViewModel : ObservableObject
     /// <summary>Счётчик показывается только когда есть кого считать.</summary>
     public bool HasAwaitingInput => AwaitingInputCount > 0;
 
+    /// <inheritdoc />
+    /// <remarks>Счётчик к моменту события уже пересчитан.</remarks>
+    public event EventHandler<TabViewModel>? TabBecameAwaiting;
+
+    /// <inheritdoc />
+    /// <remarks>Счётчик к моменту события уже пересчитан.</remarks>
+    public event EventHandler<TabViewModel>? TabLeftAwaiting;
+
     /// <summary>
     /// Растёт на единицу каждый раз, когда у любой открытой вкладки поменялось состояние.
     /// Само число ничего не значит и на экране не показывается: это способ сказать наружу
@@ -133,7 +147,8 @@ public sealed class TabStripViewModel : ObservableObject
             Raise(nameof(HasTabs));
         }
 
-        RecalculateAwaitingInput();
+        // Вкладка могла прийти уже ждущей — например, состояние выставили до добавления.
+        TrackAwaiting(tab);
     }
 
     /// <summary>
@@ -167,7 +182,13 @@ public sealed class TabStripViewModel : ObservableObject
             _lastActiveByProject.Remove(tab.ProjectId);
         }
 
-        RecalculateAwaitingInput();
+        // Закрытая в ожидании вкладка обязана дать грань ухода: иначе её уведомление
+        // пережило бы саму вкладку. Состояние у неё при этом не меняется.
+        if (_awaiting.Remove(tab))
+        {
+            AwaitingInputCount = _awaiting.Count;
+            TabLeftAwaiting?.Invoke(this, tab);
+        }
 
         if (!wasActive)
         {
@@ -415,10 +436,10 @@ public sealed class TabStripViewModel : ObservableObject
     private void OnTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         // Только State: его сеттер поднимает и IsAwaitingInput, поэтому реакция на оба
-        // свойства давала бы два одинаковых прохода по списку на одно логическое изменение.
-        if (e.PropertyName is nameof(TabViewModel.State))
+        // свойства давала бы две одинаковые реакции на одно логическое изменение.
+        if (e.PropertyName is nameof(TabViewModel.State) && sender is TabViewModel tab)
         {
-            RecalculateAwaitingInput();
+            TrackAwaiting(tab);
 
             // Состав вкладок не изменился, а точки на строках проектов устарели: считаются
             // они по состояниям вкладок. Уведомление наружу идёт отсюда, чтобы слушателю
@@ -427,6 +448,22 @@ public sealed class TabStripViewModel : ObservableObject
         }
     }
 
-    private void RecalculateAwaitingInput() =>
-        AwaitingInputCount = _all.Count(tab => tab.IsAwaitingInput);
+    // Сводит состояние одной вкладки с множеством ждущих. Счётчик выставляется до события:
+    // слушатель грани читает HasAwaitingInput и должен видеть уже новое значение.
+    private void TrackAwaiting(TabViewModel tab)
+    {
+        if (tab.IsAwaitingInput)
+        {
+            if (_awaiting.Add(tab))
+            {
+                AwaitingInputCount = _awaiting.Count;
+                TabBecameAwaiting?.Invoke(this, tab);
+            }
+        }
+        else if (_awaiting.Remove(tab))
+        {
+            AwaitingInputCount = _awaiting.Count;
+            TabLeftAwaiting?.Invoke(this, tab);
+        }
+    }
 }

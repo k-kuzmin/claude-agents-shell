@@ -14,7 +14,7 @@ namespace ClaudeAgentsShell.App.ViewModels;
 /// Корневая ViewModel окна: связывает панель проектов и полосу вкладок с набором терминалов.
 /// Весь разговор с миром идёт через порты — ни файлов, ни процессов, ни WebView2 здесь нет.
 /// </summary>
-public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabStateSink, IDiffTabs
+public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabStateSink, IDiffTabs, ITabNavigation
 {
     private readonly ITerminalWorkspace _workspace;
     private readonly IUserPrompt _prompt;
@@ -677,6 +677,25 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// </summary>
     public Task ShowAwaitingTabAsync(CancellationToken cancellationToken) =>
         ActivateIfAnyAsync(Tabs.NextAwaitingInput(Tabs.ActiveTab), cancellationToken);
+
+    /// <summary>
+    /// Показывает вкладку по идентификатору — клик по уведомлению «ждёт ввода». Путь тот же,
+    /// что у счётчика: <see cref="ActivateTabAsync"/> переключает и проект.
+    /// </summary>
+    /// <returns>
+    /// <c>false</c>, если вкладки уже нет: уведомление переживает вкладку, закрытую
+    /// или убранную вместе с проектом, и это штатный исход, а не ошибка.
+    /// </returns>
+    public async Task<bool> ShowTabAsync(TerminalId terminalId, CancellationToken cancellationToken)
+    {
+        if (Tabs.Find(terminalId) is not { } tab)
+        {
+            return false;
+        }
+
+        await ActivateTabAsync(tab, cancellationToken).ConfigureAwait(true);
+        return true;
+    }
 
     /// <summary>
     /// Закрывает вкладку. Живой процесс — сначала подтверждение: отказ оставляет вкладку на месте.

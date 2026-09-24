@@ -1,6 +1,7 @@
 using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.Input;
 using ClaudeAgentsShell.App.Services;
+using ClaudeAgentsShell.App.Services.Attention;
 using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
@@ -87,5 +88,18 @@ internal static class AppComposition
         services.AddSingleton<ShellShortcutHandler>();
 
         services.AddSingleton<MainWindow>();
+
+        // Сигнал «ждёт ввода» при неактивном приложении: мигание в панели задач и toast.
+        // Окно берётся у Application при каждом вызове, а не из контейнера: адаптер не должен
+        // создавать окно, если его ещё нет. Координатор получает App на старте — на него
+        // никто не ссылается.
+        services.AddSingleton<IAppFocus>(static _ => new WpfAppFocus(System.Windows.Application.Current));
+        services.AddSingleton<ITaskbarAttention>(static _ => new TaskbarFlash(static () => System.Windows.Application.Current?.MainWindow));
+        services.AddSingleton<IMainWindowReveal>(static _ => new MainWindowReveal(static () => System.Windows.Application.Current?.MainWindow));
+        services.AddSingleton<ToolkitAwaitingToasts>();
+        services.AddSingleton<IAwaitingToasts>(static sp => sp.GetRequiredService<ToolkitAwaitingToasts>());
+        services.AddSingleton<IAwaitingTabs>(static sp => sp.GetRequiredService<ShellViewModel>().Tabs);
+        services.AddSingleton<ITabNavigation>(static sp => sp.GetRequiredService<ShellViewModel>());
+        services.AddSingleton<AttentionCoordinator>();
     }
 }
