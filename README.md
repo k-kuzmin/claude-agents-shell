@@ -1,14 +1,12 @@
 # Claude Agents Shell
 
+[![Релиз](https://img.shields.io/github/v/release/k-kuzmin/claude-agents-shell?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7)](https://github.com/k-kuzmin/claude-agents-shell/releases/latest)
+
 **Несколько сессий [Claude Code](https://claude.com/claude-code) в одном окне — по проектам,
 во вкладках, и сразу видно, какая из них ждёт вас.**
 
 <p align="center">
   <img src="docs/mockup.svg" alt="Главное окно: слева проекты, справа вкладки с сессиями Claude Code">
-</p>
-
-<p align="center">
-  <a href="https://github.com/k-kuzmin/claude-agents-shell/releases/latest"><b>Скачать последнюю версию для Windows</b></a>
 </p>
 
 Работа с агентом редко бывает одиночной: пока он собирает один проект, хочется запустить
