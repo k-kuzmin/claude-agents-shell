@@ -3,6 +3,8 @@ using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
+using ClaudeAgentsShell.App.Input;
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
 using ClaudeAgentsShell.Terminal;
@@ -42,6 +44,7 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
     private readonly IBridgeMessageWriter _writer;
     private readonly IBridgeMessageParser _parser;
     private readonly TerminalOptions _options;
+    private readonly IClipboardReader _clipboard;
     private readonly Dispatcher _dispatcher;
     private readonly WebView2 _webView = new();
     private readonly ConcurrentDictionary<string, PendingWriteRegistry> _acknowledgements = new(StringComparer.Ordinal);
@@ -65,15 +68,21 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
     private bool _initialNavigationStarted;
 
     /// <inheritdoc cref="WebView2TerminalBridge" />
-    public WebView2TerminalBridge(IBridgeMessageWriter writer, IBridgeMessageParser parser, TerminalOptions options)
+    public WebView2TerminalBridge(
+        IBridgeMessageWriter writer,
+        IBridgeMessageParser parser,
+        TerminalOptions options,
+        IClipboardReader clipboard)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(parser);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(clipboard);
 
         _writer = writer;
         _parser = parser;
         _options = options;
+        _clipboard = clipboard;
         _dispatcher = Dispatcher.CurrentDispatcher;
     }
 
@@ -463,7 +472,43 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
             case InboundBridgeMessage.DiffClosed closed:
                 Closed?.Invoke(this, new DiffClosedEventArgs(closed.TerminalId));
                 break;
+
+            // Ответ уходит той вкладке, из которой пришёл запрос, а не активной: пока хост
+            // читал буфер, пользователь мог переключиться. Событие приходит на потоке
+            // диспетчера — STA, которого требует буфер обмена, и Post можно звать сразу.
+            case InboundBridgeMessage.PasteRequest request:
+                Post(_writer.PasteResult(request.TerminalId, PasteResolution.FromClipboard(_clipboard)));
+                break;
+
+            case InboundBridgeMessage.FilesDropped dropped:
+                // Парсер отдаёт пустой список: пути есть только в AdditionalObjects.
+                Post(_writer.PasteResult(dropped.TerminalId, PasteResolution.FromDrop(ReadDroppedPaths(args))));
+                break;
         }
+    }
+
+    /// <summary>
+    /// Пути брошенных файлов. Страница их не знает: они приходят объектами <see cref="CoreWebView2File"/>
+    /// рядом с сообщением. Читать нужно здесь же — аргументы события после обработчика недействительны.
+    /// </summary>
+    private static List<string> ReadDroppedPaths(CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        var paths = new List<string>();
+        var objects = args.AdditionalObjects;
+        if (objects is null)
+        {
+            return paths;
+        }
+
+        foreach (object item in objects)
+        {
+            if (item is CoreWebView2File file && !string.IsNullOrEmpty(file.Path))
+            {
+                paths.Add(file.Path);
+            }
+        }
+
+        return paths;
     }
 
     /// <summary>

@@ -308,20 +308,77 @@
     }
   }
 
-  function pasteFromClipboard(term) {
+  // Текст из буфера страница вставляет сама. Если текста нет (файлы из проводника, скриншот)
+  // или прочитать не дали — спрашиваем хост: он видит буфер целиком и ответит paste.result.
+  function pasteFromClipboard(entry) {
     if (!navigator.clipboard || !navigator.clipboard.readText) {
+      requestPaste(entry.id);
       return;
     }
 
     navigator.clipboard.readText().then(function (text) {
       if (text) {
         // term.paste сам оборачивает текст в bracketed paste, когда оболочка его включила.
-        term.paste(text);
+        entry.term.paste(text);
+      } else {
+        requestPaste(entry.id);
       }
     }).catch(function () {
-      /* Доступ к буферу обмена не дали — вставки не будет. */
+      requestPaste(entry.id);
     });
   }
+
+  function requestPaste(id) {
+    post({ type: 'paste.request', id: id });
+  }
+
+  // Ответ хоста адресован вкладке из запроса, а не активной: пока хост читал буфер,
+  // пользователь мог переключиться.
+  function applyPasteResult(message) {
+    var entry = terminals.get(message.id);
+    if (!entry) {
+      return;
+    }
+
+    if (message.kind === 'text' && typeof message.text === 'string' && message.text) {
+      entry.term.paste(message.text);
+    } else if (message.kind === 'image') {
+      // ESC v — это Alt+V: по нему Claude Code на Windows сам читает изображение из буфера.
+      // В голой оболочке без Claude Code сочетание может стереть строку ввода — принято.
+      sendInput(entry.id, encoder.encode('\u001bv'));
+    }
+  }
+
+  function terminalIdAt(target) {
+    var element = target && target.closest ? target.closest('.terminal-host') : null;
+    return element ? element.getAttribute('data-terminal-id') : null;
+  }
+
+  // Перетаскивание файлов. preventDefault на уровне документа обязателен и безусловен:
+  // без него WebView2 открывает брошенный файл вместо страницы и убивает все вкладки,
+  // а без него на dragover событие drop не придёт вовсе. Бросок мимо терминала — на полосу
+  // вкладок, в панель diff — просто игнорируется.
+  document.addEventListener('dragover', function (event) {
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = terminalIdAt(event.target) !== null ? 'copy' : 'none';
+    }
+  }, true);
+
+  document.addEventListener('drop', function (event) {
+    event.preventDefault();
+
+    var id = terminalIdAt(event.target);
+    var files = event.dataTransfer ? event.dataTransfer.files : null;
+    var entry = id !== null ? terminals.get(id) : null;
+    if (!entry || !files || files.length === 0) {
+      return;
+    }
+
+    // Пути страница не знает: хост достаёт их из объектов File, приложенных к сообщению.
+    window.chrome.webview.postMessageWithAdditionalObjects(JSON.stringify({ type: 'drop', id: id }), files);
+    entry.term.focus();
+  }, true);
 
   function installKeyHandler(entry) {
     entry.term.attachCustomKeyEventHandler(function (event) {
@@ -362,7 +419,7 @@
       // Цена решения: 0x16 (quoted-insert в readline) через Ctrl+V больше не ввести.
       if (event.ctrlKey && !event.altKey && code === 'KeyV') {
         event.preventDefault();
-        pasteFromClipboard(entry.term);
+        pasteFromClipboard(entry);
         return false;
       }
 
@@ -644,6 +701,9 @@
         break;
       case 'exited':
         notifyExited(message.id, message.code);
+        break;
+      case 'paste.result':
+        applyPasteResult(message);
         break;
       default:
         // Панель бывает только у существующего терминала: diff.* для неизвестной вкладки

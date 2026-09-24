@@ -35,6 +35,17 @@ public interface IBridgeMessageWriter
     /// <summary><c>{"type":"exited","id":"t1","code":0}</c></summary>
     string Exited(TerminalId terminalId, int exitCode);
 
+    /// <summary>
+    /// <c>{"type":"paste.result","id":"t1","kind":"text","text":"…"}</c> — ответ на
+    /// <c>paste.request</c> и <c>drop</c>. <c>kind</c>: <c>text</c> — страница вставляет
+    /// <c>text</c> через <c>term.paste</c> (bracketed paste сохраняется); <c>image</c> — в буфере
+    /// картинка, страница шлёт в PTY <c>ESC v</c> (Alt+V — вставка изображения в Claude Code);
+    /// <c>none</c> — вставлять нечего. Поле <c>text</c> есть только у <c>text</c>.
+    /// </summary>
+    /// <param name="terminalId">Вкладка из запроса.</param>
+    /// <param name="content">Что вставлять.</param>
+    string PasteResult(TerminalId terminalId, PasteContent content);
+
     /// <summary><c>{"type":"diff.pending","id":"t1"}</c> — открыть панель в состоянии «строится».</summary>
     string DiffPending(TerminalId terminalId);
 

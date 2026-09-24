@@ -69,6 +69,15 @@ public sealed class BridgeMessageParser : IBridgeMessageParser
                     message = new InboundBridgeMessage.DiffClosed(terminalId);
                     return true;
 
+                case "paste.request":
+                    message = new InboundBridgeMessage.PasteRequest(terminalId);
+                    return true;
+
+                case "drop":
+                    // Пути в JSON не приходят: их подставляет хост из AdditionalObjects.
+                    message = new InboundBridgeMessage.FilesDropped(terminalId, []);
+                    return true;
+
                 default:
                     return false;
             }

@@ -98,6 +98,25 @@ public sealed partial class BridgeMessageWriter : IBridgeMessageWriter
             exitCode.ToString(CultureInfo.InvariantCulture),
             "}");
 
+    /// <inheritdoc />
+    public string PasteResult(TerminalId terminalId, PasteContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        string head = string.Concat("{\"type\":\"paste.result\",\"id\":\"", JsonStringEscape.Escape(terminalId.Value));
+
+        return content switch
+        {
+            PasteContent.Text text => string.Concat(
+                head,
+                "\",\"kind\":\"text\",\"text\":\"",
+                JsonEncodedText.Encode(text.Value).Value,
+                "\"}"),
+            PasteContent.Image => string.Concat(head, "\",\"kind\":\"image\"}"),
+            _ => string.Concat(head, "\",\"kind\":\"none\"}"),
+        };
+    }
+
     internal static int Base64Length(int byteCount) => ((byteCount + 2) / 3) * 4;
 
     private static int CountDigits(long value)
