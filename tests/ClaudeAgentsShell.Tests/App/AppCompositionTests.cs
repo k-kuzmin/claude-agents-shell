@@ -1,5 +1,7 @@
 using ClaudeAgentsShell.App;
 using ClaudeAgentsShell.App.Diff;
+using ClaudeAgentsShell.App.Services.Attention;
+using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Sessions.Mcp;
@@ -55,6 +57,26 @@ public sealed class AppCompositionTests
                 Assert.Contains(
                     provider.GetServices<IMcpTool>(),
                     static tool => tool is ShowDiffTool && tool.Name == "show_diff");
+            });
+    }
+
+    [Fact]
+    public void Координатор_сигнала_ждёт_ввода_создаётся_из_контейнера()
+    {
+        // На координатор никто не ссылается — App получает его явно на старте, и граф
+        // главного окна его не покрывает. Фабрики IAwaitingTabs, ITabNavigation и
+        // IAwaitingToasts валидатору непрозрачны, поэтому граф создаётся по-настоящему.
+        // Фокус подменён: адаптеру нужен Application.Current, которого в тесте нет.
+        RunOnUiThread(
+            configure: static services => services.AddSingleton<IAppFocus>(new FakeAppFocus()),
+            use: static provider =>
+            {
+                Assert.NotNull(provider.GetRequiredService<AttentionCoordinator>());
+
+                // Порты вкладок — те же объекты, что видит окно, а не свои копии.
+                var shell = provider.GetRequiredService<ShellViewModel>();
+                Assert.Same(shell.Tabs, provider.GetRequiredService<IAwaitingTabs>());
+                Assert.Same(shell, provider.GetRequiredService<ITabNavigation>());
             });
     }
 

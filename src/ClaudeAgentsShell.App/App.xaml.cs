@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Threading;
 using ClaudeAgentsShell.App.Services;
+using ClaudeAgentsShell.App.Services.Attention;
+using ClaudeAgentsShell.App.State;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeAgentsShell.App;
@@ -49,6 +51,11 @@ public partial class App : System.Windows.Application
         MainWindow = window;
         window.Show();
         _windowShown = true;
+
+        // После показа окна: координатору нужен набор вкладок, а мигание и toast — окно.
+        // Освобождается вместе с контейнером раньше адаптеров, созданных до него.
+        _services.GetRequiredService<AttentionCoordinator>();
+        _services.GetRequiredService<ToolkitAwaitingToasts>().InitializeIfToastActivated();
     }
 
     /// <inheritdoc />
