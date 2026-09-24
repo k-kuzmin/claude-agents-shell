@@ -34,6 +34,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Web.WebView2" />
+    <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" />
   </ItemGroup>
 
   <!-- Страница терминалов и локальные ассеты xterm.js отдаются WebView2 через
