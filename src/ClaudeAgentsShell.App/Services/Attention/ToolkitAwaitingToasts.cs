@@ -25,6 +25,7 @@ public sealed class ToolkitAwaitingToasts : IAwaitingToasts, IDisposable
 
     private readonly IUiDispatcher _dispatcher;
     private readonly ICrashLog _log;
+    private readonly HashSet<string> _shownTags = new(StringComparer.Ordinal);
     private CompatState _state;
     private volatile bool _disposed;
 
@@ -55,17 +56,10 @@ public sealed class ToolkitAwaitingToasts : IAwaitingToasts, IDisposable
             return;
         }
 
-        try
+        // Не WasCurrentProcessToastActivated(): первое обращение к Compat запускает его
+        // статический конструктор — полную регистрацию в системе, — и платил бы каждый старт.
+        if (!AwaitingToastContent.IsToastActivationLaunch(Environment.GetCommandLineArgs()))
         {
-            if (!ToastNotificationManagerCompat.WasCurrentProcessToastActivated())
-            {
-                return;
-            }
-        }
-        catch (Exception exception)
-        {
-            _state = CompatState.Failed;
-            _log.Write(LogSource, exception);
             return;
         }
 
@@ -91,6 +85,7 @@ public sealed class ToolkitAwaitingToasts : IAwaitingToasts, IDisposable
                 notification.Tag = tag;
                 notification.Group = Group;
             });
+            _shownTags.Add(tag);
         }
         catch (Exception exception)
         {
@@ -101,9 +96,10 @@ public sealed class ToolkitAwaitingToasts : IAwaitingToasts, IDisposable
     /// <inheritdoc />
     public void Remove(TerminalId tab)
     {
-        if (_state != CompatState.Ready)
+        // Remove зовётся на каждом уходе из «ждёт ввода» и на каждой активации окна, а вызов
+        // History — межпроцессный. Уведомления, которого этот процесс не показывал, нет.
+        if (_state != CompatState.Ready || !_shownTags.Remove(tab.Value))
         {
-            // Своих уведомлений ещё не показывали — убирать нечего.
             return;
         }
 
@@ -120,10 +116,13 @@ public sealed class ToolkitAwaitingToasts : IAwaitingToasts, IDisposable
     /// <inheritdoc />
     public void Clear()
     {
-        if (_state != CompatState.Ready)
+        // Пустое множество — этот процесс ничего не показал или уже всё убрал.
+        if (_state != CompatState.Ready || _shownTags.Count == 0)
         {
             return;
         }
+
+        _shownTags.Clear();
 
         try
         {

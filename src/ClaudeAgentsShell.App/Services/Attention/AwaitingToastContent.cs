@@ -19,6 +19,23 @@ internal static class AwaitingToastContent
     internal const string OpenButton = "Открыть";
 
     /// <summary>
+    /// Ключ командной строки, с которым Toolkit 7.1.3 прописывает exe в
+    /// <c>HKCU\Software\Classes\CLSID\{…}\LocalServer32</c>: так COM запускает закрытое
+    /// приложение нажатием на уведомление.
+    /// </summary>
+    internal const string ToastActivatedSwitch = "-ToastActivated";
+
+    /// <summary>
+    /// Запущен ли процесс нажатием на уведомление. Своя проверка вместо
+    /// <c>ToastNotificationManagerCompat.WasCurrentProcessToastActivated()</c>: тот при первом
+    /// обращении регистрирует приложение в системе, и платил бы каждый старт.
+    /// </summary>
+    /// <param name="commandLineArgs">Аргументы процесса; нулевой — путь к exe, но он не мешает.</param>
+    internal static bool IsToastActivationLaunch(IReadOnlyList<string>? commandLineArgs) =>
+        commandLineArgs is not null
+        && commandLineArgs.Any(arg => string.Equals(arg, ToastActivatedSwitch, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// Разметка уведомления: заголовок, текст и кнопка «Открыть». И тело, и кнопка
     /// активируют приложение (foreground) с идентификатором вкладки в аргументе.
     /// </summary>

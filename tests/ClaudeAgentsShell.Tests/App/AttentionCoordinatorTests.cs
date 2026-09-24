@@ -1,3 +1,4 @@
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.State;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Domain;
@@ -37,7 +38,7 @@ public sealed class AttentionCoordinatorTests
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, new FakeLayoutStore().CreateService(),
                 diff.Coordinator, diff.Tracker, new FakeAppVersion("1.2.3+abc"), new FakeSessionHistoryDialog());
-            Coordinator = new AttentionCoordinator(Shell.Tabs, Shell, Focus, Taskbar, Toasts, Reveal, Prompt);
+            Coordinator = new AttentionCoordinator(Shell.Tabs, Shell, Focus, Taskbar, Toasts, Reveal, Prompt, Shutdown);
         }
 
         public FakeProjectStore Store { get; } = new();
@@ -55,6 +56,8 @@ public sealed class AttentionCoordinatorTests
         public FakeAwaitingToasts Toasts { get; } = new();
 
         public FakeMainWindowReveal Reveal { get; } = new();
+
+        public ShutdownSignal Shutdown { get; } = new();
 
         public ShellViewModel Shell { get; }
 
@@ -268,13 +271,43 @@ public sealed class AttentionCoordinatorTests
         var toasts = new FakeAwaitingToasts();
         using var coordinator = new AttentionCoordinator(
             new TabStripViewModel(), new FailingTabNavigation(), new FakeAppFocus(),
-            new FakeTaskbarAttention(), toasts, reveal, prompt);
+            new FakeTaskbarAttention(), toasts, reveal, prompt, new ShutdownSignal());
 
         toasts.Click(TerminalId.New());
 
         // Окно поднимается раньше перехода — и остаётся поднятым, когда переход сорвался.
         Assert.Equal(1, reveal.Reveals);
         Assert.Equal("мост недоступен", Assert.Single(prompt.Errors));
+    }
+
+    [Fact]
+    public async Task После_начала_гашения_новая_ждущая_вкладка_не_мигает_и_не_уведомляет()
+    {
+        var harness = await AlphaAndBetaAsync();
+        var tab = await harness.OpenAsync(0);
+
+        // Окно уже спрятано, а хук сессии доиграл после закрытия.
+        harness.Shutdown.MarkStarted();
+        tab.State = TabState.AwaitingInput;
+
+        Assert.Equal(0, harness.Taskbar.Requests);
+        Assert.Empty(harness.Toasts.Shown);
+    }
+
+    [Fact]
+    public async Task Клик_по_уведомлению_во_время_гашения_не_возвращает_окно()
+    {
+        var harness = await AlphaAndBetaAsync();
+        var waiting = await harness.OpenAsync(1);
+        var active = await harness.OpenAsync(0);
+        waiting.State = TabState.AwaitingInput;
+
+        harness.Shutdown.MarkStarted();
+        harness.Toasts.Click(waiting.TerminalId);
+
+        Assert.Equal(0, harness.Reveal.Reveals);
+        Assert.Same(active, harness.Shell.Tabs.ActiveTab);
+        Assert.Empty(harness.Prompt.Errors);
     }
 
     [Fact]

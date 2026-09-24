@@ -98,4 +98,30 @@ public sealed class AttentionArgsTests
         Assert.True(AwaitingToastContent.TryParseTab(button.Arguments, out TerminalId fromButton));
         Assert.Equal(toast.Tab, fromButton);
     }
+
+    [Theory]
+    [InlineData(@"C:\app\ClaudeAgentsShell.exe", "-ToastActivated")]
+    [InlineData(@"C:\app\ClaudeAgentsShell.exe", "-ToastActivated", "-Embedding")]
+    [InlineData(@"C:\app\ClaudeAgentsShell.exe", "-embedding", "-toastactivated")]
+    public void Запуск_из_уведомления_узнаётся_по_ключу(params string[] args)
+    {
+        Assert.True(AwaitingToastContent.IsToastActivationLaunch(args));
+    }
+
+    [Theory]
+    [InlineData(@"C:\app\ClaudeAgentsShell.exe")]
+    [InlineData(@"C:\app\ClaudeAgentsShell.exe", "-Embedding")]
+    [InlineData(@"C:\app\ClaudeAgentsShell.exe", "ToastActivated")]
+    [InlineData(@"C:\app\ClaudeAgentsShell.exe", "-ToastActivatedX")]
+    public void Обычный_запуск_не_считается_запуском_из_уведомления(params string[] args)
+    {
+        Assert.False(AwaitingToastContent.IsToastActivationLaunch(args));
+    }
+
+    [Fact]
+    public void Пустые_аргументы_не_считаются_запуском_из_уведомления()
+    {
+        Assert.False(AwaitingToastContent.IsToastActivationLaunch(null));
+        Assert.False(AwaitingToastContent.IsToastActivationLaunch([]));
+    }
 }

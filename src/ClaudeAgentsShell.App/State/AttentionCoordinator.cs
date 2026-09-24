@@ -19,6 +19,13 @@ namespace ClaudeAgentsShell.App.State;
 /// Все события приходят в потоке интерфейса — так обещают порты, — поэтому синхронизации
 /// нет. Ссылок на вкладки координатор не держит: всё нужное берётся из аргумента события.
 /// </para>
+/// <para>
+/// С начала гашения окна (<see cref="ShutdownSignal"/>) новых миганий и уведомлений нет, а
+/// клик по уже показанному уведомлению игнорируется: окно к этому моменту спрятано и
+/// разбирается, и <see cref="IMainWindowReveal.Reveal"/> вернул бы его на экран. У признака
+/// нет события, поэтому он проверяется на каждом входе; уже показанные уведомления снимает
+/// освобождение адаптера на выходе.
+/// </para>
 /// </remarks>
 public sealed class AttentionCoordinator : IDisposable
 {
@@ -29,6 +36,7 @@ public sealed class AttentionCoordinator : IDisposable
     private readonly IAwaitingToasts _toasts;
     private readonly IMainWindowReveal _reveal;
     private readonly IUserPrompt _prompt;
+    private readonly ShutdownSignal _shutdown;
 
     // Отменяет переход по клику, если окно закрывается, пока он идёт. Не освобождается:
     // продолжение перехода может коснуться токена уже после Dispose, а ресурсов у источника
@@ -45,7 +53,8 @@ public sealed class AttentionCoordinator : IDisposable
         ITaskbarAttention taskbar,
         IAwaitingToasts toasts,
         IMainWindowReveal reveal,
-        IUserPrompt prompt)
+        IUserPrompt prompt,
+        ShutdownSignal shutdown)
     {
         ArgumentNullException.ThrowIfNull(tabs);
         ArgumentNullException.ThrowIfNull(navigation);
@@ -54,6 +63,7 @@ public sealed class AttentionCoordinator : IDisposable
         ArgumentNullException.ThrowIfNull(toasts);
         ArgumentNullException.ThrowIfNull(reveal);
         ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(shutdown);
 
         _tabs = tabs;
         _navigation = navigation;
@@ -62,6 +72,7 @@ public sealed class AttentionCoordinator : IDisposable
         _toasts = toasts;
         _reveal = reveal;
         _prompt = prompt;
+        _shutdown = shutdown;
 
         _tabs.TabBecameAwaiting += OnTabBecameAwaiting;
         _tabs.TabLeftAwaiting += OnTabLeftAwaiting;
@@ -88,8 +99,9 @@ public sealed class AttentionCoordinator : IDisposable
 
     private void OnTabBecameAwaiting(object? sender, TabViewModel tab)
     {
-        // Человек в приложении — счётчик «N ждёт ввода» он и так видит.
-        if (_focus.IsActive)
+        // Человек в приложении — счётчик «N ждёт ввода» он и так видит. Приложение
+        // закрывается — хук, доигравший после закрытия, звать человека обратно не должен.
+        if (_focus.IsActive || _shutdown.IsShuttingDown)
         {
             return;
         }
@@ -120,6 +132,13 @@ public sealed class AttentionCoordinator : IDisposable
     // ничего: сбой перехода показывается пользователю, а не роняет процесс.
     private async void OnToastClicked(object? sender, TerminalId terminalId)
     {
+        // Окно спрятано и разбирается: поднять его значило бы вернуть на экран
+        // полуразобранное окно.
+        if (_shutdown.IsShuttingDown)
+        {
+            return;
+        }
+
         var cancellationToken = _lifetime.Token;
 
         try
@@ -134,7 +153,12 @@ public sealed class AttentionCoordinator : IDisposable
         }
         catch (Exception exception)
         {
-            _prompt.ShowError("Ошибка", exception.GetBaseException().Message);
+            // Во время гашения окно об ошибке всплыло бы без владельца — сбой тогда не
+            // показывается, как и у CrashReporter.
+            if (!_shutdown.IsShuttingDown)
+            {
+                _prompt.ShowError("Ошибка", exception.GetBaseException().Message);
+            }
         }
     }
 }
