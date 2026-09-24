@@ -96,7 +96,7 @@ public sealed class BridgeMessageWriterTests
 
         string json = _writer.PasteResult(Id, new PasteContent.Text(text));
 
-        Assert.Contains("\\\\", json, StringComparison.Ordinal);
+        Assert.Contains(@"C:\\Папка с пробелом\\a.png", json, StringComparison.Ordinal);
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
         Assert.Equal("paste.result", root.GetProperty("type").GetString());

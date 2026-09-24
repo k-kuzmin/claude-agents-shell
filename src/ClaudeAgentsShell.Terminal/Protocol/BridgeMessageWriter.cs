@@ -99,22 +99,33 @@ public sealed partial class BridgeMessageWriter : IBridgeMessageWriter
             "}");
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Экранирование то же, что у сообщений панели diff (<c>Head</c> и <c>AppendString</c>):
+    /// кириллица в путях остаётся как есть, а не превращается в <c>\uXXXX</c>.
+    /// </remarks>
     public string PasteResult(TerminalId terminalId, PasteContent content)
     {
         ArgumentNullException.ThrowIfNull(content);
 
-        string head = string.Concat("{\"type\":\"paste.result\",\"id\":\"", JsonStringEscape.Escape(terminalId.Value));
+        var builder = Head("paste.result", terminalId);
 
-        return content switch
+        switch (content)
         {
-            PasteContent.Text text => string.Concat(
-                head,
-                "\",\"kind\":\"text\",\"text\":\"",
-                JsonEncodedText.Encode(text.Value).Value,
-                "\"}"),
-            PasteContent.Image => string.Concat(head, "\",\"kind\":\"image\"}"),
-            _ => string.Concat(head, "\",\"kind\":\"none\"}"),
-        };
+            case PasteContent.Text text:
+                builder.Append(",\"kind\":\"text\",\"text\":");
+                AppendString(builder, text.Value);
+                break;
+
+            case PasteContent.Image:
+                builder.Append(",\"kind\":\"image\"");
+                break;
+
+            default:
+                builder.Append(",\"kind\":\"none\"");
+                break;
+        }
+
+        return builder.Append('}').ToString();
     }
 
     internal static int Base64Length(int byteCount) => ((byteCount + 2) / 3) * 4;

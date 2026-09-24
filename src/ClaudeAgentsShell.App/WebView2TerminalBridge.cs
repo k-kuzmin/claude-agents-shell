@@ -482,7 +482,8 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
 
             case InboundBridgeMessage.FilesDropped dropped:
                 // Парсер отдаёт пустой список: пути есть только в AdditionalObjects.
-                Post(_writer.PasteResult(dropped.TerminalId, PasteResolution.FromDrop(ReadDroppedPaths(args))));
+                dropped = dropped with { Paths = ReadDroppedPaths(args) };
+                Post(_writer.PasteResult(dropped.TerminalId, PasteResolution.FromDrop(dropped.Paths)));
                 break;
         }
     }
