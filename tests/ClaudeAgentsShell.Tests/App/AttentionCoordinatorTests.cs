@@ -37,7 +37,7 @@ public sealed class AttentionCoordinatorTests
             var diff = new ShellDiffParts();
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, new FakeLayoutStore().CreateService(),
-                diff.Coordinator, diff.Tracker, new FakeAppVersion("1.2.3+abc"), new FakeSessionHistoryDialog());
+                diff.Coordinator, diff.Tracker, diff.Files, new FakeAppVersion("1.2.3+abc"), new FakeSessionHistoryDialog());
             Coordinator = new AttentionCoordinator(Shell.Tabs, Shell, Focus, Taskbar, Toasts, Reveal, Prompt, Shutdown);
         }
 

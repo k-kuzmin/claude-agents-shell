@@ -38,7 +38,7 @@ public sealed class ShellViewModelTests
             var layouts = new FakeLayoutStore();
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, layouts.CreateService(),
-                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("1.2.3+abc"), new FakeSessionHistoryDialog());
+                Diff.Coordinator, Diff.Tracker, Diff.Files, new FakeAppVersion("1.2.3+abc"), new FakeSessionHistoryDialog());
         }
 
         public FakeProjectStore Store { get; } = new();

@@ -57,6 +57,11 @@ public sealed class AppCompositionTests
                 Assert.Contains(
                     provider.GetServices<IMcpTool>(),
                     static tool => tool is ShowDiffTool && tool.Name == "show_diff");
+                var files = provider.GetRequiredService<FileViewCoordinator>();
+                Assert.Same(files, provider.GetRequiredService<IShowFileHandler>());
+                Assert.Contains(
+                    provider.GetServices<IMcpTool>(),
+                    static tool => tool is ShowFileTool && tool.Name == "show_file");
             });
     }
 

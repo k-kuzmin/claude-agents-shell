@@ -223,6 +223,7 @@ internal sealed class ShellDiffParts
     {
         Coordinator = new DiffCoordinator(Git, View, new InlineUiDispatcher());
         Tracker = new DiffStaleTracker(hooks ?? new FakeHookListener(), new InlineUiDispatcher(), Coordinator);
+        Files = new FileViewCoordinator(new FakeWorkspaceFileReader(), new FakeFileView(), View, Coordinator, new InlineUiDispatcher());
     }
 
     public FakeGitDiffReader Git { get; } = new();
@@ -232,4 +233,6 @@ internal sealed class ShellDiffParts
     public DiffCoordinator Coordinator { get; }
 
     public DiffStaleTracker Tracker { get; }
+
+    public FileViewCoordinator Files { get; }
 }

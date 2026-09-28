@@ -58,6 +58,7 @@ public static class SessionsServiceCollectionExtensions
         // регистрирует приложение.
         services.TryAddSingleton<IMcpConfigProvider, McpConfigProvider>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMcpTool, ShowDiffTool>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMcpTool, ShowFileTool>());
         services.TryAddSingleton<McpJsonRpcHandler>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoopbackRoute, McpRoute>());
         services.TryAddSingleton<ISessionHistoryReader, SessionHistoryReader>();
