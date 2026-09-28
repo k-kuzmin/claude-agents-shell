@@ -220,6 +220,8 @@ public sealed class WorkspaceFileReaderTests
     [InlineData("C:foo")]
     [InlineData("a:b")]
     [InlineData(@"C:\a.cs:stream")]
+    [InlineData("C:")]
+    [InlineData(@"C:\a:b")]
     public async Task Нелокальные_пути_не_доходят_до_диска(string path)
     {
         using var temp = new TempDirectory();
@@ -233,6 +235,38 @@ public sealed class WorkspaceFileReaderTests
         Assert.Equal(ViewedFileProblem.NotFound, asDirectory.Problem);
         Assert.Equal(ViewedFileProblem.NotFound, asRoot.Problem);
         Assert.Null(await reader.ResolveRootAsync(path, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Разрешённые_формы_пути_читаются()
+    {
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(temp.Combine("src"));
+        File.WriteAllText(temp.Combine("src", "a.cs"), "x");
+        var reader = CreateReader();
+        var absolute = temp.Combine("src", "a.cs");
+
+        var forward = await reader.ReadAsync(temp.Path, temp.Path, new ShowFileItem(absolute.Replace('\\', '/'), null), CancellationToken.None);
+        var backward = await reader.ReadAsync(temp.Path, temp.Path, new ShowFileItem(absolute, null), CancellationToken.None);
+        var relative = await reader.ReadAsync(temp.Path, temp.Path, new ShowFileItem("src/a.cs", null), CancellationToken.None);
+
+        Assert.All([forward, backward, relative], static file => Assert.Equal(new ViewedFile("src/a.cs", "x", null, ViewedFileProblem.None), file));
+    }
+
+    /// <summary>
+    /// Пробел в начале читатель не срезает (это делает разбор аргументов инструмента): путь
+    /// проходит проверку, но ищется каталог с пробелом в имени. Фиксирует текущее поведение.
+    /// </summary>
+    [Fact]
+    public async Task Пробел_в_начале_пути_читателем_не_срезается()
+    {
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(temp.Combine("src"));
+        File.WriteAllText(temp.Combine("src", "a.cs"), "x");
+
+        var file = await CreateReader().ReadAsync(temp.Path, temp.Path, new ShowFileItem(" src/a.cs", null), CancellationToken.None);
+
+        Assert.Equal(ViewedFileProblem.NotFound, file.Problem);
     }
 
     [Fact]

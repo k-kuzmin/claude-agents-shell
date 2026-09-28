@@ -137,6 +137,61 @@ public sealed class ShowFileToolTests
         Assert.Equal(@"D:\src\r", Assert.Single(handler.Calls).Request.Directory);
     }
 
+    [Theory]
+    [InlineData("C:")]
+    [InlineData(@"C:\a:b")]
+    public async Task Голый_диск_и_двоеточие_после_корня_отклоняются_обоими_инструментами(string path)
+    {
+        var file = new RecordingShowFileHandler(new ShowFileOutcome.Shown("ok"));
+        var diff = new RecordingShowDiffHandler(new ShowDiffOutcome.Shown("ok"));
+
+        var results = new[]
+        {
+            await new ShowFileTool(file).CallAsync(Token, Json(new { files = new[] { path } }), CancellationToken.None),
+            await new ShowFileTool(file).CallAsync(Token, Json(new { path, files = new[] { "a.cs" } }), CancellationToken.None),
+            await new ShowDiffTool(diff).CallAsync(Token, Json(new { files = new[] { path } }), CancellationToken.None),
+            await new ShowDiffTool(diff).CallAsync(Token, Json(new { path }), CancellationToken.None),
+        };
+
+        Assert.All(results, static result =>
+        {
+            Assert.True(result.IsError);
+            Assert.Contains("Only local paths are allowed", result.Text, StringComparison.Ordinal);
+        });
+        Assert.Empty(file.Calls);
+        Assert.Empty(diff.Calls);
+    }
+
+    /// <summary>
+    /// Разрешённый набор. Пробел в начале срезается разбором аргументов: до приложения путь
+    /// доходит без него (текущее поведение).
+    /// </summary>
+    [Theory]
+    [InlineData("C:/x", "C:/x")]
+    [InlineData(@"C:\x", @"C:\x")]
+    [InlineData("src/a.cs", "src/a.cs")]
+    [InlineData(" src/a.cs", "src/a.cs")]
+    [InlineData(@" C:\x", @"C:\x")]
+    public async Task Локальные_пути_проходят_в_обоих_инструментах(string path, string expected)
+    {
+        var file = new RecordingShowFileHandler(new ShowFileOutcome.Shown("ok"));
+        var diff = new RecordingShowDiffHandler(new ShowDiffOutcome.Shown("ok"));
+
+        var asFile = await new ShowFileTool(file).CallAsync(Token, Json(new { files = new[] { path } }), CancellationToken.None);
+        var asFileDirectory = await new ShowFileTool(file).CallAsync(Token, Json(new { path, files = new[] { "a.cs" } }), CancellationToken.None);
+        var asDiffFile = await new ShowDiffTool(diff).CallAsync(Token, Json(new { files = new[] { path } }), CancellationToken.None);
+        var asDiffDirectory = await new ShowDiffTool(diff).CallAsync(Token, Json(new { path }), CancellationToken.None);
+
+        Assert.False(asFile.IsError);
+        Assert.False(asFileDirectory.IsError);
+        Assert.False(asDiffFile.IsError);
+        Assert.False(asDiffDirectory.IsError);
+        Assert.Equal(expected, file.Calls[0].Request.Files[0].Path);
+        Assert.Equal(expected, file.Calls[1].Request.Directory);
+        Assert.Equal(expected, diff.Calls[0].Request.Files[0]);
+        Assert.Equal(expected, diff.Calls[1].Request.Directory);
+    }
+
     [Fact]
     public async Task End_line_без_start_line_объясняется_агенту()
     {
@@ -221,6 +276,8 @@ public sealed class ShowFileToolTests
             document.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray()
                 .Select(static t => t.GetProperty("name").GetString()));
     }
+
+    private static JsonElement? Json(object value) => Args(JsonSerializer.Serialize(value));
 
     private static JsonElement? Args(string json)
     {
