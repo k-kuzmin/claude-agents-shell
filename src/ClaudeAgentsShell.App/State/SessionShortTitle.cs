@@ -3,8 +3,8 @@ using System.Text;
 namespace ClaudeAgentsShell.App.State;
 
 /// <summary>
-/// Короткое имя сессии для полосы вкладок (раздел 6.3 ТЗ): первые слова первого сообщения
-/// пользователя, одной строкой и разумной длины.
+/// Короткое имя сессии для полосы вкладок (раздел 6.3 ТЗ): имя сессии от Claude Code
+/// или, если его нет, первые слова первого сообщения — одной строкой и разумной длины.
 /// </summary>
 /// <remarks>
 /// Чистая функция без зависимостей, вынесенная из <see cref="SessionStateCoordinator"/>:
@@ -23,9 +23,9 @@ internal static class SessionShortTitle
 
     private const string Ellipsis = "…";
 
-    /// <summary>Делает из первого сообщения пользователя короткое имя вкладки.</summary>
+    /// <summary>Делает из имени сессии или первого сообщения короткое имя вкладки.</summary>
     /// <param name="rawTitle">
-    /// Первое сообщение из транскрипта: может быть пустым, многострочным и сколь угодно длинным.
+    /// Имя сессии или первое сообщение из транскрипта: может быть пустым, многострочным и сколь угодно длинным.
     /// </param>
     /// <returns>
     /// Имя не длиннее <see cref="MaxLength"/> либо <c>null</c>, если брать нечего — тогда
@@ -62,6 +62,29 @@ internal static class SessionShortTitle
         }
 
         return string.Concat(line.AsSpan(0, cut), Ellipsis);
+    }
+
+    /// <summary>
+    /// Делает короткое имя из промпта, пришедшего хуком <c>UserPromptSubmit</c>.
+    /// </summary>
+    /// <param name="prompt">Текст промпта как есть: может быть многострочным.</param>
+    /// <returns>
+    /// <c>null</c> для пустого промпта, слэш-команды (<c>/model</c>, <c>/clear</c> — это команды
+    /// оболочки, а не запрос) и команды через <c>!</c>.
+    /// </returns>
+    /// <remarks>
+    /// Переводы строк заменяются пробелами до усечения: так имя совпадает с тем, что потом даст
+    /// транскрипт, где первое сообщение уже схлопнуто в одну строку, и вкладка не мигает.
+    /// </remarks>
+    public static string? FromPrompt(string? prompt)
+    {
+        var trimmed = prompt.AsSpan().TrimStart();
+        if (trimmed.IsEmpty || trimmed[0] is '/' or '!')
+        {
+            return null;
+        }
+
+        return Shorten(prompt!.Replace('\r', ' ').Replace('\n', ' '));
     }
 
     /// <summary>

@@ -19,9 +19,10 @@ namespace ClaudeAgentsShell.App;
 /// страница держит N экземпляров xterm.js, переключение вкладки — смена видимости контейнера.
 /// Ассеты страницы отдаются через <c>SetVirtualHostNameToFolderMapping</c>; CDN не используется.
 /// Панель diff (<see cref="IDiffView"/>) живёт на той же странице, поэтому её тоже обслуживает мост:
-/// отдельного WebView2 под неё нет и быть не может (раздел 7 CLAUDE.md).
+/// отдельного WebView2 под неё нет и быть не может (раздел 7 CLAUDE.md). Режим «файл» той же
+/// панели (<see cref="IFileView"/>) — тоже здесь.
 /// </summary>
-public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
+public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView, IFileView
 {
     private const string VirtualHost = "app.local";
     private const string PageUrl = "https://app.local/index.html";
@@ -51,6 +52,9 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
 
     private CoreWebView2? _core;
     private int _disposed;
+
+    /// <summary>Номер последнего <c>file.show</c>: части прежнего показа страница отбрасывает.</summary>
+    private long _fileShowSequence;
 
     /// <summary>
     /// Квитанций больше не будет ни от одной вкладки: страница мертва (упал рендерер)
@@ -269,9 +273,46 @@ public sealed class WebView2TerminalBridge : ITerminalBridge, IDiffView
     /// все части за один такт и нарезка потеряла бы смысл. Части собираются по одной,
     /// на вызывающем потоке; ничего не кэшируется.
     /// </remarks>
-    public async ValueTask ShowFileAsync(TerminalId terminalId, FileDiff file, CancellationToken cancellationToken)
+    public ValueTask ShowFileAsync(TerminalId terminalId, FileDiff file, CancellationToken cancellationToken) =>
+        PostPartsAsync(_writer.DiffFile(terminalId, file), cancellationToken);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <c>file.show</c> уходит тем же путём, что прочие сообщения панели, а части
+    /// <c>file.content</c> — по одной через диспетчер с фоновым приоритетом, по порядку, как
+    /// части <c>diff.file</c>. Каждый показ получает свой номер:
+    /// если второй показ начнётся, пока первый ещё отправляет части, страница отбросит хвост
+    /// первого по номеру, а не смешает наборы.
+    /// </remarks>
+    public async ValueTask ShowFilesAsync(TerminalId terminalId, FileViewSet files, CancellationToken cancellationToken)
     {
-        foreach (string part in _writer.DiffFile(terminalId, file))
+        ArgumentNullException.ThrowIfNull(files);
+
+        long sequence = Interlocked.Increment(ref _fileShowSequence);
+        // Заголовок — обычным путём, как diff.pending: иначе diff.pending, отправленный позже
+        // с потока интерфейса (быстрый путь), обогнал бы file.show, ещё стоящий в очереди.
+        await PostAsync(_writer.FileShow(terminalId, sequence, files), cancellationToken).ConfigureAwait(false);
+
+        for (int i = 0; i < files.Files.Count; i++)
+        {
+            var file = files.Files[i];
+            if (!BridgeMessageWriter.HasContent(file))
+            {
+                continue;
+            }
+
+            await PostPartsAsync(_writer.FileContent(terminalId, sequence, i, file.Text!), cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Каждое сообщение — отдельным заходом в диспетчер с фоновым приоритетом, даже с потока
+    /// интерфейса: иначе крупный текст ушёл бы за один такт и нарезка потеряла бы смысл.
+    /// </summary>
+    private async ValueTask PostPartsAsync(IEnumerable<string> parts, CancellationToken cancellationToken)
+    {
+        foreach (string part in parts)
         {
             cancellationToken.ThrowIfCancellationRequested();
 

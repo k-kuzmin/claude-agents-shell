@@ -188,7 +188,7 @@ public sealed class HookSettingsProvider : IHookSettingsProvider
             // приложения и ничего не меняет, а вопрос о разрешении на каждый вызов прерывал бы
             // агента. Правило живёт здесь, а не в проекте пользователя, и действует только
             // на сессии, запущенные приложением.
-            Permissions = new PermissionsDto { Allow = [McpProtocol.ShowDiffPermissionRule] },
+            Permissions = new PermissionsDto { Allow = [McpProtocol.ShowDiffPermissionRule, McpProtocol.ShowFilePermissionRule] },
         };
 
         return JsonSerializer.Serialize(document, SerializerOptions);

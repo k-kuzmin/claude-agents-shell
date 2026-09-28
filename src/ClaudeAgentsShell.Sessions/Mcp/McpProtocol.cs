@@ -14,11 +14,17 @@ internal static class McpProtocol
     /// </summary>
     public const string ServerName = "agents-shell";
 
-    /// <summary>Имя инструмента.</summary>
+    /// <summary>Имя инструмента показа diff.</summary>
     public const string ShowDiffToolName = "show_diff";
 
     /// <summary>Правило <c>permissions.allow</c>: так Claude Code называет инструмент MCP-сервера.</summary>
     public const string ShowDiffPermissionRule = "mcp__" + ServerName + "__" + ShowDiffToolName;
+
+    /// <summary>Имя инструмента показа файлов.</summary>
+    public const string ShowFileToolName = "show_file";
+
+    /// <summary>Правило <c>permissions.allow</c> для <see cref="ShowFileToolName"/>.</summary>
+    public const string ShowFilePermissionRule = "mcp__" + ServerName + "__" + ShowFileToolName;
 
     /// <summary>Путь маршрута: <c>http://127.0.0.1:&lt;порт&gt;/mcp</c>.</summary>
     public const string PathSegment = "mcp";

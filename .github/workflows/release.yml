@@ -86,7 +86,13 @@ jobs:
             'publish/web/vendor/xterm.js',
             'publish/web/vendor/addon-fit.js',
             'publish/web/vendor/addon-webgl.js',
-            'publish/web/vendor/addon-unicode11.js'
+            'publish/web/vendor/addon-unicode11.js',
+            'publish/web/vendor/highlight.min.js',
+            'publish/web/vendor/hljs-powershell.min.js',
+            'publish/web/vendor/hljs-dockerfile.min.js',
+            'publish/web/highlight-worker.js',
+            'publish/web/highlight-model.js',
+            'publish/web/highlighter.js'
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) {

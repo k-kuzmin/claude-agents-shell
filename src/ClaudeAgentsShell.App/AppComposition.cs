@@ -47,11 +47,13 @@ internal static class AppComposition
         services.AddSingleton<WebView2TerminalBridge>();
         services.AddSingleton<ITerminalBridge>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
         services.AddSingleton<IDiffView>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
+        services.AddSingleton<IFileView>(static sp => sp.GetRequiredService<WebView2TerminalBridge>());
 
         // Порты уровня оболочки: всё, что ViewModel нужно от WPF и файловой системы.
         // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.
         services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
         services.AddSingleton<IClipboardReader, WpfClipboardReader>();
+        services.AddSingleton<IClipboardWriter, WpfClipboardWriter>();
         services.AddSingleton<IUserPrompt, DialogUserPrompt>();
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
         services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
@@ -82,6 +84,9 @@ internal static class AppComposition
         services.AddSingleton<DiffCoordinator>();
         services.AddSingleton<IShowDiffHandler>(static sp => sp.GetRequiredService<DiffCoordinator>());
         services.AddSingleton<IDiffChangeSink>(static sp => sp.GetRequiredService<DiffCoordinator>());
+        services.AddSingleton<IDiffPanelHost>(static sp => sp.GetRequiredService<DiffCoordinator>());
+        services.AddSingleton<FileViewCoordinator>();
+        services.AddSingleton<IShowFileHandler>(static sp => sp.GetRequiredService<FileViewCoordinator>());
         services.AddSingleton<DiffStaleTracker>();
 
         services.AddSingleton<ProjectListViewModel>();

@@ -15,27 +15,32 @@ public sealed class SessionHistoryWindowDialog : ISessionHistoryDialog
     private readonly ISessionHistoryWatcher _watcher;
     private readonly IUiDispatcher _dispatcher;
     private readonly TimeProvider _timeProvider;
+    private readonly IClipboardWriter _clipboard;
 
     /// <inheritdoc cref="SessionHistoryWindowDialog" />
     /// <param name="reader">Чтение истории рабочего каталога.</param>
     /// <param name="watcher">Живое обновление списка, пока окно открыто.</param>
     /// <param name="dispatcher">Перевод результатов чтения в поток интерфейса.</param>
     /// <param name="timeProvider">Текущее время и часовой пояс для дат в строках.</param>
+    /// <param name="clipboard">Буфер обмена для кнопки копирования id сессии.</param>
     public SessionHistoryWindowDialog(
         ISessionHistoryReader reader,
         ISessionHistoryWatcher watcher,
         IUiDispatcher dispatcher,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IClipboardWriter clipboard)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(watcher);
         ArgumentNullException.ThrowIfNull(dispatcher);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(clipboard);
 
         _reader = reader;
         _watcher = watcher;
         _dispatcher = dispatcher;
         _timeProvider = timeProvider;
+        _clipboard = clipboard;
     }
 
     /// <inheritdoc />
@@ -50,7 +55,7 @@ public sealed class SessionHistoryWindowDialog : ISessionHistoryDialog
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        using var viewModel = new SessionHistoryViewModel(request, _reader, _watcher, _dispatcher, _timeProvider);
+        using var viewModel = new SessionHistoryViewModel(request, _reader, _watcher, _dispatcher, _timeProvider, _clipboard);
         var window = new SessionHistoryWindow(viewModel) { Owner = Owner() };
 
         // Окно ещё не показано: закрывать его до ShowDialog нельзя, иначе показ повиснет

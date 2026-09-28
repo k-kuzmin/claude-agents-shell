@@ -16,6 +16,7 @@ public sealed class HistoryViewModelTests
 
     private readonly ScriptedHistoryReader _reader = new();
     private readonly RecordingHistoryWatcher _watcher = new();
+    private readonly RecordingClipboardWriter _clipboard = new();
 
     [Fact]
     public async Task Shows_only_the_project_history_and_watches_only_it()
@@ -79,7 +80,8 @@ public sealed class HistoryViewModelTests
 
         await vm.LoadAsync(CancellationToken.None);
 
-        Assert.Equal("сегодня 14:36 · feat/orders · 0d41f2a7", vm.Rows[0].Details);
+        Assert.Equal("сегодня 14:36 · feat/orders", vm.Rows[0].Details);
+        Assert.Equal("0d41f2a7", vm.Rows[0].ShortId);
     }
 
     [Fact]
@@ -90,7 +92,142 @@ public sealed class HistoryViewModelTests
 
         await vm.LoadAsync(CancellationToken.None);
 
-        Assert.Equal("вчера 09:05 · 0d41f2a7", vm.Rows[0].Details);
+        Assert.Equal("вчера 09:05", vm.Rows[0].Details);
+        Assert.Equal("0d41f2a7", vm.Rows[0].ShortId);
+    }
+
+    [Fact]
+    public async Task Row_shows_the_session_name_instead_of_the_first_message()
+    {
+        _reader.Set(CoreDir,
+            Session("named", "добавь репозиторий заказов", Now.AddHours(-1), name: "Репозиторий заказов"),
+            Session("plain", "почини сборку", Now.AddHours(-2)));
+        using var vm = Create();
+
+        await vm.LoadAsync(CancellationToken.None);
+
+        Assert.Equal(["Репозиторий заказов", "почини сборку"], vm.Rows.Select(r => r.Title));
+        Assert.All(vm.Rows, r => Assert.False(r.IsTitleMissing));
+    }
+
+    [Fact]
+    public async Task Row_with_only_a_name_is_not_a_missing_title()
+    {
+        _reader.Set(CoreDir, Session("named", null, Now.AddHours(-1), name: "Только имя"));
+        using var vm = Create();
+
+        await vm.LoadAsync(CancellationToken.None);
+
+        Assert.Equal("Только имя", vm.Rows[0].Title);
+        Assert.False(vm.Rows[0].IsTitleMissing);
+    }
+
+    [Theory]
+    [InlineData("0d41f2a7")]
+    [InlineData("0d41f2a7-1111-2222-3333-444455556666")]
+    [InlineData("0D41F2A7-1111-2222-3333-444455556666")]
+    [InlineData("  0d41f2a7-1111-2222-3333-444455556666 \t")]
+    [InlineData(" 0D41f2 ")]
+    public async Task Search_finds_by_session_id(string query)
+    {
+        _reader.Set(CoreDir,
+            Session("0d41f2a7-1111-2222-3333-444455556666", "добавь репозиторий", Now.AddHours(-1)),
+            Session("7be0c193-aaaa-bbbb-cccc-ddddeeeeffff", "почини сборку", Now.AddHours(-2)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+
+        vm.SearchText = query;
+
+        Assert.Equal(["0d41f2a7-1111-2222-3333-444455556666"], vm.Rows.Select(r => r.SessionId));
+        Assert.Equal("0d41f2a7-1111-2222-3333-444455556666", vm.SelectedRow?.SessionId);
+    }
+
+    [Fact]
+    public async Task Search_finds_by_session_name_and_by_first_message()
+    {
+        _reader.Set(CoreDir,
+            Session("named", "добавь репозиторий", Now.AddHours(-1), name: "Заказы: хранилище"),
+            Session("plain", "почини сборку", Now.AddHours(-2)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+
+        vm.SearchText = "ХРАНИЛИЩЕ";
+        Assert.Equal(["named"], vm.Rows.Select(r => r.SessionId));
+
+        vm.SearchText = "репозиторий";
+        Assert.Equal(["named"], vm.Rows.Select(r => r.SessionId));
+
+        vm.SearchText = "сборку";
+        Assert.Equal(["plain"], vm.Rows.Select(r => r.SessionId));
+    }
+
+    [Fact]
+    public async Task Copy_command_puts_the_full_session_id_into_the_clipboard()
+    {
+        const string id = "0d41f2a7-1111-2222-3333-444455556666";
+        _reader.Set(CoreDir, Session(id, "задача", Now.AddHours(-1)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+        var closed = 0;
+        vm.CloseRequested += (_, _) => closed++;
+        var row = vm.Rows[0];
+
+        Assert.True(vm.CopySessionIdCommand.CanExecute(row));
+        vm.CopySessionIdCommand.Execute(row);
+
+        Assert.Equal([id], _clipboard.Written);
+        Assert.Equal("id скопирован", vm.FooterStatus);
+        Assert.Equal(0, closed);
+        Assert.Null(vm.Result);
+        Assert.Same(row, vm.SelectedRow);
+    }
+
+    [Fact]
+    public async Task Copy_command_without_a_row_does_nothing()
+    {
+        _reader.Set(CoreDir, Session("a", "задача", Now.AddHours(-1)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+
+        vm.CopySessionIdCommand.Execute(null);
+
+        Assert.Empty(_clipboard.Written);
+        Assert.Equal("~/.claude/projects", vm.FooterStatus);
+    }
+
+    [Fact]
+    public async Task Busy_clipboard_does_not_break_the_window()
+    {
+        _reader.Set(CoreDir, Session("a", "задача", Now.AddHours(-1)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+        _clipboard.Busy = true;
+
+        vm.CopySessionIdCommand.Execute(vm.Rows[0]);
+
+        Assert.Empty(_clipboard.Written);
+        Assert.Equal("не удалось скопировать", vm.FooterStatus);
+        Assert.Equal("a", vm.SelectedRow?.SessionId);
+    }
+
+    [Fact]
+    public async Task Copy_notice_goes_away_on_the_next_user_action()
+    {
+        _reader.Set(CoreDir, Session("a", "первая", Now.AddHours(-1)), Session("b", "вторая", Now.AddHours(-2)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+
+        vm.CopySessionId(vm.Rows[0]);
+        _watcher.Fire(CoreDir);
+        await vm.PendingRefresh;
+        Assert.Equal("id скопирован", vm.FooterStatus);
+
+        vm.MoveSelection(1);
+        Assert.Equal("~/.claude/projects", vm.FooterStatus);
+
+        vm.CopySessionId(vm.Rows[1]);
+        vm.SearchText = "перв";
+        Assert.Equal("~/.claude/projects", vm.FooterStatus);
     }
 
     [Fact]
@@ -493,13 +630,15 @@ public sealed class HistoryViewModelTests
             _reader,
             _watcher,
             dispatcher ?? new InlineUiDispatcher(),
-            new HistoryClock(Now, TimeZoneInfo.Utc));
+            new HistoryClock(Now, TimeZoneInfo.Utc),
+            _clipboard);
 
     private static SessionSummary Session(
         string id,
         string? title,
         DateTimeOffset modified,
         string? branch = null,
-        int? messages = null) =>
-        new(id, $@"C:\Users\me\.claude\projects\slug\{id}.jsonl", modified, 100, title, messages, branch);
+        int? messages = null,
+        string? name = null) =>
+        new(id, $@"C:\Users\me\.claude\projects\slug\{id}.jsonl", modified, 100, title, messages, branch, name);
 }

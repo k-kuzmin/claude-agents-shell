@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Media;
 using ClaudeAgentsShell.App.History;
 
 namespace ClaudeAgentsShell.App.Views;
@@ -107,15 +109,38 @@ public partial class SessionHistoryWindow : Window
         }
     }
 
+    // MouseDoubleClick приходит строке и тогда, когда щёлкнули по кнопке внутри неё: WPF
+    // поднимает его и для уже обработанных нажатий. Двойной щелчок по «копировать» сессию
+    // не открывает; «Открыть» уже открыла её первым щелчком.
     private void OnRowDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is ListBoxItem { DataContext: SessionHistoryRowViewModel row })
+        if (sender is ListBoxItem { DataContext: SessionHistoryRowViewModel row } item
+            && !IsInsideButton(e.OriginalSource as DependencyObject, item))
         {
             _viewModel.Select(row);
             _viewModel.Accept();
             e.Handled = true;
         }
     }
+
+    private static bool IsInsideButton(DependencyObject? source, ListBoxItem item)
+    {
+        for (var node = source; node is not null && !ReferenceEquals(node, item); node = ParentOf(node))
+        {
+            if (node is ButtonBase)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Текст внутри TextBlock (Run) — не Visual, у него только логический родитель.
+    private static DependencyObject? ParentOf(DependencyObject node) =>
+        node is Visual or System.Windows.Media.Media3D.Visual3D
+            ? VisualTreeHelper.GetParent(node)
+            : LogicalTreeHelper.GetParent(node);
 
     private void OnCloseClick(object sender, RoutedEventArgs e) => _viewModel.Cancel();
 

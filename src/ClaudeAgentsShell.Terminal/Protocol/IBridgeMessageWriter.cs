@@ -79,4 +79,27 @@ public interface IBridgeMessageWriter
 
     /// <summary><c>{"type":"diff.stale","id":"t1"}</c> — плашка «есть изменения — обновить».</summary>
     string DiffStale(TerminalId terminalId);
+
+    /// <summary>
+    /// <c>{"type":"file.show","id":"t1","seq":3,"root":"…","note":null,"files":[{"p":"src/a.cs",
+    /// "focus":{"from":10,"to":20},"problem":null}]}</c> — переключить панель вкладки в режим
+    /// «файл» и заменить содержимое. <c>problem</c>: <c>null</c> — текст придёт частями
+    /// <see cref="FileContent"/>; иначе <c>notFound|outsideRoot|tooLarge|binary|unreadable</c>.
+    /// </summary>
+    /// <param name="terminalId">Вкладка.</param>
+    /// <param name="sequence">Номер показа: части с другим номером страница отбрасывает.</param>
+    /// <param name="files">Что показать.</param>
+    string FileShow(TerminalId terminalId, long sequence, FileViewSet files);
+
+    /// <summary>
+    /// <c>{"type":"file.content","id":"t1","seq":3,"i":0,"part":0,"last":true,"text":"…"}</c> —
+    /// текст файла номер <paramref name="index"/> из <see cref="FileShow"/>. Нарезка та же, что у
+    /// <see cref="DiffFile"/>: не длиннее <see cref="BridgeMessageWriter.MaxDiffMessageLength"/>,
+    /// суррогатная пара не рвётся, пустой текст — одна часть; части собираются лениво.
+    /// </summary>
+    /// <param name="terminalId">Вкладка.</param>
+    /// <param name="sequence">Номер показа из <see cref="FileShow"/>.</param>
+    /// <param name="index">Позиция файла в <see cref="FileViewSet.Files"/>.</param>
+    /// <param name="text">Содержимое файла.</param>
+    IEnumerable<string> FileContent(TerminalId terminalId, long sequence, int index, string text);
 }

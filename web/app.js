@@ -6,7 +6,8 @@
 //   в C#:       in  | resize  | ready
 //   служебное:  ack — подтверждение term.write, без него не посчитать незавершённые записи
 //               (раздел 3.3 ТЗ требует этот счётчик).
-//   панель diff: diff.* — разбирает diff-panel.js (issue #5), здесь только маршрутизация.
+//   панель diff: diff.* и file.* (режим «файл», M8) — разбирает diff-panel.js (issue #5),
+//               здесь только маршрутизация.
 (function () {
   'use strict';
 
@@ -706,9 +707,10 @@
         applyPasteResult(message);
         break;
       default:
-        // Панель бывает только у существующего терминала: diff.* для неизвестной вкладки
-        // создал бы панель, которую никто никогда не покажет и не уберёт.
-        if (typeof message.type === 'string' && message.type.lastIndexOf('diff.', 0) === 0
+        // Панель бывает только у существующего терминала: diff.* или file.* для неизвестной
+        // вкладки создал бы панель, которую никто никогда не покажет и не уберёт.
+        if (typeof message.type === 'string'
+          && (message.type.lastIndexOf('diff.', 0) === 0 || message.type.lastIndexOf('file.', 0) === 0)
           && terminals.has(message.id)) {
           diffPanels.handle(message);
         }

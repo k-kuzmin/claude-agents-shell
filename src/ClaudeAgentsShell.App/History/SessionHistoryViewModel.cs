@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows.Input;
 using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.ViewModels;
@@ -8,8 +9,8 @@ namespace ClaudeAgentsShell.App.History;
 
 /// <summary>
 /// Окно истории сессий одного проекта (раздел 6.4 ТЗ; фильтра по проектам нет — решение
-/// пользователя): поиск по первому сообщению, список от свежих к старым, выбор стрелками,
-/// <c>Enter</c> и <c>Esc</c>.
+/// пользователя): поиск по имени сессии, первому сообщению и id, список от свежих к старым, выбор
+/// стрелками, <c>Enter</c> и <c>Esc</c>, копирование полного id сессии.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -32,6 +33,7 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
     private readonly ISessionHistoryWatcher _watcher;
     private readonly IUiDispatcher _dispatcher;
     private readonly TimeProvider _timeProvider;
+    private readonly IClipboardWriter _clipboard;
     private readonly SessionHistoryProject _project;
     private readonly IReadOnlySet<string> _openSessionIds;
     private readonly CancellationTokenSource _lifetime = new();
@@ -48,6 +50,7 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
     private string _searchText = string.Empty;
     private IReadOnlyList<SessionHistoryRowViewModel> _rows = [];
     private SessionHistoryRowViewModel? _selectedRow;
+    private string? _copyNotice;
     private bool _started;
     private bool _disposed;
 
@@ -57,12 +60,14 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
     /// <param name="watcher">Уведомления об изменении истории.</param>
     /// <param name="dispatcher">Перевод результатов чтения в поток интерфейса.</param>
     /// <param name="timeProvider">Текущее время и часовой пояс — для «сегодня» и «вчера».</param>
+    /// <param name="clipboard">Буфер обмена — для копирования id сессии.</param>
     public SessionHistoryViewModel(
         SessionHistoryRequest request,
         ISessionHistoryReader reader,
         ISessionHistoryWatcher watcher,
         IUiDispatcher dispatcher,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IClipboardWriter clipboard)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Project);
@@ -71,16 +76,27 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(watcher);
         ArgumentNullException.ThrowIfNull(dispatcher);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(clipboard);
 
         _reader = reader;
         _watcher = watcher;
         _dispatcher = dispatcher;
         _timeProvider = timeProvider;
+        _clipboard = clipboard;
         _project = request.Project;
         _openSessionIds = request.OpenSessionIds;
 
         AcceptCommand = new RelayCommand(_ => Accept(), _ => _selectedRow is not null);
         CancelCommand = new RelayCommand(_ => Cancel());
+        // Без canExecute: в переиспользуемом шаблоне строки Command может связаться раньше
+        // CommandParameter, и кнопка осталась бы серой до следующей перепроверки команд.
+        CopySessionIdCommand = new RelayCommand(parameter =>
+        {
+            if (parameter is SessionHistoryRowViewModel row)
+            {
+                CopySessionId(row);
+            }
+        });
     }
 
     /// <summary>Окно просит закрыть себя. <see cref="Result"/> уже выставлен.</summary>
@@ -92,7 +108,11 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
     /// <summary>Заголовок окна в системе: панель задач, Alt+Tab, экранный диктор.</summary>
     public string WindowTitle => $"История сессий — {_project.Name}";
 
-    /// <summary>Строка поиска по первому сообщению; список фильтруется по мере ввода, без учёта регистра.</summary>
+    /// <summary>
+    /// Строка поиска по имени сессии, первому сообщению и id (подстрока — находится и короткий id,
+    /// и полный, вставленный из буфера); список фильтруется по мере ввода, без учёта регистра,
+    /// пробелы по краям запроса отбрасываются.
+    /// </summary>
     public string SearchText
     {
         get => _searchText;
@@ -100,6 +120,7 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _searchText, value ?? string.Empty))
             {
+                ClearCopyNotice();
                 Rebuild();
             }
         }
@@ -137,6 +158,12 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
     /// <summary>Щелчок по подсказке «Esc» — то же, что <c>Esc</c>.</summary>
     public ICommand CancelCommand { get; }
 
+    /// <summary>
+    /// Кнопка рядом с коротким id: кладёт в буфер полный id сессии строки из параметра
+    /// (<see cref="SessionHistoryRowViewModel"/>). Сессию не открывает.
+    /// </summary>
+    public ICommand CopySessionIdCommand { get; }
+
     /// <summary>Идёт чтение истории.</summary>
     public bool IsLoading => _reading;
 
@@ -167,11 +194,15 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>Правая часть подвала: загрузка, сбой чтения либо источник истории.</summary>
+    /// <summary>
+    /// Правая часть подвала: загрузка, сбой чтения, итог копирования id либо источник истории.
+    /// Итог копирования держится до следующего действия пользователя — поиска или смены
+    /// выделения; таймера нет.
+    /// </summary>
     public string FooterStatus =>
         IsLoading ? "загрузка…"
         : _readFailed ? "не удалось прочитать"
-        : "~/.claude/projects";
+        : _copyNotice ?? "~/.claude/projects";
 
     /// <summary>Выбор пользователя; <c>null</c> — окно закрыли без выбора.</summary>
     public SessionHistoryChoice? Result { get; private set; }
@@ -210,6 +241,11 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(row);
         if (Rows.Contains(row))
         {
+            if (!ReferenceEquals(_selectedRow, row))
+            {
+                ClearCopyNotice();
+            }
+
             SelectedRow = row;
         }
     }
@@ -228,7 +264,33 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
             ? (delta >= 0 ? 0 : rows.Count - 1)
             : Math.Clamp(current + delta, 0, rows.Count - 1);
 
+        if (!ReferenceEquals(_selectedRow, rows[next]))
+        {
+            ClearCopyNotice();
+        }
+
         SelectedRow = rows[next];
+    }
+
+    /// <summary>
+    /// Кладёт в буфер полный id сессии. Буфер, занятый другим процессом, не роняет окно:
+    /// в подвале появляется «не удалось скопировать».
+    /// </summary>
+    public void CopySessionId(SessionHistoryRowViewModel row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        try
+        {
+            _clipboard.SetText(row.SessionId);
+            _copyNotice = "id скопирован";
+        }
+        catch (ExternalException)
+        {
+            _copyNotice = "не удалось скопировать";
+        }
+
+        Raise(nameof(FooterStatus));
     }
 
     /// <summary><c>Enter</c> или двойной щелчок: возвращает выделенную сессию. Без выделения — ничего.</summary>
@@ -366,7 +428,7 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
         foreach (var session in _sessions ?? [])
         {
             var row = CreateRow(session, nowUtc, zone);
-            if (search.Length == 0 || row.Title.Contains(search, StringComparison.OrdinalIgnoreCase))
+            if (Matches(row, session, search))
             {
                 rows.Add(row);
             }
@@ -393,6 +455,15 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
         RaiseStatus();
     }
 
+    // Имя сессии заменяет на экране первое сообщение, но искать по сообщению по-прежнему
+    // можно: человек помнит, что спрашивал, а имя придумал Claude Code. По id — чтобы найти
+    // сессию по короткому id из строки или по полному, скопированному кнопкой.
+    private static bool Matches(SessionHistoryRowViewModel row, SessionSummary session, string search) =>
+        search.Length == 0
+        || row.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
+        || session.SessionId.Contains(search, StringComparison.OrdinalIgnoreCase)
+        || (SessionHistoryFormat.SingleLine(session.Title)?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
+
     private static long MinuteOf(DateTimeOffset value)
     {
         var ticks = value.UtcTicks;
@@ -401,7 +472,7 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
 
     private SessionHistoryRowViewModel CreateRow(SessionSummary session, DateTimeOffset nowUtc, TimeZoneInfo zone)
     {
-        var title = SessionHistoryFormat.SingleLine(session.Title);
+        var title = SessionHistoryFormat.SingleLine(session.DisplayTitle);
         var isTitleMissing = title is null;
 
         // Заголовка нет — деградация до «имя файла и дата» (раздел 7 CLAUDE.md).
@@ -409,19 +480,15 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
             ? fileName
             : session.SessionId;
 
-        var parts = new List<string>(3) { SessionHistoryFormat.Date(session.ModifiedUtc, nowUtc, zone) };
-        if (!string.IsNullOrWhiteSpace(session.Branch))
-        {
-            parts.Add(session.Branch);
-        }
-
-        parts.Add(SessionHistoryFormat.ShortId(session.SessionId));
+        var date = SessionHistoryFormat.Date(session.ModifiedUtc, nowUtc, zone);
+        var details = string.IsNullOrWhiteSpace(session.Branch) ? date : $"{date} · {session.Branch}";
 
         return new SessionHistoryRowViewModel(
             session.SessionId,
             title,
             isTitleMissing,
-            string.Join(" · ", parts),
+            details,
+            SessionHistoryFormat.ShortId(session.SessionId),
             _openSessionIds.Contains(session.SessionId),
             session.ModifiedUtc);
     }
@@ -448,6 +515,15 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
         }
 
         return true;
+    }
+
+    private void ClearCopyNotice()
+    {
+        if (_copyNotice is not null)
+        {
+            _copyNotice = null;
+            Raise(nameof(FooterStatus));
+        }
     }
 
     private void RaiseStatus()

@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
 
@@ -74,6 +76,9 @@ internal sealed class ScriptedHistoryReader : ISessionHistoryReader
     }
 
     public Task<SessionSummary?> ReadOneAsync(string workingDirectory, string sessionId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Окну истории одна сессия не нужна.");
+
+    public Task<SessionSummary?> ReadTranscriptAsync(string transcriptPath, string sessionId, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Окну истории одна сессия не нужна.");
 }
 
@@ -152,4 +157,22 @@ internal sealed class HistoryClock(DateTimeOffset nowUtc, TimeZoneInfo zone) : T
     public override DateTimeOffset GetUtcNow() => nowUtc;
 
     public override TimeZoneInfo LocalTimeZone => zone;
+}
+
+/// <summary>Буфер обмена в памяти; <see cref="Busy"/> имитирует буфер, занятый другим процессом.</summary>
+internal sealed class RecordingClipboardWriter : IClipboardWriter
+{
+    public List<string> Written { get; } = [];
+
+    public bool Busy { get; set; }
+
+    public void SetText(string text)
+    {
+        if (Busy)
+        {
+            throw new COMException("OpenClipboard failed", unchecked((int)0x800401D0));
+        }
+
+        Written.Add(text);
+    }
 }

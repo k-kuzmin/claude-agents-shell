@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeAgentsShell.Application.Ports;
+using ClaudeAgentsShell.Sessions.Files;
 
 namespace ClaudeAgentsShell.Sessions.Mcp;
 
@@ -16,14 +17,6 @@ public sealed class ShowDiffTool : IMcpTool
 
     /// <summary>Текст ошибки, когда обработчик сломался изнутри.</summary>
     internal const string InternalErrorText = "Agents Shell could not show the diff because of an internal error.";
-
-    private const string ToolDescription =
-        "Show the user a diff of your changes in the Agents Shell app's diff panel, right next to this terminal. "
-        + "Call it when you want the user to review what you changed: after finishing a piece of work, "
-        + "or when the user asks to see the diff. By default it shows everything the current branch changed "
-        + "against its base branch: commits plus uncommitted and untracked files. Use `files` to point the user "
-        + "at specific files and `note` to say what they are looking at. Returns immediately; "
-        + "it does not wait for the user to read the diff.";
 
     private const string SchemaJson = """
         {
@@ -67,7 +60,7 @@ public sealed class ShowDiffTool : IMcpTool
     public string Name => McpProtocol.ShowDiffToolName;
 
     /// <inheritdoc />
-    public string Description => ToolDescription;
+    public string Description => McpServerTexts.ShowDiffDescription;
 
     /// <inheritdoc />
     public JsonElement InputSchema => Schema;
@@ -132,6 +125,12 @@ public sealed class ShowDiffTool : IMcpTool
             || !TryString(args, "note", out var note, ref problem)
             || !TryFiles(args, out var files, ref problem))
         {
+            return false;
+        }
+
+        if (!LocalPathGuard.IsLocal(directory) || !files.All(LocalPathGuard.IsLocal))
+        {
+            problem = LocalPathGuard.RejectedText;
             return false;
         }
 

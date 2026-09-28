@@ -22,6 +22,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     private readonly SessionStateCoordinator _sessionState;
     private readonly WorkspaceLayoutService _layout;
     private readonly DiffCoordinator _diff;
+    private readonly FileViewCoordinator _files;
     private readonly DiffStaleTracker _diffStale;
     private readonly ISessionHistoryDialog _historyDialog;
 
@@ -37,6 +38,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
     /// <param name="layout">Раскладка окна: восстановление, снимок и запись по изменениям (issue #4).</param>
     /// <param name="diff">Панель diff вкладок (issue #5).</param>
     /// <param name="diffStale">Плашка «есть изменения» у открытой панели diff по хукам.</param>
+    /// <param name="files">Показ файлов по <c>show_file</c> — в той же панели вкладки.</param>
     /// <param name="appVersion">Версия приложения для подписи в углу окна.</param>
     /// <param name="historyDialog">Окно истории сессий (раздел 6.4 ТЗ).</param>
     public ShellViewModel(
@@ -48,6 +50,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         WorkspaceLayoutService layout,
         DiffCoordinator diff,
         DiffStaleTracker diffStale,
+        FileViewCoordinator files,
         IAppVersion appVersion,
         ISessionHistoryDialog historyDialog)
     {
@@ -58,6 +61,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         ArgumentNullException.ThrowIfNull(sessionState);
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(diff);
+        ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(diffStale);
         ArgumentNullException.ThrowIfNull(appVersion);
         ArgumentNullException.ThrowIfNull(historyDialog);
@@ -68,6 +72,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         _sessionState = sessionState;
         _layout = layout;
         _diff = diff;
+        _files = files;
         _diffStale = diffStale;
         _historyDialog = historyDialog;
 
@@ -282,6 +287,7 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // Тоже до первой вкладки: show_diff восстановленной сессии не должен ответить
         // «вкладка не найдена», а её первая пачка инструментов — пройти мимо плашки.
         _diff.Start(this);
+        _files.Start(this);
         _diffStale.Start();
 
         await Projects.LoadAsync(cancellationToken).ConfigureAwait(true);
@@ -847,6 +853,8 @@ public sealed class ShellViewModel : ObservableObject, IAsyncDisposable, ITabSta
         // оглавления и файлы. Сначала источник сигналов «устарело», затем сам координатор —
         // он отменяет и дожидается своих работ. Продолжение возвращается в поток интерфейса:
         // набор вкладок ниже освобождается оттуда же, как и без diff.
+        // Первым: координатор файлов шлёт под замком отправки diff и ставит его значок.
+        await _files.DisposeAsync().ConfigureAwait(true);
         _diffStale.Dispose();
         await _diff.DisposeAsync().ConfigureAwait(true);
 

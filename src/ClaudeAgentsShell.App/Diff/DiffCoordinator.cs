@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Globalization;
-using System.IO;
 using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
@@ -32,7 +31,7 @@ namespace ClaudeAgentsShell.App.Diff;
 /// <see cref="IDiffTabs"/>, хуки приносит <see cref="DiffStaleTracker"/>.
 /// </para>
 /// </remarks>
-public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncDisposable
+public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPanelHost, IAsyncDisposable
 {
     /// <summary>
     /// Сколько <c>git</c> на файлы одна вкладка может держать одновременно. Страница раскрывает
@@ -51,11 +50,17 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
     private readonly Dictionary<TerminalId, TabViewModel> _badged = [];
     private readonly HashSet<Task> _running = [];
 
+    /// <summary>Идущие отправки файлов (<see cref="IDiffPanelHost.ShowFilesAsync"/>) по вкладкам.</summary>
+    private readonly Dictionary<TerminalId, FileSend> _fileSends = [];
+
     /// <summary>Сообщения на страницу уходят по одному: проверка поколения и отправка неразрывны.</summary>
     private readonly SemaphoreSlim _sendGate = new(1, 1);
 
     private IDiffTabs? _tabs;
     private bool _disposed;
+
+    /// <summary>Счётчик запросов diff: у каждого поколения свой номер (<see cref="IDiffPanelHost.DiffRequestStamp"/>). Только под <see cref="_gate"/>.</summary>
+    private long _requestSequence;
 
     /// <inheritdoc cref="DiffCoordinator" />
     /// <param name="git">Чтение diff из git.</param>
@@ -116,7 +121,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
     /// </summary>
     public async Task OpenForTabAsync(TerminalId terminalId, CancellationToken cancellationToken)
     {
-        var directory = await OnUiAsync(() => _tabs?.Find(terminalId) is { } tab ? DirectoryOf(tab) : null)
+        var directory = await OnUiAsync(() => _tabs?.Find(terminalId) is { } tab ? TabDirectories.Of(tab) : null)
             .WaitAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -154,10 +159,10 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
 
         var query = new DiffQuery(
             resolved.Directory,
-            NullIfBlank(request.BaseRef),
+            TabDirectories.NullIfBlank(request.BaseRef),
             IgnoreWhitespace: false,
             Files: CleanFiles(request.Files),
-            Note: NullIfBlank(request.Note));
+            Note: TabDirectories.NullIfBlank(request.Note));
 
         return await Run(() => BuildAsync(resolved.TerminalId, query, fromAgentCall: true), Superseded())
             .WaitAsync(cancellationToken)
@@ -214,6 +219,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
         IDiffTabs? tabs;
         DiffGeneration[] generations;
         KeyValuePair<TerminalId, TabViewModel>[] badged;
+        FileSend[] fileSends;
         Task[] running;
 
         lock (_gate)
@@ -230,6 +236,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
             _panels.Clear();
             badged = [.. _badged];
             _badged.Clear();
+            fileSends = [.. _fileSends.Values];
             running = [.. _running];
         }
 
@@ -249,6 +256,12 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
         foreach (var generation in generations)
         {
             generation.Retire();
+        }
+
+        // Отправки файлов учтены в _running (Register) — ждать их конца будет WhenAll ниже.
+        foreach (var fileSend in fileSends)
+        {
+            _ = fileSend.CancelAsync();
         }
 
         // Снимок полон: работа учитывается под замком до своего запуска, а после _disposed не
@@ -272,15 +285,160 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
             SetPendingBadge(tab);
         }
 
-        return (terminalId, ResolveDirectory(requestedDirectory, DirectoryOf(tab)));
+        return (terminalId, TabDirectories.Resolve(requestedDirectory, TabDirectories.Of(tab)));
+    }
+
+    /// <inheritdoc />
+    long IDiffPanelHost.DiffRequestStamp
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _requestSequence;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Решение о панели — под тем же замком отправки, что и все сообщения diff: сообщение diff,
+    /// уже отданное мосту, дойдёт до страницы раньше файлов, а после списания поколения новые
+    /// не уйдут. Сама отправка файлов идёт вне замка и не задерживает другие вкладки.
+    /// Следующий <see cref="IDiffView.ShowPendingAsync"/> (кнопка, клавиша, <c>show_diff</c>)
+    /// отменяет её, дожидается её конца и возвращает панель в режим diff.
+    /// </remarks>
+    async Task<bool> IDiffPanelHost.ShowFilesAsync(
+        TerminalId terminalId,
+        long stamp,
+        Func<CancellationToken, ValueTask> send,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(send);
+
+        // Учитывается как любая работа координатора: DisposeAsync дождётся отправки файлов
+        // и не освободит замок отправки под ней.
+        if (Register() is not { } registration)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await SendFilesAsync(terminalId, stamp, send, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            Unregister(registration);
+        }
+    }
+
+    private async Task<bool> SendFilesAsync(
+        TerminalId terminalId,
+        long stamp,
+        Func<CancellationToken, ValueTask> send,
+        CancellationToken cancellationToken)
+    {
+        FileSend fileSend;
+        FileSend? previous;
+
+        // Под общим замком — только решение, кому принадлежит панель: всё, что diff этой вкладки
+        // уже отдал мосту, отправлено до конца, а новых сообщений списанное поколение не пошлёт.
+        await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            DiffGeneration? retired = null;
+            lock (_gate)
+            {
+                if (_disposed || cancellationToken.IsCancellationRequested)
+                {
+                    return false;
+                }
+
+                if (_panels.TryGetValue(terminalId, out var current))
+                {
+                    if (current.Sequence > stamp)
+                    {
+                        // Пользователь открыл diff уже после вызова show_file — его и оставляем.
+                        return false;
+                    }
+
+                    _panels.Remove(terminalId);
+                    retired = current;
+                }
+
+                fileSend = new FileSend(stamp, cancellationToken);
+                _fileSends.TryGetValue(terminalId, out previous);
+                _fileSends[terminalId] = fileSend;
+            }
+
+            retired?.Retire();
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
+
+        // Сами файлы (до 16 М символов частями) — вне общего замка: другие вкладки и diff
+        // не ждут. Diff этой вкладки, открытый позже, отменяет отправку и ждёт её конца
+        // (CancelOlderFileSendAsync), так что его diff.pending уходит после file.show и частей.
+        try
+        {
+            if (previous is not null)
+            {
+                await previous.CancelAsync().ConfigureAwait(false);
+            }
+
+            fileSend.Token.ThrowIfCancellationRequested();
+            await send(fileSend.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (fileSend.Token.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // Панель забрал diff или освобождение.
+            return false;
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                if (_fileSends.TryGetValue(terminalId, out var current) && ReferenceEquals(current, fileSend))
+                {
+                    _fileSends.Remove(terminalId);
+                }
+            }
+
+            await fileSend.CompleteAsync().ConfigureAwait(false);
+        }
     }
 
     /// <summary>
-    /// Значок diff на фоновой вкладке. Снимается, когда вкладка станет активной любым путём:
-    /// клик, сочетание, закрытие соседки, смена проекта. Выполняется в потоке интерфейса.
+    /// Новый diff вкладки отменяет отправку файлов, запрошенных раньше него, и ждёт её конца:
+    /// часть, уже отданная мосту, дойдёт до страницы раньше <c>diff.pending</c>. Не бросает.
     /// </summary>
-    private void SetPendingBadge(TabViewModel tab)
+    private Task CancelOlderFileSendAsync(TerminalId terminalId, long sequence)
     {
+        FileSend? fileSend;
+        lock (_gate)
+        {
+            if (!_fileSends.TryGetValue(terminalId, out fileSend) || fileSend.Stamp >= sequence)
+            {
+                return Task.CompletedTask;
+            }
+        }
+
+        return fileSend.CancelAsync();
+    }
+
+    /// <summary>
+    /// Значок diff на фоновой вкладке — и от <c>show_diff</c>, и от <c>show_file</c>. Снимается,
+    /// когда вкладка станет активной любым путём: клик, сочетание, закрытие соседки, смена
+    /// проекта. Выполняется в потоке интерфейса.
+    /// </summary>
+    public void SetPendingBadge(TabViewModel tab)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+
         tab.HasPendingDiff = true;
 
         lock (_gate)
@@ -331,7 +489,10 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
     /// </param>
     private async Task<ShowDiffOutcome> BuildAsync(TerminalId terminalId, DiffQuery query, bool fromAgentCall)
     {
-        var generation = new DiffGeneration(query, MaxParallelFileReads) { SkipCallerBatch = fromAgentCall };
+        var generation = new DiffGeneration(query, MaxParallelFileReads)
+        {
+            SkipCallerBatch = fromAgentCall,
+        };
         DiffGeneration? previous;
 
         lock (_gate)
@@ -342,6 +503,9 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
                 return Superseded();
             }
 
+            // Номер выдаётся под тем же замком, что и запись в _panels и решение о панели в
+            // SendFilesAsync: отметка, которую увидел show_file, всегда уже с поколением в _panels.
+            generation.Sequence = ++_requestSequence;
             _panels.TryGetValue(terminalId, out previous);
             _panels[terminalId] = generation;
         }
@@ -355,6 +519,8 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
 
         try
         {
+            await CancelOlderFileSendAsync(terminalId, generation.Sequence).ConfigureAwait(false);
+
             if (!await SendAsync(terminalId, generation, token => _view.ShowPendingAsync(terminalId, token), cancellationToken)
                     .ConfigureAwait(false))
             {
@@ -648,7 +814,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
             // Панели без запроса нет только если её успели закрыть — тогда перестраиваем
             // от каталога вкладки, как по клавише.
             previous ??= await OnUiAsync(() => _tabs?.Find(terminalId) is { } tab
-                    ? new DiffQuery(DirectoryOf(tab), BaseRef: null, IgnoreWhitespace: false, Files: [], Note: null)
+                    ? new DiffQuery(TabDirectories.Of(tab), BaseRef: null, IgnoreWhitespace: false, Files: [], Note: null)
                     : null)
                 .ConfigureAwait(false);
         }
@@ -664,8 +830,8 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
 
         var query = previous with
         {
-            Directory = NullIfBlank(request.Directory) ?? previous.Directory,
-            BaseRef = NullIfBlank(request.BaseRef) ?? previous.BaseRef,
+            Directory = TabDirectories.NullIfBlank(request.Directory) ?? previous.Directory,
+            BaseRef = TabDirectories.NullIfBlank(request.BaseRef) ?? previous.BaseRef,
             IgnoreWhitespace = request.IgnoreWhitespace,
         };
 
@@ -833,42 +999,9 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IAsyncD
         registration.TrySetResult();
     }
 
-    /// <summary>Каталог вкладки для diff: текущий каталог главного агента, до первого хука — каталог запуска.</summary>
-    private static string DirectoryOf(TabViewModel tab) =>
-        NullIfBlank(tab.CurrentDirectory) ?? tab.WorkingDirectory;
-
-    /// <summary>
-    /// Каталог из <c>show_diff</c>. Относительный считается от каталога вкладки: иначе git
-    /// разрешил бы его от рабочего каталога приложения.
-    /// </summary>
-    private static string ResolveDirectory(string? requested, string tabDirectory)
-    {
-        if (NullIfBlank(requested) is not { } directory)
-        {
-            return tabDirectory;
-        }
-
-        if (Path.IsPathRooted(directory))
-        {
-            return directory;
-        }
-
-        var combined = Path.Combine(tabDirectory, directory);
-        try
-        {
-            return Path.GetFullPath(combined);
-        }
-        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return combined;
-        }
-    }
-
     /// <summary>Список файлов агента: из JSON может прийти <c>null</c> и пустые строки.</summary>
     private static IReadOnlyList<string> CleanFiles(IReadOnlyList<string>? files) =>
         files is null ? [] : [.. files.Where(file => !string.IsNullOrWhiteSpace(file))];
-
-    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     /// <summary>
     /// Запрос заменён новым или панель закрыта, пока строилось оглавление. Для агента это не

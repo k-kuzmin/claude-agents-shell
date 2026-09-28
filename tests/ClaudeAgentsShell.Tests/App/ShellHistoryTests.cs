@@ -40,7 +40,7 @@ public sealed class ShellHistoryTests
                 new FakeHookListener(), Workspace, new FakeSessionHistoryReader(), new InlineUiDispatcher());
             Shell = new ShellViewModel(
                 Workspace, list, Prompt, new InlineUiDispatcher(), sessionState, new FakeLayoutStore().CreateService(),
-                Diff.Coordinator, Diff.Tracker, new FakeAppVersion("0.0.0"), History);
+                Diff.Coordinator, Diff.Tracker, Diff.Files, new FakeAppVersion("0.0.0"), History);
         }
 
         public FakeProjectStore Store { get; } = new();
