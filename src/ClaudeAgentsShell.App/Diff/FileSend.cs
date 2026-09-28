@@ -62,12 +62,22 @@ internal sealed class FileSend
             cancelling = _cancelling;
         }
 
-        if (cancelling is not null)
+        try
         {
-            await cancelling.ConfigureAwait(false);
+            if (cancelling is not null)
+            {
+                // Колбэк отмены мог бросить — это не повод держать ждущих.
+                await cancelling.ConfigureAwait(false);
+            }
         }
-
-        _cancellation.Dispose();
-        _done.TrySetResult();
+        catch (Exception)
+        {
+            // Колбэки отмены чужие (мост, диспетчер); сбой одного из них отправку уже не касается.
+        }
+        finally
+        {
+            _cancellation.Dispose();
+            _done.TrySetResult();
+        }
     }
 }

@@ -59,7 +59,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
     private IDiffTabs? _tabs;
     private bool _disposed;
 
-    /// <summary>Счётчик запросов diff: у каждого поколения свой номер (<see cref="IDiffPanelHost.DiffRequestStamp"/>).</summary>
+    /// <summary>Счётчик запросов diff: у каждого поколения свой номер (<see cref="IDiffPanelHost.DiffRequestStamp"/>). Только под <see cref="_gate"/>.</summary>
     private long _requestSequence;
 
     /// <inheritdoc cref="DiffCoordinator" />
@@ -289,7 +289,16 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
     }
 
     /// <inheritdoc />
-    long IDiffPanelHost.DiffRequestStamp => Interlocked.Read(ref _requestSequence);
+    long IDiffPanelHost.DiffRequestStamp
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _requestSequence;
+            }
+        }
+    }
 
     /// <inheritdoc />
     /// <remarks>
@@ -483,7 +492,6 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
         var generation = new DiffGeneration(query, MaxParallelFileReads)
         {
             SkipCallerBatch = fromAgentCall,
-            Sequence = Interlocked.Increment(ref _requestSequence),
         };
         DiffGeneration? previous;
 
@@ -495,6 +503,9 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
                 return Superseded();
             }
 
+            // Номер выдаётся под тем же замком, что и запись в _panels и решение о панели в
+            // SendFilesAsync: отметка, которую увидел show_file, всегда уже с поколением в _panels.
+            generation.Sequence = ++_requestSequence;
             _panels.TryGetValue(terminalId, out previous);
             _panels[terminalId] = generation;
         }

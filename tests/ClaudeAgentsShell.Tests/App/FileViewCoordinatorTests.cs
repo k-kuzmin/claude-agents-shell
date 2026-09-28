@@ -257,6 +257,113 @@ public sealed class FileViewCoordinatorTests
     }
 
     [Fact]
+    public async Task Освобождение_diff_во_время_отправки_частей_отменяет_её_и_не_виснет()
+    {
+        await using var harness = new Harness();
+        var tab = harness.AddTab("t1", active: true);
+        IDiffPanelHost host = harness.Diff;
+        var sendCancelled = false;
+
+        var send = host.ShowFilesAsync(
+            tab.TerminalId,
+            host.DiffRequestStamp,
+            async token =>
+            {
+                try
+                {
+                    await Task.Delay(Timeout, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    sendCancelled = true;
+                    throw;
+                }
+            },
+            CancellationToken.None);
+
+        await harness.Diff.DisposeAsync().AsTask().WaitAsync(Timeout / 2);
+
+        Assert.False(await send.WaitAsync(Timeout / 2));
+        Assert.True(sendCancelled);
+    }
+
+    [Fact]
+    public async Task Освобождение_diff_во_время_отправки_частей_show_file_отвечает_без_показа()
+    {
+        await using var harness = new Harness();
+        harness.AddTab("t1", active: true);
+        harness.FileView.OnShow = token => new ValueTask(Task.Delay(Timeout, token));
+
+        var call = harness.Files.HandleAsync(FakeDiffTabs.TokenFor("t1"), Request("a.cs"), CancellationToken.None);
+        await WaitUntilAsync(() => harness.FileView.Shown.Count == 1);
+
+        await harness.Diff.DisposeAsync().AsTask().WaitAsync(Timeout / 2);
+
+        Assert.Contains("replaced", Assert.IsType<ShowFileOutcome.Shown>(await call.WaitAsync(Timeout / 2)).Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Новая_отправка_файлов_в_ту_же_вкладку_отменяет_идущую_и_ждёт_её_конца()
+    {
+        await using var harness = new Harness();
+        var tab = harness.AddTab("t1", active: true);
+        IDiffPanelHost host = harness.Diff;
+        var firstEnded = false;
+        bool? secondAfterFirst = null;
+
+        // Разные токены вызова: отменяет первую именно новая отправка, а не координатор файлов.
+        var first = host.ShowFilesAsync(
+            tab.TerminalId,
+            host.DiffRequestStamp,
+            async token =>
+            {
+                try
+                {
+                    await Task.Delay(Timeout, token);
+                }
+                finally
+                {
+                    firstEnded = true;
+                }
+            },
+            CancellationToken.None);
+
+        var second = host.ShowFilesAsync(
+            tab.TerminalId,
+            host.DiffRequestStamp,
+            _ =>
+            {
+                secondAfterFirst = firstEnded;
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.True(await second.WaitAsync(Timeout / 2));
+        Assert.False(await first.WaitAsync(Timeout / 2));
+        Assert.True(secondAfterFirst);
+    }
+
+    [Fact]
+    public async Task Новый_show_file_во_время_отправки_частей_сменяет_прежний()
+    {
+        await using var harness = new Harness();
+        harness.AddTab("t1", active: true);
+        var shows = 0;
+        harness.FileView.OnShow = token => Interlocked.Increment(ref shows) == 1
+            ? new ValueTask(Task.Delay(Timeout, token))
+            : ValueTask.CompletedTask;
+
+        var first = harness.Files.HandleAsync(FakeDiffTabs.TokenFor("t1"), Request("first.cs"), CancellationToken.None);
+        await WaitUntilAsync(() => harness.FileView.Shown.Count == 1);
+
+        var second = await harness.Files.HandleAsync(FakeDiffTabs.TokenFor("t1"), Request("second.cs"), CancellationToken.None).WaitAsync(Timeout / 2);
+
+        Assert.StartsWith("Shown to the user", Assert.IsType<ShowFileOutcome.Shown>(second).Summary, StringComparison.Ordinal);
+        Assert.Contains("replaced", Assert.IsType<ShowFileOutcome.Shown>(await first.WaitAsync(Timeout / 2)).Summary, StringComparison.Ordinal);
+        Assert.Equal(["first.cs", "second.cs"], harness.FileView.Shown.Select(shown => shown.Files.Files[0].Path));
+    }
+
+    [Fact]
     public async Task Освобождение_diff_дожидается_отправки_файлов()
     {
         await using var harness = new Harness();
