@@ -119,6 +119,11 @@ public sealed record BackgroundTask(string? Id, string? Type);
 /// задачи сессии. <see langword="null"/> — поля в полезной нагрузке нет (старая версия Claude Code
 /// или сбой разбора), пустой список — фоновых задач нет. Это разные случаи.
 /// </param>
+/// <param name="TranscriptPath">
+/// Поле <c>transcript_path</c>: полный путь к <c>.jsonl</c> сессии. Точнее, чем путь, собранный
+/// из <paramref name="WorkingDirectory"/>: каталог сессии мог смениться (<c>cd</c>, worktree).
+/// Файл только читается; перед чтением путь проверяется на принадлежность <c>~/.claude/projects</c>.
+/// </param>
 /// <remarks>
 /// <paramref name="Source" /> необязателен намеренно: формат полезной нагрузки Claude Code
 /// считается нестабильным (раздел 7 CLAUDE.md), и сам Claude Code помечает это поле как
@@ -133,4 +138,5 @@ public sealed record HookEvent(
     DateTimeOffset ReceivedUtc,
     string? Source = null,
     string? AgentId = null,
-    IReadOnlyList<BackgroundTask>? BackgroundTasks = null);
+    IReadOnlyList<BackgroundTask>? BackgroundTasks = null,
+    string? TranscriptPath = null);

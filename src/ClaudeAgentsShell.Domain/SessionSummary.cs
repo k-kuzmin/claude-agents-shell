@@ -11,6 +11,11 @@ namespace ClaudeAgentsShell.Domain;
 /// <param name="Title">Первое сообщение пользователя; <c>null</c>, если разобрать не удалось.</param>
 /// <param name="MessageCount">Число сообщений; <c>null</c>, если не считалось или разбор сорвался.</param>
 /// <param name="Branch">Ветка git на момент сессии; <c>null</c>, если неизвестна.</param>
+/// <param name="Name">
+/// Имя, которое сессии дал сам Claude Code: последняя запись <c>custom-title</c> (<c>/rename</c>),
+/// иначе последняя <c>ai-title</c>; <c>null</c> — ни той, ни другой. Показывается вместо
+/// <paramref name="Title"/>, когда есть.
+/// </param>
 public sealed record SessionSummary(
     string SessionId,
     string TranscriptPath,
@@ -18,4 +23,9 @@ public sealed record SessionSummary(
     long SizeBytes,
     string? Title,
     int? MessageCount,
-    string? Branch);
+    string? Branch,
+    string? Name = null)
+{
+    /// <summary>Что показывать человеку: имя сессии, иначе первое сообщение.</summary>
+    public string? DisplayTitle => Name ?? Title;
+}
