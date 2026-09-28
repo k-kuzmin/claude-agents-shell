@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
+using ClaudeAgentsShell.Sessions.Files;
 
 namespace ClaudeAgentsShell.Sessions.Mcp;
 
@@ -48,11 +49,11 @@ public sealed class ShowFileTool : IMcpTool
                   }
                 ]
               },
-              "description": "Files to show, in this order. Paths are relative to `path` or absolute, and must be inside the repository."
+              "description": "Files to show, in this order. Paths are relative to `path` or absolute local paths, and must be inside the repository containing `path` (or inside `path` itself, outside a repository)."
             },
             "path": {
               "type": "string",
-              "description": "Directory the paths are relative to. Default: the current working directory of this session."
+              "description": "Local directory the paths are relative to. Default: the current working directory of this session."
             },
             "note": {
               "type": "string",
@@ -144,6 +145,12 @@ public sealed class ShowFileTool : IMcpTool
             || !TryString(args, "note", out var note, ref problem)
             || !TryFiles(args, out var files, ref problem))
         {
+            return false;
+        }
+
+        if (LocalPathGuard.IsNetworkOrDevice(directory) || files.Any(static f => LocalPathGuard.IsNetworkOrDevice(f.Path)))
+        {
+            problem = LocalPathGuard.RejectedText;
             return false;
         }
 

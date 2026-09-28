@@ -80,6 +80,11 @@ public sealed class ShowFileToolTests
     [InlineData("""{"files":[{"path":"a.cs","start_line":"3"}]}""")]
     [InlineData("""{"files":["a.cs"],"path":5}""")]
     [InlineData("""{"files":["a.cs"],"note":true}""")]
+    [InlineData("""{"files":["a.cs"],"path":"\\\\host\\share"}""")]
+    [InlineData("""{"files":["a.cs"],"path":"//host/share"}""")]
+    [InlineData("""{"files":["\\\\host\\share\\a.cs"]}""")]
+    [InlineData("""{"files":[{"path":"\\\\?\\C:\\a.cs","start_line":1}]}""")]
+    [InlineData("""{"files":["\\\\.\\pipe\\x"]}""")]
     public async Task Неверные_аргументы_возвращают_ошибку_и_не_доходят_до_приложения(string arguments)
     {
         var handler = new RecordingShowFileHandler(new ShowFileOutcome.Shown("ok"));
@@ -90,6 +95,35 @@ public sealed class ShowFileToolTests
         Assert.True(result.IsError);
         Assert.False(string.IsNullOrWhiteSpace(result.Text));
         Assert.Empty(handler.Calls);
+    }
+
+    [Theory]
+    [InlineData("""{"path":"\\\\host\\share"}""")]
+    [InlineData("""{"path":" //host/share/repo"}""")]
+    [InlineData("""{"files":["\\\\?\\C:\\x"]}""")]
+    [InlineData("""{"path":"\\\\.\\C:\\repo"}""")]
+    public async Task Show_diff_отклоняет_сетевые_и_device_пути_до_приложения(string arguments)
+    {
+        var handler = new RecordingShowDiffHandler(new ShowDiffOutcome.Shown("ok"));
+        var tool = new ShowDiffTool(handler);
+
+        var result = await tool.CallAsync(Token, Args(arguments), CancellationToken.None);
+
+        Assert.True(result.IsError);
+        Assert.Contains("UNC", result.Text, StringComparison.Ordinal);
+        Assert.Empty(handler.Calls);
+    }
+
+    [Fact]
+    public async Task Локальный_абсолютный_path_разрешён()
+    {
+        var handler = new RecordingShowFileHandler(new ShowFileOutcome.Shown("ok"));
+
+        var result = await new ShowFileTool(handler).CallAsync(
+            Token, Args("""{"path":"D:\\src\\r","files":["C:\\x\\a.cs"]}"""), CancellationToken.None);
+
+        Assert.False(result.IsError);
+        Assert.Equal(@"D:\src\r", Assert.Single(handler.Calls).Request.Directory);
     }
 
     [Fact]

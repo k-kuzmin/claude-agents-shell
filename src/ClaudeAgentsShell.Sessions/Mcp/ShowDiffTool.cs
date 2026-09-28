@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeAgentsShell.Application.Ports;
+using ClaudeAgentsShell.Sessions.Files;
 
 namespace ClaudeAgentsShell.Sessions.Mcp;
 
@@ -124,6 +125,12 @@ public sealed class ShowDiffTool : IMcpTool
             || !TryString(args, "note", out var note, ref problem)
             || !TryFiles(args, out var files, ref problem))
         {
+            return false;
+        }
+
+        if (LocalPathGuard.IsNetworkOrDevice(directory) || files.Any(LocalPathGuard.IsNetworkOrDevice))
+        {
+            problem = LocalPathGuard.RejectedText;
             return false;
         }
 
