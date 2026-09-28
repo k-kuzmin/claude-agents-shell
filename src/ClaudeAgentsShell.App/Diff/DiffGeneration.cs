@@ -33,6 +33,9 @@ internal sealed class DiffGeneration
         _fileGate = new SemaphoreSlim(maxParallelFiles, maxParallelFiles);
     }
 
+    /// <summary>Номер запроса diff: по нему просмотр файлов узнаёт, что diff открыли позже него.</summary>
+    public long Sequence { get; init; }
+
     /// <summary>Запрос, по которому строится панель.</summary>
     public DiffQuery Query { get; }
 
