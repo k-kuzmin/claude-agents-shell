@@ -122,6 +122,26 @@ public sealed class HistoryViewModelTests
         Assert.False(vm.Rows[0].IsTitleMissing);
     }
 
+    [Theory]
+    [InlineData("0d41f2a7")]
+    [InlineData("0d41f2a7-1111-2222-3333-444455556666")]
+    [InlineData("0D41F2A7-1111-2222-3333-444455556666")]
+    [InlineData("  0d41f2a7-1111-2222-3333-444455556666 \t")]
+    [InlineData(" 0D41f2 ")]
+    public async Task Search_finds_by_session_id(string query)
+    {
+        _reader.Set(CoreDir,
+            Session("0d41f2a7-1111-2222-3333-444455556666", "добавь репозиторий", Now.AddHours(-1)),
+            Session("7be0c193-aaaa-bbbb-cccc-ddddeeeeffff", "почини сборку", Now.AddHours(-2)));
+        using var vm = Create();
+        await vm.LoadAsync(CancellationToken.None);
+
+        vm.SearchText = query;
+
+        Assert.Equal(["0d41f2a7-1111-2222-3333-444455556666"], vm.Rows.Select(r => r.SessionId));
+        Assert.Equal("0d41f2a7-1111-2222-3333-444455556666", vm.SelectedRow?.SessionId);
+    }
+
     [Fact]
     public async Task Search_finds_by_session_name_and_by_first_message()
     {

@@ -320,7 +320,7 @@
                               Data="M4,11 A7,7 0 1 0 18,11 A7,7 0 1 0 4,11 Z M20,20 L16.5,16.5" />
 
                         <TextBlock Grid.Column="1"
-                                   Text="Поиск по имени или первому сообщению…"
+                                   Text="Поиск по имени, сообщению или id…"
                                    VerticalAlignment="Center"
                                    FontSize="13"
                                    Foreground="{StaticResource DisabledTextBrush}"

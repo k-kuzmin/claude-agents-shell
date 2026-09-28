@@ -9,7 +9,7 @@ namespace ClaudeAgentsShell.App.History;
 
 /// <summary>
 /// Окно истории сессий одного проекта (раздел 6.4 ТЗ; фильтра по проектам нет — решение
-/// пользователя): поиск по имени сессии и первому сообщению, список от свежих к старым, выбор
+/// пользователя): поиск по имени сессии, первому сообщению и id, список от свежих к старым, выбор
 /// стрелками, <c>Enter</c> и <c>Esc</c>, копирование полного id сессии.
 /// </summary>
 /// <remarks>
@@ -109,8 +109,9 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
     public string WindowTitle => $"История сессий — {_project.Name}";
 
     /// <summary>
-    /// Строка поиска по имени сессии и первому сообщению; список фильтруется по мере ввода,
-    /// без учёта регистра.
+    /// Строка поиска по имени сессии, первому сообщению и id (подстрока — находится и короткий id,
+    /// и полный, вставленный из буфера); список фильтруется по мере ввода, без учёта регистра,
+    /// пробелы по краям запроса отбрасываются.
     /// </summary>
     public string SearchText
     {
@@ -455,10 +456,12 @@ public sealed class SessionHistoryViewModel : ObservableObject, IDisposable
     }
 
     // Имя сессии заменяет на экране первое сообщение, но искать по сообщению по-прежнему
-    // можно: человек помнит, что спрашивал, а имя придумал Claude Code.
+    // можно: человек помнит, что спрашивал, а имя придумал Claude Code. По id — чтобы найти
+    // сессию по короткому id из строки или по полному, скопированному кнопкой.
     private static bool Matches(SessionHistoryRowViewModel row, SessionSummary session, string search) =>
         search.Length == 0
         || row.Title.Contains(search, StringComparison.OrdinalIgnoreCase)
+        || session.SessionId.Contains(search, StringComparison.OrdinalIgnoreCase)
         || (SessionHistoryFormat.SingleLine(session.Title)?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
 
     private static long MinuteOf(DateTimeOffset value)
