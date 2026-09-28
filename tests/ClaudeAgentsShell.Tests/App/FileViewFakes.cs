@@ -13,6 +13,9 @@ internal sealed class FakeWorkspaceFileReader : IWorkspaceFileReader
     /// <summary>Корень для любого каталога; <c>null</c> — каталога нет.</summary>
     public string? Root { get; set; } = @"D:\src\alpha";
 
+    /// <summary>Предел размера файла; по умолчанию 4 МБ, как у настоящего чтения.</summary>
+    public long MaxFileBytes { get; set; } = 4 * 1024 * 1024;
+
     /// <summary>Ответ на чтение; по умолчанию — короткий текст с путём файла.</summary>
     public Func<ShowFileItem, CancellationToken, Task<ViewedFile>>? Read { get; set; }
 

@@ -26,8 +26,8 @@ internal static class McpServerTexts
         + "or when the user asks to see the diff. Prefer it to printing a diff in the terminal. "
         + "By default it shows everything the current branch changed "
         + "against its base branch: commits plus uncommitted and untracked files. Use `files` to point the user "
-        + "at specific files and `note` to say what they are looking at. Returns immediately; "
-        + "it does not wait for the user to read the diff.";
+        + "at specific files and `note` to say what they are looking at. It returns once the diff is prepared "
+        + "and does not wait for the user to read it.";
 
     /// <summary>Описание <c>show_file</c>.</summary>
     public const string ShowFileDescription =
@@ -36,6 +36,6 @@ internal static class McpServerTexts
         + "the user at specific lines (where a bug is, what to look at); prefer it to printing file contents "
         + "in the terminal. Give `start_line`/`end_line` for a file and the panel scrolls to those lines and "
         + "highlights them. Paths are relative to `path` or absolute local paths; files must be inside the repository "
-        + "containing `path` (or inside `path` itself, outside a repository). Use `note` to say what the user is looking at. Returns immediately; "
-        + "it does not wait for the user.";
+        + "containing `path` (or inside `path` itself, outside a repository). Use `note` to say what the user is looking at. "
+        + "It returns once the files are sent to the panel and does not wait for the user to read them.";
 }

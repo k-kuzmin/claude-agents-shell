@@ -148,7 +148,7 @@ public sealed class ShowFileTool : IMcpTool
             return false;
         }
 
-        if (LocalPathGuard.IsNetworkOrDevice(directory) || files.Any(static f => LocalPathGuard.IsNetworkOrDevice(f.Path)))
+        if (!LocalPathGuard.IsLocal(directory) || !files.All(static f => LocalPathGuard.IsLocal(f.Path)))
         {
             problem = LocalPathGuard.RejectedText;
             return false;

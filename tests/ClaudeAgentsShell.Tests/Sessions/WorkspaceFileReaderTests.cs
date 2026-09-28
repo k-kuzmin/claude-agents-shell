@@ -213,7 +213,14 @@ public sealed class WorkspaceFileReaderTests
     [InlineData("//host/share/a.cs")]
     [InlineData(@"\\?\C:\a.cs")]
     [InlineData(@"\\.\C:\a.cs")]
-    public async Task Сетевые_и_device_пути_не_доходят_до_диска(string path)
+    [InlineData(@"\??\C:\a.cs")]
+    [InlineData(@"\??\UNC\host\share\a.cs")]
+    [InlineData(@"\foo")]
+    [InlineData("/foo")]
+    [InlineData("C:foo")]
+    [InlineData("a:b")]
+    [InlineData(@"C:\a.cs:stream")]
+    public async Task Нелокальные_пути_не_доходят_до_диска(string path)
     {
         using var temp = new TempDirectory();
         var reader = CreateReader();
@@ -226,6 +233,12 @@ public sealed class WorkspaceFileReaderTests
         Assert.Equal(ViewedFileProblem.NotFound, asDirectory.Problem);
         Assert.Equal(ViewedFileProblem.NotFound, asRoot.Problem);
         Assert.Null(await reader.ResolveRootAsync(path, CancellationToken.None));
+    }
+
+    [Fact]
+    public void Предел_размера_берётся_из_порога_diff()
+    {
+        Assert.Equal(Options.FileOutputCeilingBytes, CreateReader().MaxFileBytes);
     }
 
     private static string? EnclosingWorkTree(string directory)
