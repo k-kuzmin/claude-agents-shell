@@ -42,8 +42,9 @@ public sealed class WorkspaceFileReaderTests
         var plain = Directory.CreateDirectory(temp.Combine("plain")).FullName;
         var reader = CreateReader();
 
-        // Каталог во временной папке: .git выше неё быть не должно.
-        Assert.Equal(plain, await reader.ResolveRootAsync(plain, CancellationToken.None));
+        // Выше временной папки может найтись чужой .git (домашний каталог под git) — тогда
+        // корнем законно становится он; ожидание подстраивается, поведение продукта — нет.
+        Assert.Equal(EnclosingWorkTree(plain) ?? plain, await reader.ResolveRootAsync(plain, CancellationToken.None));
         Assert.Null(await reader.ResolveRootAsync(temp.Combine("missing"), CancellationToken.None));
         Assert.Null(await reader.ResolveRootAsync("  ", CancellationToken.None));
     }
@@ -205,6 +206,40 @@ public sealed class WorkspaceFileReaderTests
             var file = await reader.ReadAsync(root, root, new ShowFileItem("jin/ok.txt", null), CancellationToken.None);
             Assert.Equal(new ViewedFile("jin/ok.txt", "ok", null, ViewedFileProblem.None), file);
         }
+    }
+
+    [Theory]
+    [InlineData(@"\\host\share\a.cs")]
+    [InlineData("//host/share/a.cs")]
+    [InlineData(@"\\?\C:\a.cs")]
+    [InlineData(@"\\.\C:\a.cs")]
+    public async Task Сетевые_и_device_пути_не_доходят_до_диска(string path)
+    {
+        using var temp = new TempDirectory();
+        var reader = CreateReader();
+
+        var asFile = await reader.ReadAsync(temp.Path, temp.Path, new ShowFileItem(path, null), CancellationToken.None);
+        var asDirectory = await reader.ReadAsync(temp.Path, path, new ShowFileItem("a.cs", null), CancellationToken.None);
+        var asRoot = await reader.ReadAsync(path, temp.Path, new ShowFileItem("a.cs", null), CancellationToken.None);
+
+        Assert.Equal(ViewedFileProblem.OutsideRoot, asFile.Problem);
+        Assert.Equal(ViewedFileProblem.NotFound, asDirectory.Problem);
+        Assert.Equal(ViewedFileProblem.NotFound, asRoot.Problem);
+        Assert.Null(await reader.ResolveRootAsync(path, CancellationToken.None));
+    }
+
+    private static string? EnclosingWorkTree(string directory)
+    {
+        for (var current = Path.GetDirectoryName(directory); current is not null; current = Path.GetDirectoryName(current))
+        {
+            var entry = Path.Combine(current, ".git");
+            if (Directory.Exists(entry) || File.Exists(entry))
+            {
+                return current;
+            }
+        }
+
+        return null;
     }
 
     private static WorkspaceFileReader CreateReader() => new(Options);

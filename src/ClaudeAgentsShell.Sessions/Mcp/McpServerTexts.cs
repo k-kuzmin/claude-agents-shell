@@ -16,7 +16,7 @@ internal static class McpServerTexts
         + "to see or review the changes, instead of printing a diff in the terminal.\n"
         + "- " + McpProtocol.ShowFilePermissionRule + ": call it when the user asks to show or open a file, or when you "
         + "want to point the user at specific lines, instead of printing the file in the terminal.\n"
-        + "Both are pre-approved and return immediately. If their schemas are not loaded yet, load them first with "
+        + "Both are pre-approved and do not wait for the user to read the result. If their schemas are not loaded yet, load them first with "
         + "ToolSearch: select:" + McpProtocol.ShowDiffPermissionRule + "," + McpProtocol.ShowFilePermissionRule;
 
     /// <summary>Описание <c>show_diff</c>.</summary>
@@ -35,7 +35,7 @@ internal static class McpServerTexts
         + "with syntax highlighting. Call it when the user asks to show or open a file, or when you want to point "
         + "the user at specific lines (where a bug is, what to look at); prefer it to printing file contents "
         + "in the terminal. Give `start_line`/`end_line` for a file and the panel scrolls to those lines and "
-        + "highlights them. Paths are relative to `path` or absolute; files must be inside the repository "
-        + "(or the directory, outside git). Use `note` to say what the user is looking at. Returns immediately; "
+        + "highlights them. Paths are relative to `path` or absolute local paths; files must be inside the repository "
+        + "containing `path` (or inside `path` itself, outside a repository). Use `note` to say what the user is looking at. Returns immediately; "
         + "it does not wait for the user.";
 }
