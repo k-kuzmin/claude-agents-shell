@@ -133,6 +133,12 @@ internal static class TranscriptLineParser
         return null;
     }
 
+    /// <summary>
+    /// Та же нормализация для имени сессии из <c>custom-title</c>/<c>ai-title</c>: одна строка,
+    /// не длиннее заголовка из первого сообщения. Пустое и пробельное — <c>null</c>.
+    /// </summary>
+    internal static string? ShortenTitle(string? text) => Shorten(text);
+
     /// <inheritdoc cref="Shorten(ReadOnlySpan{char})" />
     private static string? Shorten(string? text) =>
         text is null ? null : Shorten(text.AsSpan());

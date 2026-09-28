@@ -65,6 +65,29 @@ internal static class SessionShortTitle
     }
 
     /// <summary>
+    /// Делает короткое имя из промпта, пришедшего хуком <c>UserPromptSubmit</c>.
+    /// </summary>
+    /// <param name="prompt">Текст промпта как есть: может быть многострочным.</param>
+    /// <returns>
+    /// <c>null</c> для пустого промпта, слэш-команды (<c>/model</c>, <c>/clear</c> — это команды
+    /// оболочки, а не запрос) и команды через <c>!</c>.
+    /// </returns>
+    /// <remarks>
+    /// Переводы строк заменяются пробелами до усечения: так имя совпадает с тем, что потом даст
+    /// транскрипт, где первое сообщение уже схлопнуто в одну строку, и вкладка не мигает.
+    /// </remarks>
+    public static string? FromPrompt(string? prompt)
+    {
+        var trimmed = prompt.AsSpan().TrimStart();
+        if (trimmed.IsEmpty || trimmed[0] is '/' or '!')
+        {
+            return null;
+        }
+
+        return Shorten(prompt!.Replace('\r', ' ').Replace('\n', ' '));
+    }
+
+    /// <summary>
     /// Первая строка сообщения без переносов, табуляций и управляющих символов: пробельные
     /// пачки схлопываются в один пробел, края обрезаются.
     /// </summary>

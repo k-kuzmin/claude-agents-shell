@@ -15,6 +15,8 @@ internal static class HookPayload
     private const string SourceField = "source";
     private const string AgentIdField = "agent_id";
     private const string BackgroundTasksField = "background_tasks";
+    private const string TranscriptPathField = "transcript_path";
+    private const string PromptField = "prompt";
     private const string TaskIdField = "id";
     private const string TaskTypeField = "type";
 
@@ -52,7 +54,9 @@ internal static class HookPayload
                 receivedUtc,
                 ReadString(root, SourceField),
                 ReadString(root, AgentIdField),
-                ReadBackgroundTasks(root));
+                ReadBackgroundTasks(root),
+                ReadString(root, TranscriptPathField),
+                ReadString(root, PromptField));
         }
         catch (JsonException)
         {
@@ -66,7 +70,7 @@ internal static class HookPayload
     /// </summary>
     /// <remarks>
     /// Поля, которые хуки приносят сверх разобранных, не читаются: <c>agent_type</c>
-    /// у сабагентов, <c>prompt</c> у промпта, <c>error</c> и <c>error_details</c>
+    /// у сабагентов, <c>error</c> и <c>error_details</c>
     /// у <c>StopFailure</c>, <c>session_crons</c> у конца хода. Состояние вкладки от них
     /// не зависит.
     /// </remarks>

@@ -51,7 +51,7 @@
                                         Background="Transparent"
                                         BorderThickness="0,2,1,0"
                                         BorderBrush="{StaticResource SeparatorBrush}"
-                                        ToolTip="{Binding Title}">
+                                        ToolTip="{Binding ShortTitle}">
                                     <Border.InputBindings>
                                         <MouseBinding MouseAction="LeftClick"
                                                       Command="{Binding DataContext.ActivateTabCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
@@ -77,7 +77,7 @@
 
                                         <TextBlock x:Name="TabTitle"
                                                    Grid.Column="1"
-                                                   Text="{Binding Title}"
+                                                   Text="{Binding ShortTitle}"
                                                    VerticalAlignment="Center"
                                                    FontSize="12.5"
                                                    TextTrimming="CharacterEllipsis"

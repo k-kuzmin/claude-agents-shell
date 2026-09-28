@@ -124,6 +124,10 @@ public sealed record BackgroundTask(string? Id, string? Type);
 /// из <paramref name="WorkingDirectory"/>: каталог сессии мог смениться (<c>cd</c>, worktree).
 /// Файл только читается; перед чтением путь проверяется на принадлежность <c>~/.claude/projects</c>.
 /// </param>
+/// <param name="Prompt">
+/// Поле <c>prompt</c> у <c>UserPromptSubmit</c>: текст, отправленный агенту. Нужен одному —
+/// назвать вкладку новой сессии сразу, не дожидаясь, пока Claude Code даст ей имя.
+/// </param>
 /// <remarks>
 /// <paramref name="Source" /> необязателен намеренно: формат полезной нагрузки Claude Code
 /// считается нестабильным (раздел 7 CLAUDE.md), и сам Claude Code помечает это поле как
@@ -139,4 +143,5 @@ public sealed record HookEvent(
     string? Source = null,
     string? AgentId = null,
     IReadOnlyList<BackgroundTask>? BackgroundTasks = null,
-    string? TranscriptPath = null);
+    string? TranscriptPath = null,
+    string? Prompt = null);

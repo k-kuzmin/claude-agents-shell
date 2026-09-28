@@ -355,7 +355,9 @@ internal sealed class FakeHookListener : IHookListener
         string? workingDirectory = null,
         string? source = null,
         string? agentId = null,
-        IReadOnlyList<BackgroundTask>? backgroundTasks = null) =>
+        IReadOnlyList<BackgroundTask>? backgroundTasks = null,
+        string? transcriptPath = null,
+        string? prompt = null) =>
         HookReceived?.Invoke(
             this,
             new HookEventArgs(
@@ -367,7 +369,9 @@ internal sealed class FakeHookListener : IHookListener
                     DateTimeOffset.UnixEpoch,
                     source,
                     agentId,
-                    backgroundTasks)));
+                    backgroundTasks,
+                    transcriptPath,
+                    prompt)));
 
     public ValueTask DisposeAsync()
     {
@@ -380,14 +384,33 @@ internal sealed class FakeHookListener : IHookListener
 internal sealed class FakeSessionHistoryReader : ISessionHistoryReader
 {
     private readonly Dictionary<string, SessionSummary> _byId = [];
+    private readonly Dictionary<string, SessionSummary> _byPath = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Запрошенные пары «каталог, сессия» по порядку.</summary>
     public List<(string Directory, string SessionId)> Requested { get; } = [];
 
+    /// <summary>Запрошенные пары «путь транскрипта, сессия» по порядку.</summary>
+    public List<(string Path, string SessionId)> RequestedPaths { get; } = [];
+
     /// <summary>Кладёт сводку, которую вернёт <see cref="ReadOneAsync" />.</summary>
-    public void Seed(string sessionId, string? title) =>
+    public void Seed(string sessionId, string? title, string? name = null) =>
         _byId[sessionId] = new SessionSummary(
-            sessionId, $@"C:\transcripts\{sessionId}.jsonl", DateTimeOffset.UnixEpoch, 0, title, null, null);
+            sessionId, $@"C:\transcripts\{sessionId}.jsonl", DateTimeOffset.UnixEpoch, 0, title, null, null, name);
+
+    /// <summary>Кладёт сводку, которую вернёт <see cref="ReadTranscriptAsync" /> по этому пути.</summary>
+    public void SeedPath(string transcriptPath, string sessionId, string? title, string? name = null) =>
+        _byPath[transcriptPath] = new SessionSummary(
+            sessionId, transcriptPath, DateTimeOffset.UnixEpoch, 0, title, null, null, name);
+
+    public Task<SessionSummary?> ReadTranscriptAsync(string transcriptPath, string sessionId, CancellationToken cancellationToken)
+    {
+        lock (Requested)
+        {
+            RequestedPaths.Add((transcriptPath, sessionId));
+        }
+
+        return Task.FromResult(_byPath.TryGetValue(transcriptPath, out var summary) ? summary : null);
+    }
 
     public Task<IReadOnlyList<SessionSummary>> ReadAsync(string workingDirectory, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<SessionSummary>>(_byId.Values.ToArray());
@@ -448,7 +471,14 @@ internal sealed class FakeTabStateSink : ITabStateSink
         StateLog.Add((terminalId, state));
     }
 
-    public void SetShortTitle(TerminalId terminalId, string shortTitle) => ShortTitles[terminalId] = shortTitle;
+    public void SetShortTitle(TerminalId terminalId, string shortTitle)
+    {
+        ShortTitles[terminalId] = shortTitle;
+        ShortTitleSets++;
+    }
+
+    /// <summary>Сколько раз выставлялось короткое имя — любой вкладке.</summary>
+    public int ShortTitleSets { get; private set; }
 
     public void ResetShortTitle(TerminalId terminalId)
     {

@@ -75,6 +75,9 @@ internal sealed class ScriptedHistoryReader : ISessionHistoryReader
 
     public Task<SessionSummary?> ReadOneAsync(string workingDirectory, string sessionId, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Окну истории одна сессия не нужна.");
+
+    public Task<SessionSummary?> ReadTranscriptAsync(string transcriptPath, string sessionId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Окну истории одна сессия не нужна.");
 }
 
 /// <summary>Наблюдатель истории, которым тест управляет вручную.</summary>
