@@ -26,6 +26,46 @@
 
 **Слитые ветки удаляются сразу** — локально и на remote, это часть процедуры мержа.
 
+## M8 — имя сессии во вкладке, копирование id, `show_file`, подсветка — с 28.09.2026
+
+Ветка `stage/m8-titles-show-file`, **один PR на всё** (решение пользователя).
+Запрос пользователя: (1) вкладки не всегда подхватывают название; (2) убрать проект из вкладки,
+оставить в уведомлении; (3) кнопка копирования id сессии в истории; (4) агент не находит `show_diff`;
+(5) инструмент показа файлов с подсветкой синтаксиса.
+
+### Решения пользователя (28.09)
+- **Название вкладки = имя, которое даёт сам Claude Code:** последняя запись `custom-title`
+  (`/rename`, поле `customTitle`), иначе последняя `ai-title` (`aiTitle`), иначе — первое
+  сообщение, как было. Записи дописываются в `.jsonl` повторно, «последняя побеждает»
+  (проверено по бинарнику claude 2.1.283 и файлам сессий). `ai-title` появляется во время первого хода.
+- Вкладка и её подсказка — только название сессии; «проект · сессия» — только в toast'е.
+- История: кнопка «копировать» **рядом с id** (не в конце строки), копирует **полный** id; только id.
+- Подсказка агенту — поле `instructions` в ответе MCP `initialize` (без хука). Причина «не находит»:
+  инструменты MCP в Claude Code отложены (ToolSearch), агент видит только имя.
+- `show_file`: один или несколько файлов, у каждого необязательный диапазон строк — прокрутка и
+  выделение фоном; `note`, как у `show_diff`.
+- Подсветка синтаксиса — и в `show_file`, и в diff.
+
+### Контракты (`4df3494`)
+- Domain: `FileView.cs` (`LineRange`, `ViewedFileProblem`, `ViewedFile`, `FileViewSet`);
+  `SessionSummary.Name` + `DisplayTitle`; `HookEvent.TranscriptPath`.
+- Ports: `IShowFileHandler` (+ `ShowFileItem`, `ShowFileRequest`, `ShowFileOutcome`),
+  `IWorkspaceFileReader`, `IFileView` (та же панель вкладки в режиме «файл»; закрытие — общее `IDiffView.Closed`).
+- App: `Services/IClipboardWriter`.
+- Меняет блок-владелец: `ISessionHistoryReader` (чтение по `transcript_path`, имя сессии) — B1.
+
+### Блоки и владение файлами
+
+| Блок | Владеет | Суть |
+|---|---|---|
+| B1 | `Sessions/History`, `Sessions/Hooks/HookPayload*`, `App/State/SessionStateCoordinator`+`SessionShortTitle`, `ViewModels/TabViewModel`, `Views/TabStrip.xaml` | имя сессии, `transcript_path`, `UserPromptSubmit`, бюджет попыток, `/clear`; вкладка без проекта |
+| B2 | `App/History`, `Views/SessionHistoryWindow.xaml`, `App/Services/WpfClipboardWriter` | `DisplayTitle` в строках, кнопка копирования id |
+| B3 | `Sessions/Mcp`, `Sessions/Hooks/HookSettingsProvider`, `Sessions/Files` (новая) | `instructions`, `ShowFileTool`, `permissions.allow`, `WorkspaceFileReader` |
+| B4 | `web/`, `Terminal/Protocol`, `WebView2TerminalBridge` | режим «файл» панели, `IFileView`, подсветка синтаксиса (локальная библиотека) |
+| B5 | `App/Diff/FileView*` (новые файлы) | `FileViewCoordinator`: `IShowFileHandler`, значок фоновой вкладки |
+
+Оркестратор после блоков: DI (`AppComposition`, `SessionsServiceCollectionExtensions` при необходимости), README/ТЗ.
+
 ## Правка 23.09.2026 — счётчик «N ждёт ввода» обходит ждущие вкладки по кругу
 
 Жалоба пользователя: при нескольких ждущих вкладках клик по счётчику всегда вёл на одну и ту же.
