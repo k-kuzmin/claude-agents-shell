@@ -33,7 +33,7 @@ public sealed class HistoryEmptyProjectTests
         var project = new SessionHistoryProject(Guid.NewGuid(), "fresh", temp.Combine("work", "fresh"));
         var dispatcher = new QueuedUiDispatcher();
         using var vm = new SessionHistoryViewModel(
-            new SessionHistoryRequest(project, new HashSet<string>()), reader, watcher, dispatcher, TimeProvider.System);
+            new SessionHistoryRequest(project, new HashSet<string>()), reader, watcher, dispatcher, TimeProvider.System, new RecordingClipboardWriter());
 
         await vm.LoadAsync(CancellationToken.None);
         dispatcher.Drain();
