@@ -7,6 +7,9 @@ namespace ClaudeAgentsShell.Application.Ports;
 /// </summary>
 public interface IWorkspaceFileReader
 {
+    /// <summary>Предел размера файла в байтах: больше него <see cref="ReadAsync"/> возвращает <see cref="ViewedFileProblem.TooLarge"/>.</summary>
+    long MaxFileBytes { get; }
+
     /// <summary>
     /// Корень, от которого считаются пути: верх репозитория git, в котором лежит
     /// <paramref name="directory"/>, иначе сам каталог. <c>null</c> — каталога нет.

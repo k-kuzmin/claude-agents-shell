@@ -85,6 +85,12 @@ public sealed class ShowFileToolTests
     [InlineData("""{"files":["\\\\host\\share\\a.cs"]}""")]
     [InlineData("""{"files":[{"path":"\\\\?\\C:\\a.cs","start_line":1}]}""")]
     [InlineData("""{"files":["\\\\.\\pipe\\x"]}""")]
+    [InlineData("""{"files":["\\??\\C:\\a.cs"]}""")]
+    [InlineData("""{"files":["a.cs"],"path":"\\??\\UNC\\host\\share"}""")]
+    [InlineData("""{"files":["\\foo"]}""")]
+    [InlineData("""{"files":["/foo"]}""")]
+    [InlineData("""{"files":["C:foo"]}""")]
+    [InlineData("""{"files":[{"path":"a:b"}]}""")]
     public async Task Неверные_аргументы_возвращают_ошибку_и_не_доходят_до_приложения(string arguments)
     {
         var handler = new RecordingShowFileHandler(new ShowFileOutcome.Shown("ok"));
@@ -102,6 +108,11 @@ public sealed class ShowFileToolTests
     [InlineData("""{"path":" //host/share/repo"}""")]
     [InlineData("""{"files":["\\\\?\\C:\\x"]}""")]
     [InlineData("""{"path":"\\\\.\\C:\\repo"}""")]
+    [InlineData("""{"path":"\\??\\C:\\repo"}""")]
+    [InlineData("""{"path":"\\??\\UNC\\host\\share"}""")]
+    [InlineData("""{"path":"\\repo"}""")]
+    [InlineData("""{"path":"C:repo"}""")]
+    [InlineData("""{"files":["a:b"]}""")]
     public async Task Show_diff_отклоняет_сетевые_и_device_пути_до_приложения(string arguments)
     {
         var handler = new RecordingShowDiffHandler(new ShowDiffOutcome.Shown("ok"));

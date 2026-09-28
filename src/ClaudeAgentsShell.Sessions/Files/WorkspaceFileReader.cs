@@ -42,6 +42,9 @@ public sealed class WorkspaceFileReader : IWorkspaceFileReader
     }
 
     /// <inheritdoc />
+    public long MaxFileBytes => _options.FileOutputCeilingBytes;
+
+    /// <inheritdoc />
     public Task<string?> ResolveRootAsync(string directory, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(directory);
@@ -64,8 +67,8 @@ public sealed class WorkspaceFileReader : IWorkspaceFileReader
         string full;
         try
         {
-            // Сетевой путь отсекается до Directory.Exists: уже он открыл бы SMB-соединение.
-            if (string.IsNullOrWhiteSpace(directory) || LocalPathGuard.IsNetworkOrDevice(directory) || !Directory.Exists(directory))
+            // Нелокальный путь отсекается до Directory.Exists: уже он открыл бы SMB-соединение.
+            if (string.IsNullOrWhiteSpace(directory) || !LocalPathGuard.IsLocal(directory) || !Directory.Exists(directory))
             {
                 return null;
             }
@@ -91,13 +94,13 @@ public sealed class WorkspaceFileReader : IWorkspaceFileReader
 
     private async Task<ViewedFile> ReadCoreAsync(string root, string directory, ShowFileItem item, CancellationToken cancellationToken)
     {
-        // Страховка к проверке аргументов инструмента: до диска сетевые и device-пути не доходят.
-        if (LocalPathGuard.IsNetworkOrDevice(root) || LocalPathGuard.IsNetworkOrDevice(directory))
+        // Страховка к проверке аргументов инструмента: до диска доходят только локальные пути.
+        if (!LocalPathGuard.IsLocal(root) || !LocalPathGuard.IsLocal(directory))
         {
             return Problem(item.Path, item, ViewedFileProblem.NotFound);
         }
 
-        if (LocalPathGuard.IsNetworkOrDevice(item.Path))
+        if (!LocalPathGuard.IsLocal(item.Path))
         {
             return Problem(item.Path, item, ViewedFileProblem.OutsideRoot);
         }

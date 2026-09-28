@@ -128,7 +128,7 @@ public sealed class ShowDiffTool : IMcpTool
             return false;
         }
 
-        if (LocalPathGuard.IsNetworkOrDevice(directory) || files.Any(LocalPathGuard.IsNetworkOrDevice))
+        if (!LocalPathGuard.IsLocal(directory) || !files.All(LocalPathGuard.IsLocal))
         {
             problem = LocalPathGuard.RejectedText;
             return false;
