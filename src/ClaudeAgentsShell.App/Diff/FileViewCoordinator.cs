@@ -4,6 +4,7 @@ using System.Text;
 using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
+using ClaudeAgentsShell.Sessions.Git;
 
 namespace ClaudeAgentsShell.App.Diff;
 
@@ -45,6 +46,9 @@ public sealed class FileViewCoordinator : IShowFileHandler, IAsyncDisposable
     private readonly IDiffPanelHost _host;
     private readonly IUiDispatcher _dispatcher;
 
+    /// <summary>Предел одного файла — тот же, по которому читатель помечает его слишком большим.</summary>
+    private readonly int _fileCeilingBytes;
+
     private readonly object _gate = new();
     private readonly Dictionary<TerminalId, FileViewShow> _shows = [];
     private readonly HashSet<Task> _running = [];
@@ -58,24 +62,28 @@ public sealed class FileViewCoordinator : IShowFileHandler, IAsyncDisposable
     /// <param name="panel">Та же панель: нужно только её закрытие пользователем, общее для обоих режимов.</param>
     /// <param name="host">Хозяин панели — координатор diff.</param>
     /// <param name="dispatcher">Поток интерфейса: вызов <c>show_file</c> приходит из пула <c>HttpListener</c>.</param>
+    /// <param name="options">Пороги чтения: предел одного файла для итога агенту.</param>
     public FileViewCoordinator(
         IWorkspaceFileReader reader,
         IFileView view,
         IDiffView panel,
         IDiffPanelHost host,
-        IUiDispatcher dispatcher)
+        IUiDispatcher dispatcher,
+        GitDiffOptions options)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(view);
         ArgumentNullException.ThrowIfNull(panel);
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(options);
 
         _reader = reader;
         _view = view;
         _panel = panel;
         _host = host;
         _dispatcher = dispatcher;
+        _fileCeilingBytes = options.FileOutputCeilingBytes;
     }
 
     /// <summary>
@@ -439,7 +447,7 @@ public sealed class FileViewCoordinator : IShowFileHandler, IAsyncDisposable
     }
 
     /// <summary>Итог для агента: что показано и что нет.</summary>
-    private static string Summarize(IReadOnlyList<ReadFile> files)
+    private string Summarize(IReadOnlyList<ReadFile> files)
     {
         var shown = files.Where(file => file.File.Problem == ViewedFileProblem.None).ToArray();
         var builder = new StringBuilder();
@@ -457,22 +465,25 @@ public sealed class FileViewCoordinator : IShowFileHandler, IAsyncDisposable
         return builder.Append('.').ToString();
     }
 
-    private static string DescribeProblems(IReadOnlyList<ReadFile> files) =>
+    private string DescribeProblems(IReadOnlyList<ReadFile> files) =>
         string.Join("; ", files
             .Where(file => file.File.Problem != ViewedFileProblem.None)
             .Select(file => file.File.Path + " - " + Describe(file)));
 
-    private static string Describe(ReadFile file) => file.File.Problem switch
+    private string Describe(ReadFile file) => file.File.Problem switch
     {
         ViewedFileProblem.TooLarge when file.OverTotal =>
             string.Create(CultureInfo.InvariantCulture, $"over the {MaxTotalChars / (1024 * 1024)} MB total for one call, show it separately"),
-        ViewedFileProblem.TooLarge => "larger than the 4 MB limit",
+        ViewedFileProblem.TooLarge => "larger than the " + FormatMegabytes(_fileCeilingBytes) + " limit",
         ViewedFileProblem.NotFound => "not found or is a directory",
         ViewedFileProblem.OutsideRoot => "outside the workspace root",
         ViewedFileProblem.Binary => "binary file",
         ViewedFileProblem.Unreadable => "could not be read (locked or access denied)",
         _ => file.File.Problem.ToString(),
     };
+
+    private static string FormatMegabytes(long bytes) =>
+        string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.##} MB");
 
     /// <summary>
     /// Вызов сменил новый, панель или вкладку закрыли, пользователь открыл diff. Для агента это

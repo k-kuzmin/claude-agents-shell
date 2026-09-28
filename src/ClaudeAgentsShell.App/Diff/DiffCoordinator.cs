@@ -50,6 +50,9 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
     private readonly Dictionary<TerminalId, TabViewModel> _badged = [];
     private readonly HashSet<Task> _running = [];
 
+    /// <summary>Идущие отправки файлов (<see cref="IDiffPanelHost.ShowFilesAsync"/>) по вкладкам.</summary>
+    private readonly Dictionary<TerminalId, FileSend> _fileSends = [];
+
     /// <summary>Сообщения на страницу уходят по одному: проверка поколения и отправка неразрывны.</summary>
     private readonly SemaphoreSlim _sendGate = new(1, 1);
 
@@ -216,6 +219,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
         IDiffTabs? tabs;
         DiffGeneration[] generations;
         KeyValuePair<TerminalId, TabViewModel>[] badged;
+        FileSend[] fileSends;
         Task[] running;
 
         lock (_gate)
@@ -232,6 +236,7 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
             _panels.Clear();
             badged = [.. _badged];
             _badged.Clear();
+            fileSends = [.. _fileSends.Values];
             running = [.. _running];
         }
 
@@ -251,6 +256,12 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
         foreach (var generation in generations)
         {
             generation.Retire();
+        }
+
+        // Отправки файлов учтены в _running (Register) — ждать их конца будет WhenAll ниже.
+        foreach (var fileSend in fileSends)
+        {
+            _ = fileSend.CancelAsync();
         }
 
         // Снимок полон: работа учитывается под замком до своего запуска, а после _disposed не
@@ -282,10 +293,11 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
 
     /// <inheritdoc />
     /// <remarks>
-    /// Под тем же замком отправки, что и все сообщения diff: сообщение diff, уже отданное мосту,
-    /// дойдёт до страницы раньше файлов, а после списания поколения новые не уйдут.
+    /// Решение о панели — под тем же замком отправки, что и все сообщения diff: сообщение diff,
+    /// уже отданное мосту, дойдёт до страницы раньше файлов, а после списания поколения новые
+    /// не уйдут. Сама отправка файлов идёт вне замка и не задерживает другие вкладки.
     /// Следующий <see cref="IDiffView.ShowPendingAsync"/> (кнопка, клавиша, <c>show_diff</c>)
-    /// строит diff заново и возвращает панель в режим diff.
+    /// отменяет её, дожидается её конца и возвращает панель в режим diff.
     /// </remarks>
     async Task<bool> IDiffPanelHost.ShowFilesAsync(
         TerminalId terminalId,
@@ -318,6 +330,11 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
         Func<CancellationToken, ValueTask> send,
         CancellationToken cancellationToken)
     {
+        FileSend fileSend;
+        FileSend? previous;
+
+        // Под общим замком — только решение, кому принадлежит панель: всё, что diff этой вкладки
+        // уже отдал мосту, отправлено до конца, а новых сообщений списанное поколение не пошлёт.
         await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -340,16 +357,68 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
                     _panels.Remove(terminalId);
                     retired = current;
                 }
+
+                fileSend = new FileSend(stamp, cancellationToken);
+                _fileSends.TryGetValue(terminalId, out previous);
+                _fileSends[terminalId] = fileSend;
             }
 
             retired?.Retire();
-            await send(cancellationToken).ConfigureAwait(false);
-            return true;
         }
         finally
         {
             _sendGate.Release();
         }
+
+        // Сами файлы (до 16 М символов частями) — вне общего замка: другие вкладки и diff
+        // не ждут. Diff этой вкладки, открытый позже, отменяет отправку и ждёт её конца
+        // (CancelOlderFileSendAsync), так что его diff.pending уходит после file.show и частей.
+        try
+        {
+            if (previous is not null)
+            {
+                await previous.CancelAsync().ConfigureAwait(false);
+            }
+
+            fileSend.Token.ThrowIfCancellationRequested();
+            await send(fileSend.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (fileSend.Token.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // Панель забрал diff или освобождение.
+            return false;
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                if (_fileSends.TryGetValue(terminalId, out var current) && ReferenceEquals(current, fileSend))
+                {
+                    _fileSends.Remove(terminalId);
+                }
+            }
+
+            await fileSend.CompleteAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Новый diff вкладки отменяет отправку файлов, запрошенных раньше него, и ждёт её конца:
+    /// часть, уже отданная мосту, дойдёт до страницы раньше <c>diff.pending</c>. Не бросает.
+    /// </summary>
+    private Task CancelOlderFileSendAsync(TerminalId terminalId, long sequence)
+    {
+        FileSend? fileSend;
+        lock (_gate)
+        {
+            if (!_fileSends.TryGetValue(terminalId, out fileSend) || fileSend.Stamp >= sequence)
+            {
+                return Task.CompletedTask;
+            }
+        }
+
+        return fileSend.CancelAsync();
     }
 
     /// <summary>
@@ -439,6 +508,8 @@ public sealed class DiffCoordinator : IShowDiffHandler, IDiffChangeSink, IDiffPa
 
         try
         {
+            await CancelOlderFileSendAsync(terminalId, generation.Sequence).ConfigureAwait(false);
+
             if (!await SendAsync(terminalId, generation, token => _view.ShowPendingAsync(terminalId, token), cancellationToken)
                     .ConfigureAwait(false))
             {

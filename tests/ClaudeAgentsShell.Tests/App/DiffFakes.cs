@@ -2,6 +2,7 @@ using ClaudeAgentsShell.App.Diff;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
+using ClaudeAgentsShell.Sessions.Git;
 
 namespace ClaudeAgentsShell.Tests.App;
 
@@ -223,7 +224,7 @@ internal sealed class ShellDiffParts
     {
         Coordinator = new DiffCoordinator(Git, View, new InlineUiDispatcher());
         Tracker = new DiffStaleTracker(hooks ?? new FakeHookListener(), new InlineUiDispatcher(), Coordinator);
-        Files = new FileViewCoordinator(new FakeWorkspaceFileReader(), new FakeFileView(), View, Coordinator, new InlineUiDispatcher());
+        Files = new FileViewCoordinator(new FakeWorkspaceFileReader(), new FakeFileView(), View, Coordinator, new InlineUiDispatcher(), new GitDiffOptions());
     }
 
     public FakeGitDiffReader Git { get; } = new();

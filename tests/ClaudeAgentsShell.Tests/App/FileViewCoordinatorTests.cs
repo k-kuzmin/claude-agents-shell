@@ -3,6 +3,7 @@ using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
+using ClaudeAgentsShell.Sessions.Git;
 using Xunit;
 
 namespace ClaudeAgentsShell.Tests.App;
@@ -195,6 +196,20 @@ public sealed class FileViewCoordinatorTests
 
         // Файлы с проблемой тоже уходят на страницу — там видно, почему их нет.
         Assert.Equal(4, Assert.Single(harness.FileView.Shown).Files.Files.Count);
+    }
+
+    [Fact]
+    public async Task Предел_одного_файла_в_итоге_берётся_из_настроек()
+    {
+        await using var harness = new Harness(options: new GitDiffOptions { FileOutputCeilingBytes = 1536 * 1024 });
+        harness.AddTab("t1", active: true);
+        harness.Reader.Read = (item, _) => Task.FromResult(item.Path == "big.log"
+            ? FakeWorkspaceFileReader.Problem(item, ViewedFileProblem.TooLarge)
+            : FakeWorkspaceFileReader.Text(item, "text"));
+
+        var outcome = await harness.Files.HandleAsync(FakeDiffTabs.TokenFor("t1"), Request("a.cs", "big.log"), CancellationToken.None);
+
+        Assert.EndsWith("big.log - larger than the 1.5 MB limit.", Assert.IsType<ShowFileOutcome.Shown>(outcome).Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -483,6 +498,98 @@ public sealed class FileViewCoordinatorTests
     }
 
     [Fact]
+    public async Task Diff_открытый_во_время_отправки_частей_побеждает_и_не_ждёт_их_конца()
+    {
+        await using var harness = new Harness();
+        var tab = harness.AddTab("t1", active: true);
+        var sendEnded = false;
+        bool? pendingAfterSend = null;
+
+        // Части file.content уходят «вечно», пока отправку не отменят.
+        harness.FileView.OnShow = async token =>
+        {
+            try
+            {
+                await Task.Delay(Timeout, token);
+            }
+            finally
+            {
+                sendEnded = true;
+            }
+        };
+        harness.DiffView.OnCall = call =>
+        {
+            if (call.Kind == "pending")
+            {
+                pendingAfterSend ??= sendEnded;
+            }
+
+            return null;
+        };
+
+        var call = harness.Files.HandleAsync(FakeDiffTabs.TokenFor("t1"), Request("a.cs"), CancellationToken.None);
+        await WaitUntilAsync(() => harness.FileView.Shown.Count == 1);
+
+        var open = harness.Diff.OpenForTabAsync(tab.TerminalId, CancellationToken.None);
+        await open.WaitAsync(Timeout / 2);
+
+        // diff.pending — только после того, как отправка файлов закончилась.
+        Assert.True(pendingAfterSend);
+        Assert.Equal(["pending", "index"], harness.DiffView.Calls.Select(c => c.Kind));
+        Assert.Contains("replaced", Assert.IsType<ShowFileOutcome.Shown>(await call.WaitAsync(Timeout / 2)).Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Отправка_файлов_не_держит_diff_других_вкладок()
+    {
+        await using var harness = new Harness();
+        harness.AddTab("t1", active: true);
+        var other = harness.AddTab("t2");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.FileView.OnShow = token => new ValueTask(release.Task.WaitAsync(token));
+
+        var call = harness.Files.HandleAsync(FakeDiffTabs.TokenFor("t1"), Request("a.cs"), CancellationToken.None);
+        await WaitUntilAsync(() => harness.FileView.Shown.Count == 1);
+
+        await harness.Diff.OpenForTabAsync(other.TerminalId, CancellationToken.None).WaitAsync(Timeout / 2);
+        Assert.Equal(["pending", "index"], harness.DiffView.Calls.Select(c => c.Kind));
+        Assert.False(call.IsCompleted);
+
+        release.SetResult();
+        Assert.StartsWith("Shown to the user", Assert.IsType<ShowFileOutcome.Shown>(await call).Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Diff_другой_вкладки_не_отменяет_отправку_файлов()
+    {
+        await using var harness = new Harness();
+        harness.AddTab("t1", active: true);
+        var other = harness.AddTab("t2");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = false;
+        harness.FileView.OnShow = async token =>
+        {
+            try
+            {
+                await release.Task.WaitAsync(token);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+                throw;
+            }
+        };
+
+        var call = harness.Files.HandleAsync(FakeDiffTabs.TokenFor("t1"), Request("a.cs"), CancellationToken.None);
+        await WaitUntilAsync(() => harness.FileView.Shown.Count == 1);
+        await harness.Diff.OpenForTabAsync(other.TerminalId, CancellationToken.None);
+        release.SetResult();
+
+        Assert.IsType<ShowFileOutcome.Shown>(await call);
+        Assert.False(cancelled);
+    }
+
+    [Fact]
     public async Task Diff_открытый_раньше_вызова_файлов_уступает_им()
     {
         await using var harness = new Harness();
@@ -686,11 +793,11 @@ public sealed class FileViewCoordinatorTests
     {
         private bool _disposed;
 
-        public Harness(bool start = true, IUiDispatcher? dispatcher = null)
+        public Harness(bool start = true, IUiDispatcher? dispatcher = null, GitDiffOptions? options = null)
         {
             dispatcher ??= new InlineUiDispatcher();
             Diff = new DiffCoordinator(Git, DiffView, dispatcher);
-            Files = new FileViewCoordinator(Reader, FileView, DiffView, Diff, dispatcher);
+            Files = new FileViewCoordinator(Reader, FileView, DiffView, Diff, dispatcher, options ?? new GitDiffOptions());
             if (start)
             {
                 Diff.Start(Tabs);
