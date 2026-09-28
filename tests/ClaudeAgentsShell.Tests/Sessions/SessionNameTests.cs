@@ -171,6 +171,34 @@ public sealed class SessionNameTests
     }
 
     [Fact]
+    public async Task Переписанный_на_месте_файл_не_переносит_прежнее_имя()
+    {
+        // Файл не уменьшился, но строка заголовка другая — это не дописывание: имя из хвоста
+        // прежнего содержимого (custom-title) остаться не должно.
+        using var temp = new TempDirectory();
+        var reader = CreateReader(temp);
+        var path = WriteTranscript(temp, SessionId, FirstMessage, CustomTitle("старое имя"));
+
+        Assert.Equal("старое имя", (await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None))?.Name);
+
+        var modified = File.GetLastWriteTimeUtc(path);
+        var oldSize = new FileInfo(path).Length;
+        File.WriteAllText(
+            path,
+            """{"type":"user","message":{"role":"user","content":"другая задача"}}""" + "\n"
+            + Assistant(new string('z', (int)oldSize)) + "\n"
+            + AiTitle("Новое имя") + "\n",
+            new UTF8Encoding(false));
+        File.SetLastWriteTimeUtc(path, modified.AddSeconds(1));
+        Assert.True(new FileInfo(path).Length >= oldSize);
+
+        var summary = await reader.ReadOneAsync(WorkingDirectory, SessionId, CancellationToken.None);
+
+        Assert.Equal("другая задача", summary?.Title);
+        Assert.Equal("Новое имя", summary?.Name);
+    }
+
+    [Fact]
     public async Task Недописанная_последняя_строка_ждёт_конца()
     {
         using var temp = new TempDirectory();
