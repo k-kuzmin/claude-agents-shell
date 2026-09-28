@@ -364,6 +364,59 @@ public sealed class FileViewCoordinatorTests
     }
 
     [Fact]
+    public async Task Бросающий_колбэк_отмены_не_вешает_отправку_файлов()
+    {
+        var fileSend = new FileSend(stamp: 0, CancellationToken.None);
+        fileSend.Token.Register(static () => throw new InvalidOperationException("колбэк моста упал"));
+
+        var cancelled = fileSend.CancelAsync();
+        await fileSend.CompleteAsync().WaitAsync(Timeout / 2);
+
+        await cancelled.WaitAsync(Timeout / 2);
+        Assert.True(fileSend.Token.IsCancellationRequested);
+
+        // После завершения повторная отмена тоже не виснет.
+        await fileSend.CancelAsync().WaitAsync(Timeout / 2);
+    }
+
+    [Fact]
+    public async Task Бросающий_колбэк_отмены_не_вешает_diff_и_освобождение()
+    {
+        await using var harness = new Harness();
+        var tab = harness.AddTab("t1", active: true);
+        IDiffPanelHost host = harness.Diff;
+
+        var send = host.ShowFilesAsync(
+            tab.TerminalId,
+            host.DiffRequestStamp,
+            async token =>
+            {
+                using var registration = token.Register(static () => throw new InvalidOperationException("колбэк моста упал"));
+                await Task.Delay(Timeout, token);
+            },
+            CancellationToken.None);
+
+        // Новый diff вкладки отменяет отправку (CancelOlderFileSendAsync) и дожидается её.
+        await harness.Diff.OpenForTabAsync(tab.TerminalId, CancellationToken.None).WaitAsync(Timeout / 2);
+        Assert.False(await send.WaitAsync(Timeout / 2));
+        Assert.Equal(["pending", "index"], harness.DiffView.Calls.Select(c => c.Kind));
+
+        // И освобождение со второй такой отправкой не виснет.
+        var second = host.ShowFilesAsync(
+            tab.TerminalId,
+            host.DiffRequestStamp,
+            async token =>
+            {
+                using var registration = token.Register(static () => throw new InvalidOperationException("колбэк моста упал"));
+                await Task.Delay(Timeout, token);
+            },
+            CancellationToken.None);
+
+        await harness.Diff.DisposeAsync().AsTask().WaitAsync(Timeout / 2);
+        Assert.False(await second.WaitAsync(Timeout / 2));
+    }
+
+    [Fact]
     public async Task Освобождение_diff_дожидается_отправки_файлов()
     {
         await using var harness = new Harness();
