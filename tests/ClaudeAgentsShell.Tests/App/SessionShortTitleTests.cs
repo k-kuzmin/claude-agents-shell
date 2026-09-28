@@ -117,4 +117,25 @@ public sealed class SessionShortTitleTests
         Assert.NotNull(result);
         Assert.Equal(SessionShortTitle.MaxLength, result.Length);
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("/model opus")]
+    [InlineData("  /review 12")]
+    [InlineData("!dir")]
+    public void Команда_и_пустой_промпт_имени_не_дают(string? prompt) => Assert.Null(SessionShortTitle.FromPrompt(prompt));
+
+    [Fact]
+    public void Промпт_склеивается_в_строку_как_в_транскрипте() =>
+        Assert.Equal("почини сборку и добавь тесты", SessionShortTitle.FromPrompt("почини сборку\r\nи добавь тесты"));
+
+    [Fact]
+    public void Длинный_промпт_усекается_как_сообщение()
+    {
+        var prompt = string.Join(' ', Enumerable.Repeat("слово", 30));
+
+        Assert.Equal(SessionShortTitle.Shorten(prompt), SessionShortTitle.FromPrompt(prompt));
+    }
 }

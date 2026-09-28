@@ -104,6 +104,34 @@ public sealed class HookListenerTests
     }
 
     [Fact]
+    public async Task Путь_транскрипта_и_промпт_разбираются()
+    {
+        // Поля проверены живым прогоном claude 2.1.283: transcript_path есть у каждого хука,
+        // prompt — у UserPromptSubmit.
+        await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
+        var received = NextEvent(listener);
+        await listener.StartAsync(CancellationToken.None);
+
+        using var client = new HttpClient();
+        await Send(client, listener.Endpoint, "tab-1", """
+            {
+              "hook_event_name": "UserPromptSubmit",
+              "session_id": "db6c9b0a",
+              "transcript_path": "C:\\Users\\me\\.claude\\projects\\C--src\\db6c9b0a.jsonl",
+              "cwd": "C:\\src",
+              "prompt_id": "ee6cf388",
+              "permission_mode": "auto",
+              "prompt": "почини сборку"
+            }
+            """);
+
+        var hook = await received.WaitAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(@"C:\Users\me\.claude\projects\C--src\db6c9b0a.jsonl", hook.TranscriptPath);
+        Assert.Equal("почини сборку", hook.Prompt);
+    }
+
+    [Fact]
     public async Task Хук_главного_потока_без_agent_id_и_без_фоновых_задач_несёт_null()
     {
         await using var listener = new HookListener(TimeProvider.System, new RecordingHookLog(), []);
@@ -118,6 +146,8 @@ public sealed class HookListenerTests
         // Поля нет — значит неизвестно, а не «фоновых задач нет»: это разные случаи.
         Assert.Null(hook.AgentId);
         Assert.Null(hook.BackgroundTasks);
+        Assert.Null(hook.TranscriptPath);
+        Assert.Null(hook.Prompt);
     }
 
     [Fact]

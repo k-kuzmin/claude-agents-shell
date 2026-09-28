@@ -16,19 +16,9 @@ public sealed class SessionStateCoordinatorTests
     private const string HookPath = @"D:\src\alpha-from-hook";
     private const string SessionId = "11111111-2222-3333-4444-555555555555";
 
-    /// <summary>
-    /// Ожидаемый бюджет чтений транскрипта за сессию. Записан числом намеренно — это
-    /// утверждение о поведении, а не копия закрытой константы координатора: изменят бюджет —
-    /// тесты обязаны упасть, а не подстроиться.
-    /// </summary>
-    /// <remarks>
-    /// Три: одна попытка по <c>SessionStart</c> у свежей сессии почти всегда пустая (сообщения
-    /// пользователя в транскрипте ещё нет), остаются две содержательные. Меньше нельзя —
-    /// по замеру M5-0 на 785 транскриптах заголовок появляется позже первого <c>Stop</c>
-    /// в 2 случаях (81 до правки разбора слэш-команд), и причина остатка — задержка сброса
-    /// файла на диск, от которой спасает только повтор.
-    /// </remarks>
-    private const int MaxTitleAttempts = 3;
+    private const string OtherSession = "99999999-8888-7777-6666-555555555555";
+
+    private const string TranscriptPath = @"C:\Users\me\.claude\projects\D--src-alpha-wt\11111111-2222-3333-4444-555555555555.jsonl";
 
     /// <summary>Поле <c>background_tasks</c> пришло и пусто: фоновых задач у сессии нет.</summary>
     private static readonly IReadOnlyList<BackgroundTask> NoTasks = [];
@@ -1266,10 +1256,10 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Число_чтений_за_сессию_ограничено()
+    public async Task Имя_перечитывается_на_каждой_границе_хода()
     {
-        // Повтор висит на Stop, то есть на каждом ответе агента: без потолка транскрипт
-        // перечитывался бы весь сеанс.
+        // Бюджета попыток нет: имя сессии меняется всю её жизнь (ai-title в первом ходе,
+        // /rename — когда угодно), а неизменившийся файл порт отдаёт из кэша.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
         harness.History.Seed(SessionId, title: null);
@@ -1283,15 +1273,90 @@ public sealed class SessionStateCoordinatorTests
             await harness.SettleAsync();
         }
 
-        Assert.Equal(MaxTitleAttempts, harness.History.Requested.Count);
+        Assert.Equal(11, harness.History.Requested.Count);
         Assert.Empty(harness.Sink.ShortTitles);
     }
 
     [Fact]
-    public async Task Сжатие_контекста_бюджет_заголовка_не_тратит()
+    public async Task Промахи_не_закрывают_поиск_имени()
     {
-        // Бюджет мал (см. MaxTitleAttempts), а автосжатие за длинную сессию срабатывает
-        // не раз: тратить на него чтения нельзя — транскрипт к этому моменту не подрос.
+        // Файла транскрипта на SessionStart ещё нет, и первые ходы могут пройти без имени:
+        // ни один промах не должен лишать вкладку имени, которое появится позже.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab);
+        await harness.SettleAsync();
+        for (var i = 0; i < 5; i++)
+        {
+            harness.RaiseHook(HookKind.Stop, tab);
+            await harness.SettleAsync();
+        }
+
+        harness.History.Seed(SessionId, "почини сборку");
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        Assert.Equal("почини сборку", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Имя_от_Claude_Code_важнее_первого_сообщения()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "почини сборку и добавь тесты", name: "Починка сборки");
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        Assert.Equal("Починка сборки", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Имя_сменившееся_по_ходу_сессии_доезжает()
+    {
+        // ai-title появляется в первом ходе, а /rename — в любой момент: найденное однажды имя
+        // не значит, что больше спрашивать незачем.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "почини сборку");
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+        Assert.Equal("почини сборку", harness.Sink.ShortTitles[tab]);
+
+        harness.History.Seed(SessionId, "почини сборку", name: "Починка сборки");
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+        Assert.Equal("Починка сборки", harness.Sink.ShortTitles[tab]);
+
+        harness.History.Seed(SessionId, "почини сборку", name: "мой релиз");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, prompt: "дальше");
+        await harness.SettleAsync();
+        Assert.Equal("мой релиз", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Неизменившееся_имя_вкладке_повторно_не_выставляется()
+    {
+        // Каждое выставление имени сигналит сохранение раскладки — повторять одно и то же незачем.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "почини сборку");
+
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        Assert.Equal(1, harness.Sink.ShortTitleSets);
+    }
+
+    [Fact]
+    public async Task Сжатие_контекста_транскрипт_не_читает()
+    {
+        // Автосжатие срабатывает посреди хода и имени не меняет: читать на нём незачем.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
         harness.History.Seed(SessionId, title: null);
@@ -1309,8 +1374,7 @@ public sealed class SessionStateCoordinatorTests
     public async Task Оборванный_ход_тоже_даёт_попытку_заголовка()
     {
         // Если первый же ход упал на ошибке API, Stop не придёт, и без этой попытки вкладка
-        // осталась бы с «новая сессия» до следующего хода. Лишних чтений это не даёт:
-        // бюджет общий.
+        // осталась бы с «новая сессия» до следующего хода.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
         harness.History.Seed(SessionId, title: null);
@@ -1323,29 +1387,6 @@ public sealed class SessionStateCoordinatorTests
         await harness.SettleAsync();
 
         Assert.Equal("почини сборку", harness.Sink.ShortTitles[tab]);
-    }
-
-    [Fact]
-    public async Task Исчерпанный_бюджет_у_новой_сессии_начинается_заново()
-    {
-        using var harness = new Harness();
-        var tab = await harness.StartWithTabAsync();
-        harness.History.Seed(SessionId, title: null);
-
-        for (var i = 0; i < MaxTitleAttempts + 2; i++)
-        {
-            harness.RaiseHook(HookKind.Stop, tab);
-            await harness.SettleAsync();
-        }
-
-        Assert.Equal(MaxTitleAttempts, harness.History.Requested.Count);
-
-        const string other = "99999999-8888-7777-6666-555555555555";
-        harness.History.Seed(other, "вторая сессия");
-        harness.RaiseHook(HookKind.SessionStart, tab, sessionId: other);
-        await harness.SettleAsync();
-
-        Assert.Equal("вторая сессия", harness.Sink.ShortTitles[tab]);
     }
 
     [Fact]
@@ -1371,12 +1412,13 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Одновременные_запросы_второго_чтения_не_порождают()
+    public async Task Границы_хода_во_время_чтения_дают_ровно_одно_повторное()
     {
-        // Чтение уже идёт — Stop поверх него нового прохода по файлу не ставит.
+        // Чтение уже идёт — второго одновременного прохода по файлу нет, но и Stop, пришедший
+        // посреди чтения, не теряется: после завершения транскрипт читается ещё раз.
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
-        harness.History.Seed(SessionId, "почини сборку");
+        harness.History.Seed(SessionId, title: null);
 
         var gate = new TaskCompletionSource();
         harness.History.Gates[SessionId] = gate;
@@ -1385,11 +1427,14 @@ public sealed class SessionStateCoordinatorTests
         harness.RaiseHook(HookKind.Stop, tab);
         harness.RaiseHook(HookKind.Stop, tab);
 
+        // Пока шло первое чтение, в транскрипт легло имя.
+        harness.History.Seed(SessionId, "почини сборку", name: "Починка сборки");
+        harness.History.Gates.Remove(SessionId);
         gate.SetResult();
         await harness.SettleAsync();
 
-        Assert.Single(harness.History.Requested);
-        Assert.Equal("почини сборку", harness.Sink.ShortTitles[tab]);
+        Assert.Equal(2, harness.History.Requested.Count);
+        Assert.Equal("Починка сборки", harness.Sink.ShortTitles[tab]);
     }
 
     [Fact]
@@ -1413,20 +1458,188 @@ public sealed class SessionStateCoordinatorTests
     }
 
     [Fact]
-    public async Task Готовое_имя_второй_раз_не_вычитывается()
+    public async Task Транскрипт_читается_по_пути_из_хука()
+    {
+        // После cd или перехода в worktree slug из cwd ведёт не в тот каталог, а transcript_path —
+        // в файл, который Claude Code действительно пишет.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.SeedPath(TranscriptPath, SessionId, "из worktree");
+        harness.History.Seed(SessionId, "из каталога проекта");
+
+        harness.RaiseHook(HookKind.SessionStart, tab, transcriptPath: TranscriptPath);
+        await harness.SettleAsync();
+
+        Assert.Equal((TranscriptPath, SessionId), harness.History.RequestedPaths.Single());
+        Assert.Empty(harness.History.Requested);
+        Assert.Equal("из worktree", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Негодный_путь_из_хука_откатывается_к_каталогу()
+    {
+        // Порт отвечает null и на «путь вне ~/.claude/projects», и на «файла по пути нет».
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "из каталога проекта");
+
+        harness.RaiseHook(HookKind.Stop, tab, workingDirectory: HookPath, transcriptPath: @"C:\elsewhere\x.jsonl");
+        await harness.SettleAsync();
+
+        Assert.Single(harness.History.RequestedPaths);
+        Assert.Equal((HookPath, SessionId), harness.History.Requested.Single());
+        Assert.Equal("из каталога проекта", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Путь_из_прошлого_хука_помнится()
     {
         using var harness = new Harness();
         var tab = await harness.StartWithTabAsync();
-        harness.History.Seed(SessionId, "почини сборку");
+        harness.History.SeedPath(TranscriptPath, SessionId, "из worktree");
+
+        harness.RaiseHook(HookKind.SessionStart, tab, transcriptPath: TranscriptPath);
+        await harness.SettleAsync();
+        harness.RaiseHook(HookKind.Stop, tab, transcriptPath: null);
+        await harness.SettleAsync();
+
+        Assert.Equal(2, harness.History.RequestedPaths.Count);
+        Assert.All(harness.History.RequestedPaths, request => Assert.Equal(TranscriptPath, request.Path));
+    }
+
+    [Fact]
+    public async Task Clear_снимает_имя_прежней_сессии()
+    {
+        // /clear: SessionEnd прежней сессии, затем SessionStart(clear) с новым session_id.
+        // Раньше SessionEnd забывал сессию, и сверять новую было не с чем — имя оставалось.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+        harness.History.Seed(SessionId, "первая сессия");
+
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "startup");
+        await harness.SettleAsync();
+        Assert.Equal("первая сессия", harness.Sink.ShortTitles[tab]);
+
+        harness.RaiseHook(HookKind.SessionEnd, tab);
+        harness.RaiseHook(HookKind.SessionStart, tab, sessionId: OtherSession, source: "clear");
+        await harness.SettleAsync();
+
+        Assert.Equal([tab], harness.Sink.ResetTitles);
+        Assert.Empty(harness.Sink.ShortTitles);
+    }
+
+    [Fact]
+    public async Task Clear_снимает_имя_даже_без_известной_сессии()
+    {
+        // Приёмник мог подняться уже после старта прежней сессии — /clear всё равно новый разговор.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab, sessionId: OtherSession, source: "clear");
+        await harness.SettleAsync();
+
+        Assert.Equal([tab], harness.Sink.ResetTitles);
+    }
+
+    [Fact]
+    public async Task После_SessionEnd_транскрипт_не_читается()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
 
         harness.RaiseHook(HookKind.SessionStart, tab);
         await harness.SettleAsync();
-
-        harness.RaiseHook(HookKind.Stop, tab);
+        harness.RaiseHook(HookKind.SessionEnd, tab);
         harness.RaiseHook(HookKind.Stop, tab);
         await harness.SettleAsync();
 
         Assert.Single(harness.History.Requested);
+    }
+
+    [Fact]
+    public async Task Промпт_сразу_называет_новую_сессию()
+    {
+        // Без этого вкладка весь первый ход висела бы с «новая сессия»: имя и сообщение
+        // ложатся в транскрипт по ходу хода, а читается он на его конце.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "startup");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, prompt: "почини сборку\nи добавь тесты");
+
+        Assert.Equal("почини сборку и добавь тесты", harness.Sink.ShortTitles[tab]);
+        await harness.SettleAsync();
+
+        // Имя от Claude Code появилось к концу хода — оно и остаётся.
+        harness.History.Seed(SessionId, "почини сборку и добавь тесты", name: "Починка сборки");
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+
+        Assert.Equal("Починка сборки", harness.Sink.ShortTitles[tab]);
+    }
+
+    [Fact]
+    public async Task Промпт_после_clear_тоже_называет_сессию()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "clear");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, prompt: "новая задача");
+
+        Assert.Equal("новая задача", harness.Sink.ShortTitles[tab]);
+        await harness.SettleAsync();
+    }
+
+    [Theory]
+    [InlineData("resume")]
+    [InlineData(null)]
+    public async Task Промпт_не_переименовывает_поднятую_сессию(string? source)
+    {
+        // У сессии, поднятой через --resume, имя уже есть — в транскрипте и в раскладке.
+        // Неизвестный source — тем более не повод.
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab, source: source);
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, prompt: "продолжай");
+        await harness.SettleAsync();
+
+        Assert.Empty(harness.Sink.ShortTitles);
+    }
+
+    [Theory]
+    [InlineData("/model opus")]
+    [InlineData("  /clear")]
+    [InlineData("!git status")]
+    [InlineData("   ")]
+    public async Task Команда_вместо_промпта_имени_не_даёт(string prompt)
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "startup");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, prompt: prompt);
+        await harness.SettleAsync();
+
+        Assert.Empty(harness.Sink.ShortTitles);
+    }
+
+    [Fact]
+    public async Task Только_первый_промпт_называет_сессию()
+    {
+        using var harness = new Harness();
+        var tab = await harness.StartWithTabAsync();
+
+        harness.RaiseHook(HookKind.SessionStart, tab, source: "startup");
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, prompt: "первая задача");
+        await harness.SettleAsync();
+        harness.RaiseHook(HookKind.Stop, tab);
+        await harness.SettleAsync();
+        harness.RaiseHook(HookKind.UserPromptSubmit, tab, prompt: "вторая задача");
+        await harness.SettleAsync();
+
+        Assert.Equal("первая задача", harness.Sink.ShortTitles[tab]);
     }
 
     [Fact]
@@ -1694,9 +1907,12 @@ public sealed class SessionStateCoordinatorTests
             string? workingDirectory = ProjectPath,
             string? source = null,
             string? agentId = null,
-            IReadOnlyList<BackgroundTask>? backgroundTasks = null)
+            IReadOnlyList<BackgroundTask>? backgroundTasks = null,
+            string? transcriptPath = null,
+            string? prompt = null)
         {
-            Hooks.Raise(kind, Workspace.TokenFor(tab), sessionId, workingDirectory, source, agentId, backgroundTasks);
+            Hooks.Raise(
+                kind, Workspace.TokenFor(tab), sessionId, workingDirectory, source, agentId, backgroundTasks, transcriptPath, prompt);
             Pump();
         }
 
@@ -1717,9 +1933,14 @@ public sealed class SessionStateCoordinatorTests
         {
             // Пока очередь не прокручена, чтение могло и не начаться: его ставит ApplyHook,
             // а он сам приходит через диспетчер.
+            // Повторное чтение ставится уже из обработки результата первого — ждём, пока новых
+            // не останется.
             Pump();
-            await Coordinator.PendingTitleWork;
-            Pump();
+            while (!Coordinator.PendingTitleWork.IsCompleted)
+            {
+                await Coordinator.PendingTitleWork;
+                Pump();
+            }
         }
 
         public void Dispose() => Coordinator.Dispose();

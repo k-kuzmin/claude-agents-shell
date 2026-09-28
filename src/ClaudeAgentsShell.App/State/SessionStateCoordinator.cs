@@ -23,31 +23,11 @@ namespace ClaudeAgentsShell.App.State;
 /// </remarks>
 public sealed class SessionStateCoordinator : IDisposable
 {
-    /// <summary>
-    /// Сколько раз за сессию читается транскрипт в поисках короткого имени, считая попытку
-    /// по <c>SessionStart</c>. Исчерпан бюджет — вкладка до конца сессии остаётся
-    /// с «новая сессия».
-    /// </summary>
-    /// <remarks>
-    /// Верхняя граница нужна потому, что повтор висит на <c>Stop</c>, то есть на каждом ответе
-    /// агента, а транскрипт растёт весь сеанс.
-    /// <para>
-    /// Бюджет содержательных попыток на единицу меньше номинала: попытка по <c>SessionStart</c>
-    /// у свежей сессии почти всегда пустая — сообщения пользователя в транскрипте ещё нет.
-    /// На <c>UserPromptSubmit</c> чтение сознательно не ставится: промпт в этот момент ещё
-    /// не дописан в файл, а попытка списалась бы из того же бюджета.
-    /// </para>
-    /// <para>
-    /// Значение выбрано по замеру M5-0 на 785 транскриптах: строка с заголовком оказывалась
-    /// позже первого ответа ассистента (то есть позже первого <c>Stop</c>, когда заголовка
-    /// ещё нет) в 81 случае до правки разбора слэш-команд и в 2 после неё — 0,25 %.
-    /// Остаточная причина промаха уже не в содержании строки, а в том, что транскрипт может
-    /// быть ещё не сброшен на диск, и от неё спасает именно повтор. Поэтому трёх хватает:
-    /// одна пустая по <c>SessionStart</c> и две содержательные по концам ходов.
-    /// Двух не хватило бы — содержательная осталась бы одна, без повтора.
-    /// </para>
-    /// </remarks>
-    private const int MaxTitleAttempts = 3;
+    /// <summary>Значение <c>source</c> у <c>SessionStart</c> новой сессии, начатой с нуля.</summary>
+    private const string StartupSource = "startup";
+
+    /// <summary>Значение <c>source</c> у <c>SessionStart</c> после <c>/clear</c>: сессия тоже новая.</summary>
+    private const string ClearSource = "clear";
 
     private readonly IHookListener _hooks;
     private readonly ITerminalWorkspace _workspace;
@@ -55,8 +35,8 @@ public sealed class SessionStateCoordinator : IDisposable
     private readonly IUiDispatcher _dispatcher;
 
     /// <summary>
-    /// Чем читать транскрипт вкладки и нужен ли ей ещё заголовок. Трогается только из потока
-    /// интерфейса, поэтому обычный словарь без блокировок.
+    /// Сессия вкладки и где лежит её транскрипт — см. <see cref="SessionProbe"/>. Трогается только
+    /// из потока интерфейса, поэтому обычный словарь без блокировок.
     /// </summary>
     private readonly Dictionary<TerminalId, SessionProbe> _sessions = [];
 
@@ -269,27 +249,57 @@ public sealed class SessionStateCoordinator : IDisposable
             sink.SetState(terminalId, state);
         }
 
+        // Хуки сабагента к имени сессии отношения не имеют.
+        if (hookEvent.AgentId is not null)
+        {
+            return;
+        }
+
         switch (hookEvent.Kind)
         {
             case HookKind.SessionStart when HookSourceRules.StartsNewTurn(hookEvent.Source):
-                // Сжатие контекста бюджет заголовка не тратит: транскрипт той же сессии.
-                RequestTitle(sink, terminalId, hookEvent);
+                // Сжатие контекста имени не меняет: транскрипт той же сессии, ход продолжается.
+                if (Track(sink, terminalId, hookEvent) is { } started)
+                {
+                    started.Ended = false;
+                    RequestTitle(sink, terminalId, started);
+                }
+
+                break;
+
+            case HookKind.UserPromptSubmit:
+                if (Track(sink, terminalId, hookEvent) is { } prompted)
+                {
+                    TitleFromPrompt(sink, terminalId, prompted, hookEvent.Prompt);
+
+                    // Промпт в транскрипт ещё не лёг, но /rename между ходами — уже да.
+                    RequestTitle(sink, terminalId, prompted);
+                }
+
                 break;
 
             case HookKind.Stop:
             case HookKind.StopFailure:
-                // Ещё одна попытка достать заголовок. Конец хода — единственный момент, когда
-                // транскрипт заведомо подрос, поэтому повтор привязан к нему. Оборванный ход
-                // считается наравне: промпт пользователя в файл уже лёг, а ждать Stop, которого
-                // не будет, значило бы оставить вкладке «новая сессия» до следующего хода.
-                // Лишних чтений это не даёт — бюджет общий (см. MaxTitleAttempts). Это событие,
-                // а не таймер: периодического опроса здесь нет и быть не может (запрет раздела 7
-                // CLAUDE.md).
-                RequestTitle(sink, terminalId, hookEvent);
+                // Конец хода — момент, когда транскрипт заведомо подрос: имя от Claude Code
+                // (ai-title) появляется по ходу первого хода, а /rename — в любой момент. Оборванный
+                // ход считается наравне: промпт в файл уже лёг. Это событие, а не таймер:
+                // периодического опроса здесь нет и быть не может (запрет раздела 7 CLAUDE.md).
+                if (Track(sink, terminalId, hookEvent) is { } ended)
+                {
+                    RequestTitle(sink, terminalId, ended);
+                }
+
                 break;
 
             case HookKind.SessionEnd:
-                _sessions.Remove(terminalId);
+                // Запись не удаляется: следующий SessionStart (после /clear — с новым session_id)
+                // сверяется с ней, чтобы снять имя закончившейся сессии.
+                if (_sessions.TryGetValue(terminalId, out var probe)
+                    && (hookEvent.SessionId is null || hookEvent.SessionId == probe.SessionId))
+                {
+                    probe.Ended = true;
+                }
+
                 break;
 
             default:
@@ -305,35 +315,37 @@ public sealed class SessionStateCoordinator : IDisposable
     /// <remarks>
     /// Короткое имя принадлежит сессии, а не вкладке (раздел 6.3 ТЗ), поэтому имя закончившейся
     /// сессии висеть на экране не должно. Но сброс обязан быть условным: <c>SessionStart</c>
-    /// приходит и на <c>--resume</c>, и на <c>/clear</c>, и на сжатие контекста, а при
-    /// неизменившемся <c>session_id</c> заголовок мигал бы «новая сессия» и обратно на каждом
-    /// сжатии. Сигнал смены — только непустой и отличающийся идентификатор сессии: пустой
-    /// означает «неизвестно», а по незнанию имя не трогаем.
+    /// приходит и на <c>--resume</c>, и на сжатие контекста, а при неизменившемся
+    /// <c>session_id</c> заголовок мигал бы «новая сессия» и обратно на каждом сжатии. Сигнал
+    /// смены — непустой и отличающийся идентификатор сессии: пустой означает «неизвестно»,
+    /// а по незнанию имя не трогаем. Второй сигнал — <c>source: clear</c>: <c>/clear</c> всегда
+    /// начинает новый разговор, даже если прежняя сессия вкладке не была известна.
     /// </remarks>
     private void ResetTitleIfSessionChanged(ITabStateSink sink, TerminalId terminalId, HookEvent hookEvent)
     {
-        if (!_sessions.TryGetValue(terminalId, out var probe))
-        {
-            // О прежней сессии вкладки ничего не известно — сбрасывать нечего.
-            return;
-        }
+        _sessions.TryGetValue(terminalId, out var probe);
+        var cleared = string.Equals(hookEvent.Source, ClearSource, StringComparison.Ordinal);
+        var changed = probe is not null
+                      && !string.IsNullOrWhiteSpace(hookEvent.SessionId)
+                      && hookEvent.SessionId != probe.SessionId;
 
-        if (string.IsNullOrWhiteSpace(hookEvent.SessionId) || hookEvent.SessionId == probe.SessionId)
+        if (!changed && !(cleared && probe?.SessionId != hookEvent.SessionId))
         {
             return;
         }
 
         // Прежняя запись снимается вместе с именем: заголовок новой сессии ищется заново,
-        // а опоздавшее чтение прежней его уже не перебьёт — LoadTitleAsync сверяет session_id.
+        // а опоздавшее чтение прежней его уже не перебьёт — PostLookupResult сверяет запись.
         _sessions.Remove(terminalId);
         sink.ResetShortTitle(terminalId);
     }
 
     /// <summary>
-    /// Ставит чтение транскрипта ради короткого имени вкладки (раздел 6.3 ТЗ), если оно ещё нужно.
+    /// Находит или заводит запись о сессии вкладки и дополняет её тем, что принёс хук.
     /// Выполняется в потоке интерфейса: <see cref="ITabStateSink.TryGetWorkingDirectory" /> — его член.
     /// </summary>
-    private void RequestTitle(ITabStateSink sink, TerminalId terminalId, HookEvent hookEvent)
+    /// <returns><c>null</c> — транскрипт искать не по чему: нет ни session_id, ни каталога.</returns>
+    private SessionProbe? Track(ITabStateSink sink, TerminalId terminalId, HookEvent hookEvent)
     {
         _sessions.TryGetValue(terminalId, out var probe);
 
@@ -342,22 +354,13 @@ public sealed class SessionStateCoordinator : IDisposable
         if (sessionId is null)
         {
             // Без session_id транскрипт не найти. Заголовок остаётся «новая сессия».
-            return;
+            return null;
         }
 
-        // Стадия поиска относится к конкретной сессии, поэтому сверяется вместе с ней. Иначе
-        // вкладка, у которой SessionStart потерялся или пришёл без session_id, так и осталась бы
-        // с Resolved от закончившейся сессии — и чтение для новой не поставилось бы вовсе.
         var sameSession = probe is not null && probe.SessionId == sessionId;
-        if (sameSession && probe!.Lookup is not TitleLookup.Pending)
-        {
-            // Имя уже есть, попытки исчерпаны или чтение идёт прямо сейчас. Без этой проверки
-            // каждый Stop запускал бы новый проход по растущему файлу, и проходы накладывались бы.
-            return;
-        }
 
         // Каталог: сначала cwd из хука, потом запомненный, потом каталог самой вкладки.
-        var workingDirectory = FirstFilled(hookEvent.WorkingDirectory, probe?.WorkingDirectory);
+        var workingDirectory = FirstFilled(hookEvent.WorkingDirectory, sameSession ? probe!.WorkingDirectory : null);
         if (workingDirectory is null
             && sink.TryGetWorkingDirectory(terminalId, out var tabDirectory)
             && !string.IsNullOrWhiteSpace(tabDirectory))
@@ -368,24 +371,97 @@ public sealed class SessionStateCoordinator : IDisposable
         if (workingDirectory is null)
         {
             // Вкладки уже нет — событие опоздало.
+            return null;
+        }
+
+        if (!sameSession)
+        {
+            // Новая сессия во вкладке. Промпт даёт ей имя, только если она начата с нуля: у
+            // поднятой через --resume имя уже есть — в транскрипте и в сохранённой раскладке.
+            var fresh = hookEvent.Kind == HookKind.SessionStart
+                        && (string.Equals(hookEvent.Source, StartupSource, StringComparison.Ordinal)
+                            || string.Equals(hookEvent.Source, ClearSource, StringComparison.Ordinal));
+            probe = new SessionProbe(sessionId, fresh);
+            _sessions[terminalId] = probe;
+        }
+
+        probe!.WorkingDirectory = workingDirectory;
+        if (!string.IsNullOrWhiteSpace(hookEvent.TranscriptPath))
+        {
+            probe.TranscriptPath = hookEvent.TranscriptPath;
+        }
+
+        return probe;
+    }
+
+    /// <summary>
+    /// Называет новую сессию по первому промпту сразу, не дожидаясь, пока имя появится
+    /// в транскрипте. Выполняется в потоке интерфейса.
+    /// </summary>
+    /// <remarks>
+    /// Без этого вкладка весь первый ход висела бы с «новая сессия»: имя от Claude Code
+    /// (<c>ai-title</c>) и само сообщение ложатся в файл по ходу хода, а читается он на его
+    /// конце. Имя из промпта — то же, что дал бы транскрипт без <c>ai-title</c>, и будет
+    /// заменено им, как только оно появится.
+    /// </remarks>
+    private static void TitleFromPrompt(ITabStateSink sink, TerminalId terminalId, SessionProbe probe, string? prompt)
+    {
+        if (!probe.Fresh || probe.Title is not null || probe.Ended)
+        {
             return;
         }
 
-        // Счётчик попыток принадлежит сессии: у новой он начинается заново.
-        var attempts = sameSession ? probe!.Attempts : 0;
-        _sessions[terminalId] = new SessionProbe(sessionId, workingDirectory, TitleLookup.InFlight, attempts);
+        if (SessionShortTitle.FromPrompt(prompt) is { } title)
+        {
+            probe.Title = title;
+            sink.SetShortTitle(terminalId, title);
+        }
+    }
 
-        var load = LoadTitleAsync(sink, terminalId, sessionId, workingDirectory);
+    /// <summary>
+    /// Ставит чтение транскрипта ради имени вкладки (раздел 6.3 ТЗ). Выполняется в потоке интерфейса.
+    /// </summary>
+    /// <remarks>
+    /// Бюджета попыток нет: имя сессии меняется всю её жизнь, а чтение дешёвое и ограниченное —
+    /// неизменившийся файл отдаётся из кэша порта, дописанный стоит просмотра дописанного.
+    /// Вызывается только на границах хода, то есть не чаще пары раз за ход. Промах (файла ещё
+    /// нет) ничего не тратит: следующая граница хода просто спросит снова.
+    /// <para>
+    /// Одновременно идёт не больше одного чтения на вкладку. Запрос во время чтения не
+    /// теряется: оно помечается как устаревшее и после завершения повторяется один раз —
+    /// иначе <c>Stop</c>, пришедший, пока читался транскрипт по <c>UserPromptSubmit</c>,
+    /// остался бы без чтения, и имя первого хода доехало бы только ходом позже.
+    /// </para>
+    /// </remarks>
+    private void RequestTitle(ITabStateSink sink, TerminalId terminalId, SessionProbe probe)
+    {
+        if (probe.Ended)
+        {
+            return;
+        }
+
+        if (probe.InFlight)
+        {
+            probe.Rerun = true;
+            return;
+        }
+
+        probe.InFlight = true;
+        probe.Rerun = false;
+
+        var load = LoadTitleAsync(sink, terminalId, probe, probe.SessionId, probe.TranscriptPath, probe.WorkingDirectory!);
         PendingTitleWork = PendingTitleWork.IsCompleted ? load : Task.WhenAll(PendingTitleWork, load);
     }
 
     /// <summary>
-    /// Читает транскрипт и, если из первого сообщения вышло короткое имя, отдаёт его вкладке.
+    /// Читает транскрипт и отдаёт вкладке имя сессии: данное Claude Code, иначе первое сообщение.
     /// </summary>
     /// <param name="sink">Полоса вкладок на момент запроса.</param>
     /// <param name="terminalId">Вкладка, которой нужен заголовок.</param>
+    /// <param name="probe">Запись, для которой поставлено чтение.</param>
     /// <param name="sessionId">Сессия, чей транскрипт читается.</param>
-    /// <param name="workingDirectory">Каталог, в котором лежит транскрипт.</param>
+    /// <param name="transcriptPath">Путь из <c>transcript_path</c>; <c>null</c> — не приходил.</param>
+    /// <param name="workingDirectory">Каталог, по которому транскрипт ищется, если путь не годится.</param>
     /// <remarks>
     /// Метод не бросает: заголовок вкладки — не повод ронять приложение, а формат <c>.jsonl</c>
     /// считается нестабильным (раздел 7 CLAUDE.md).
@@ -393,14 +469,16 @@ public sealed class SessionStateCoordinator : IDisposable
     private async Task LoadTitleAsync(
         ITabStateSink sink,
         TerminalId terminalId,
+        SessionProbe probe,
         string sessionId,
+        string? transcriptPath,
         string workingDirectory)
     {
         // Уступаем поток интерфейса прежде, чем трогать порт: заголовок не стоит ни кадра
         // вывода терминала.
         await Task.Yield();
 
-        SessionSummary? summary;
+        string? title;
         try
         {
             // Task.Run, а не голый await: до первого настоящего await порт успевает сделать
@@ -409,25 +487,31 @@ public sealed class SessionStateCoordinator : IDisposable
             // и держать их в потоке интерфейса нельзя — хуки идут с приоритетом Normal, то есть
             // впереди очереди кадров вывода терминала. Одного Task.Yield тут мало: при
             // установленном SynchronizationContext он возвращает продолжение в тот же поток.
-            summary = await Task.Run(
-                () => _history.ReadOneAsync(workingDirectory, sessionId, _lifetimeToken),
+            var summary = await Task.Run(
+                async () =>
+                {
+                    // Путь из хука точнее: после cd или перехода в worktree каталог, собранный
+                    // из cwd, уже не тот. Не годится или файла по нему нет — прежний путь через slug.
+                    var byPath = transcriptPath is null
+                        ? null
+                        : await _history.ReadTranscriptAsync(transcriptPath, sessionId, _lifetimeToken).ConfigureAwait(false);
+                    return byPath ?? await _history.ReadOneAsync(workingDirectory, sessionId, _lifetimeToken).ConfigureAwait(false);
+                },
                 _lifetimeToken).ConfigureAwait(false);
+            title = SessionShortTitle.Shorten(summary?.DisplayTitle);
         }
         catch (Exception)
         {
             // Окно закрылось посреди чтения, файл исчез, разбор сорвался — заголовок просто
-            // не обновится, и это не ошибка. Вкладка остаётся открытой для следующей попытки.
-            PostLookupResult(sink, terminalId, sessionId, shortTitle: null);
-            return;
+            // не обновится, и это не ошибка. Следующая граница хода спросит снова.
+            title = null;
         }
 
-        PostLookupResult(sink, terminalId, sessionId, SessionShortTitle.Shorten(summary?.Title));
+        PostLookupResult(sink, terminalId, probe, title);
     }
 
-    /// <summary>
-    /// Возвращает исход поиска заголовка в поток интерфейса и решает, будет ли ещё попытка.
-    /// </summary>
-    private void PostLookupResult(ITabStateSink sink, TerminalId terminalId, string sessionId, string? shortTitle)
+    /// <summary>Возвращает исход чтения в поток интерфейса.</summary>
+    private void PostLookupResult(ITabStateSink sink, TerminalId terminalId, SessionProbe probe, string? title)
     {
         _dispatcher.Post(() =>
         {
@@ -437,29 +521,23 @@ public sealed class SessionStateCoordinator : IDisposable
             }
 
             // Пока читали, вкладка могла начать другую сессию — тогда результат уже чужой.
-            if (!_sessions.TryGetValue(terminalId, out var probe) || probe.SessionId != sessionId)
+            if (!_sessions.TryGetValue(terminalId, out var current) || !ReferenceEquals(current, probe))
             {
                 return;
             }
 
-            var attempts = probe.Attempts + 1;
+            probe.InFlight = false;
 
-            // Отсутствие заголовка не доказывает, что его не будет: транскрипт мог быть ещё
-            // не сброшен на диск к моменту чтения. Слэш-команда первым ходом заголовку больше
-            // не мешает — разбор достаёт содержимое <command-name> вместе с <command-args>,
-            // когда строку написал человек. Поэтому попытки не обрываются на первом пустом
-            // ответе, а просто считаются: бюджет исчерпан — перестаём спрашивать.
-            var lookup = shortTitle is not null
-                ? TitleLookup.Resolved
-                : attempts >= MaxTitleAttempts
-                    ? TitleLookup.Unavailable
-                    : TitleLookup.Pending;
-
-            _sessions[terminalId] = probe with { Lookup = lookup, Attempts = attempts };
-
-            if (shortTitle is not null)
+            // Пустой ответ имя не трогает: файла могло ещё не быть, а имя из промпта уже стоит.
+            if (title is not null && title != probe.Title)
             {
-                sink.SetShortTitle(terminalId, shortTitle);
+                probe.Title = title;
+                sink.SetShortTitle(terminalId, title);
+            }
+
+            if (probe.Rerun)
+            {
+                RequestTitle(sink, terminalId, probe);
             }
         });
     }
@@ -475,39 +553,41 @@ public sealed class SessionStateCoordinator : IDisposable
         return string.IsNullOrWhiteSpace(fallback) ? null : fallback;
     }
 
-    /// <summary>Чем читать транскрипт вкладки и нужен ли ей ещё заголовок.</summary>
+    /// <summary>Сессия вкладки: где лежит её транскрипт и что уже показано.</summary>
     /// <remarks>
-    /// Запись живёт от <c>SessionStart</c> до <c>SessionEnd</c>. Вкладка, закрытая пользователем
-    /// без <c>SessionEnd</c>, оставляет запись до выхода из приложения: это несколько десятков байт
+    /// Запись живёт от первого хука сессии до смены сессии во вкладке или смерти процесса;
+    /// <c>SessionEnd</c> её не удаляет, а помечает (<see cref="Ended"/>) — иначе
+    /// <c>SessionStart</c> после <c>/clear</c> не с чем было бы сверить. Вкладка, закрытая
+    /// пользователем, оставляет запись до выхода из приложения: это несколько десятков байт
     /// на вкладку за сеанс, и ради них не стоит заводить ещё одну подписку на жизненный цикл вкладок.
+    /// Трогается только из потока интерфейса.
     /// </remarks>
-    /// <param name="SessionId">Идентификатор сессии Claude Code из хука.</param>
-    /// <param name="WorkingDirectory">Каталог, в котором искать транскрипт.</param>
-    /// <param name="Lookup">На какой стадии поиск короткого имени.</param>
-    /// <param name="Attempts">Сколько чтений транскрипта этой сессии уже завершилось.</param>
-    private sealed record SessionProbe(
-        string SessionId,
-        string WorkingDirectory,
-        TitleLookup Lookup,
-        int Attempts);
-
-    /// <summary>Стадия поиска короткого имени сессии.</summary>
-    /// <remarks>
-    /// Новое чтение ставится только из <see cref="Pending"/>. Так транскрипт читается не чаще
-    /// <see cref="MaxTitleAttempts"/> раз за сессию, а не на каждый ответ агента.
-    /// </remarks>
-    private enum TitleLookup
+    private sealed class SessionProbe(string sessionId, bool fresh)
     {
-        /// <summary>Заголовка нет, но попытка ещё осмысленна.</summary>
-        Pending = 0,
+        /// <summary>Идентификатор сессии Claude Code из хука.</summary>
+        public string SessionId { get; } = sessionId;
+
+        /// <summary>
+        /// Сессия начата с нуля (<c>startup</c>, <c>clear</c>): первый промпт может сразу дать ей имя.
+        /// </summary>
+        public bool Fresh { get; } = fresh;
+
+        /// <summary>Каталог, по которому искать транскрипт, если путь из хука не годится.</summary>
+        public string? WorkingDirectory { get; set; }
+
+        /// <summary>Последний <c>transcript_path</c> из хуков сессии.</summary>
+        public string? TranscriptPath { get; set; }
+
+        /// <summary>Последнее имя, выставленное вкладке этой сессией.</summary>
+        public string? Title { get; set; }
+
+        /// <summary>Пришёл <c>SessionEnd</c>: транскрипт больше не читается.</summary>
+        public bool Ended { get; set; }
 
         /// <summary>Транскрипт читается прямо сейчас — второе чтение не ставим.</summary>
-        InFlight = 1,
+        public bool InFlight { get; set; }
 
-        /// <summary>Короткое имя выставлено.</summary>
-        Resolved = 2,
-
-        /// <summary>Бюджет попыток исчерпан — больше не ищем.</summary>
-        Unavailable = 3,
+        /// <summary>Во время чтения пришла ещё одна граница хода — прочитать ещё раз после.</summary>
+        public bool Rerun { get; set; }
     }
 }
