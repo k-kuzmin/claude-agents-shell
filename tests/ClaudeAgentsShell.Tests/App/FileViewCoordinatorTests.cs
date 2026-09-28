@@ -3,7 +3,6 @@ using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.App.ViewModels;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
-using ClaudeAgentsShell.Sessions.Git;
 using Xunit;
 
 namespace ClaudeAgentsShell.Tests.App;
@@ -199,10 +198,11 @@ public sealed class FileViewCoordinatorTests
     }
 
     [Fact]
-    public async Task Предел_одного_файла_в_итоге_берётся_из_настроек()
+    public async Task Предел_одного_файла_в_итоге_берётся_у_читателя()
     {
-        await using var harness = new Harness(options: new GitDiffOptions { FileOutputCeilingBytes = 1536 * 1024 });
+        await using var harness = new Harness();
         harness.AddTab("t1", active: true);
+        harness.Reader.MaxFileBytes = 1536 * 1024;
         harness.Reader.Read = (item, _) => Task.FromResult(item.Path == "big.log"
             ? FakeWorkspaceFileReader.Problem(item, ViewedFileProblem.TooLarge)
             : FakeWorkspaceFileReader.Text(item, "text"));
@@ -900,11 +900,11 @@ public sealed class FileViewCoordinatorTests
     {
         private bool _disposed;
 
-        public Harness(bool start = true, IUiDispatcher? dispatcher = null, GitDiffOptions? options = null)
+        public Harness(bool start = true, IUiDispatcher? dispatcher = null)
         {
             dispatcher ??= new InlineUiDispatcher();
             Diff = new DiffCoordinator(Git, DiffView, dispatcher);
-            Files = new FileViewCoordinator(Reader, FileView, DiffView, Diff, dispatcher, options ?? new GitDiffOptions());
+            Files = new FileViewCoordinator(Reader, FileView, DiffView, Diff, dispatcher);
             if (start)
             {
                 Diff.Start(Tabs);

@@ -4,7 +4,6 @@ using System.Text;
 using ClaudeAgentsShell.App.Services;
 using ClaudeAgentsShell.Application.Ports;
 using ClaudeAgentsShell.Domain;
-using ClaudeAgentsShell.Sessions.Git;
 
 namespace ClaudeAgentsShell.App.Diff;
 
@@ -46,9 +45,6 @@ public sealed class FileViewCoordinator : IShowFileHandler, IAsyncDisposable
     private readonly IDiffPanelHost _host;
     private readonly IUiDispatcher _dispatcher;
 
-    /// <summary>Предел одного файла — тот же, по которому читатель помечает его слишком большим.</summary>
-    private readonly int _fileCeilingBytes;
-
     private readonly object _gate = new();
     private readonly Dictionary<TerminalId, FileViewShow> _shows = [];
     private readonly HashSet<Task> _running = [];
@@ -62,28 +58,24 @@ public sealed class FileViewCoordinator : IShowFileHandler, IAsyncDisposable
     /// <param name="panel">Та же панель: нужно только её закрытие пользователем, общее для обоих режимов.</param>
     /// <param name="host">Хозяин панели — координатор diff.</param>
     /// <param name="dispatcher">Поток интерфейса: вызов <c>show_file</c> приходит из пула <c>HttpListener</c>.</param>
-    /// <param name="options">Пороги чтения: предел одного файла для итога агенту.</param>
     public FileViewCoordinator(
         IWorkspaceFileReader reader,
         IFileView view,
         IDiffView panel,
         IDiffPanelHost host,
-        IUiDispatcher dispatcher,
-        GitDiffOptions options)
+        IUiDispatcher dispatcher)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(view);
         ArgumentNullException.ThrowIfNull(panel);
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(dispatcher);
-        ArgumentNullException.ThrowIfNull(options);
 
         _reader = reader;
         _view = view;
         _panel = panel;
         _host = host;
         _dispatcher = dispatcher;
-        _fileCeilingBytes = options.FileOutputCeilingBytes;
     }
 
     /// <summary>
@@ -474,7 +466,7 @@ public sealed class FileViewCoordinator : IShowFileHandler, IAsyncDisposable
     {
         ViewedFileProblem.TooLarge when file.OverTotal =>
             string.Create(CultureInfo.InvariantCulture, $"over the {MaxTotalChars / (1024 * 1024)} MB total for one call, show it separately"),
-        ViewedFileProblem.TooLarge => "larger than the " + FormatMegabytes(_fileCeilingBytes) + " limit",
+        ViewedFileProblem.TooLarge => "larger than the " + FormatMegabytes(_reader.MaxFileBytes) + " limit",
         ViewedFileProblem.NotFound => "not found or is a directory",
         ViewedFileProblem.OutsideRoot => "outside the workspace root",
         ViewedFileProblem.Binary => "binary file",
