@@ -123,18 +123,27 @@ public sealed partial class BridgeMessageWriter
         AppendString(head, file.Path);
         head.Append(",\"ctx\":\"").Append(file.Context == DiffContext.FullFile ? "full" : "hunks");
         head.Append("\",\"part\":");
-        string prefix = head.ToString();
 
-        string truncated = file.Truncated ? "true" : "false";
-        string text = file.Text;
+        string extra = file.Truncated ? TruncatedField + "true" : TruncatedField + "false";
+        return TextParts(head.ToString(), extra, file.Text);
+    }
+
+    /// <summary>
+    /// Нарезка текста на сообщения вида
+    /// <c>{prefix}{номер},"last":…{extra},"text":"…"}</c> не длиннее <see cref="MaxDiffMessageLength"/>.
+    /// Общая для <c>diff.file</c> и <c>file.content</c>; <paramref name="prefix"/> кончается на
+    /// <c>"part":</c>, <paramref name="extra"/> — поля между <c>last</c> и <c>text</c> (или пусто).
+    /// </summary>
+    private static IEnumerable<string> TextParts(string prefix, string extra, string text)
+    {
         int remaining = EscapedLength(text, 0, text.Length);
         int position = 0;
 
         for (int part = 0; ; part++)
         {
             string number = part.ToString(CultureInfo.InvariantCulture);
-            int overhead = prefix.Length + number.Length + LastField.Length + TruncatedField.Length
-                + truncated.Length + TextField.Length + 2; // "}
+            int overhead = prefix.Length + number.Length + LastField.Length + extra.Length
+                + TextField.Length + 2; // "}
 
             bool last = overhead + 4 + remaining <= MaxDiffMessageLength; // true
             int end = last ? text.Length : SliceEnd(text, position, MaxDiffMessageLength - overhead - 5); // false
@@ -143,7 +152,7 @@ public sealed partial class BridgeMessageWriter
             var builder = new StringBuilder(overhead + 5 + escaped);
             builder.Append(prefix).Append(number)
                 .Append(LastField).Append(last ? "true" : "false")
-                .Append(TruncatedField).Append(truncated)
+                .Append(extra)
                 .Append(TextField);
             AppendEscaped(builder, text, position, end);
             builder.Append("\"}");

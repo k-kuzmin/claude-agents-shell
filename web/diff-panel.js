@@ -1,14 +1,29 @@
 // Панель diff поверх области терминала (issue #5). Своя на каждую вкладку, в том же WebView2.
 // Протокол — раздел M7 docs/PROGRESS.md:
 //   из C#:  diff.pending | diff.index | diff.file | diff.error | diff.stale
-//   в C#:   diff.refresh | diff.file.request | diff.closed
+//           file.show | file.content — режим «файл» той же панели (M8, show_file)
+//   в C#:   diff.refresh | diff.file.request | diff.closed (закрытие — общее для обоих режимов)
 //
 // Разбор, фильтры и бюджет — в diff-model.js (чистый модуль с node-тестом), здесь только DOM.
+// Подсветка синтаксиса — highlighter.js (поток highlight-worker.js); без него текст простой.
 // Всё, что приходит из C# (пути, note, содержимое), попадает в DOM только через textContent.
 (function (root) {
   'use strict';
 
   var M = root.DiffModel;
+
+  // Подсветка синтаксиса — необязательна: без highlighter.js панель рисует простой текст.
+  var HL = root.Highlighter || null;
+  var HM = root.HighlightModel || null;
+  var DIFF_KINDS = { context: M.ROW_CONTEXT, add: M.ROW_ADD, del: M.ROW_DEL, hunk: M.ROW_HUNK };
+
+  // Строк над фокусом при прокрутке к нему в режиме «файл».
+  var FOCUS_CONTEXT = 3;
+
+  var PROBLEM_BADGE = {
+    notFound: 'Не найден', outsideRoot: 'Вне корня', tooLarge: 'Большой',
+    binary: 'Бинарный', unreadable: 'Не читается'
+  };
 
   // Строки фиксированной высоты — на этом держится виртуализация: номер строки по scrollTop
   // считается делением, без замеров. Значения совпадают с line-height в diff.css.
@@ -173,6 +188,11 @@
     this.ws = false;
     this.stale = false;
 
+    // Режим «файл» (file.show): свой набор со своим seq. Записи diff при этом пусты.
+    this.mode = 'diff';
+    this.files = null;
+    this.scrollTarget = -1;
+
     this.build();
   }
 
@@ -191,14 +211,14 @@
     heading.appendChild(this.infoNode);
 
     var controls = el('div', 'diff-controls');
-    var wsLabel = el('label', 'diff-ws');
+    var wsLabel = el('label', 'diff-ws diff-only');
     this.wsInput = el('input');
     this.wsInput.type = 'checkbox';
     wsLabel.appendChild(this.wsInput);
     wsLabel.appendChild(document.createTextNode(' без пробелов (-w)'));
-    this.worktreeSelect = el('select', 'diff-worktree hidden');
+    this.worktreeSelect = el('select', 'diff-worktree hidden diff-only');
     this.worktreeSelect.title = 'Рабочее дерево';
-    var refresh = button('diff-btn', 'Обновить', 'refresh');
+    var refresh = button('diff-btn diff-only', 'Обновить', 'refresh');
     var close = button('diff-btn diff-close', '×', 'close');
     close.title = 'Закрыть (Esc)';
     controls.appendChild(wsLabel);
@@ -209,7 +229,7 @@
     bar.appendChild(heading);
     bar.appendChild(controls);
 
-    this.staleNode = button('diff-stale hidden', 'Есть изменения — обновить', 'refresh');
+    this.staleNode = button('diff-stale hidden diff-only','Есть изменения — обновить', 'refresh');
 
     var body = el('div', 'diff-body');
     var side = el('div', 'diff-side');
@@ -217,7 +237,7 @@
     this.searchInput.type = 'text';
     this.searchInput.placeholder = 'Фильтр по пути';
     this.searchInput.spellcheck = false;
-    this.extsNode = el('div', 'diff-exts');
+    this.extsNode = el('div', 'diff-exts diff-only');
     this.summaryNode = el('div', 'diff-summary', '');
     var tocScroller = el('div', 'diff-toc');
     side.appendChild(this.searchInput);
@@ -273,6 +293,10 @@
   };
 
   Panel.prototype.destroy = function () {
+    for (var i = 0; i < this.entries.length; i++) {
+      unload(this.entries[i]);
+    }
+    this.dropFiles();
     this.toc.destroy();
     this.main.destroy();
     this.entries = [];
@@ -315,6 +339,7 @@
 
     this.relayout();
     this.requestWanted();
+    this.tryScrollToFocus();
   };
 
   Panel.prototype.showMessage = function (text) {
@@ -329,6 +354,8 @@
   };
 
   Panel.prototype.onPending = function () {
+    this.dropFiles();
+    this.setMode('diff');
     this.status = 'pending';
     this.stale = false;
     this.staleNode.classList.add('hidden');
@@ -338,6 +365,9 @@
   };
 
   Panel.prototype.clearEntries = function () {
+    for (var i = 0; i < this.entries.length; i++) {
+      unload(this.entries[i]);
+    }
     this.entries = [];
     this.byPath = new Map();
     this.display = [];
@@ -346,6 +376,11 @@
   Panel.prototype.onIndex = function (message) {
     var previous = this.byPath;
     var files = Array.isArray(message.files) ? message.files : [];
+
+    // Прежние записи заменяются новыми: их незаконченная подсветка больше не нужна.
+    for (var c = 0; c < this.entries.length; c++) {
+      cancelHighlight(this.entries[c]);
+    }
 
     this.status = 'ready';
     this.data = message;
@@ -442,9 +477,69 @@
       entry.maxLen = parsed.maxLen;
       entry.textLength = text.length;
       entry.state = 'loaded';
+      this.scheduleHighlight(entry);
     }
 
     this.relayout();
+  };
+
+  // Подготовка сторон и отправка в поток — после ближайшего показа, а не в нём: файл
+  // появляется простым текстом ровно так же быстро, как без подсветки, токены приходят потом.
+  // Отменяется сама: если к этому моменту содержимое сменилось (свернули, перезапросили),
+  // ничего не делает.
+  Panel.prototype.scheduleHighlight = function (entry) {
+    if (!HL || !HM) {
+      return;
+    }
+
+    var self = this;
+    var rows = entry.rows;
+    var lines = entry.lines;
+    setTimeout(function () {
+      if (self.mode === 'diff' && entry.state === 'loaded' && entry.rows === rows && rows && !entry.hl && !entry.hlJob) {
+        self.highlightDiff(entry);
+      } else if (self.mode === 'file' && entry.state === 'loaded' && entry.lines === lines && lines && !entry.hl && !entry.hlJob) {
+        self.highlightFile(entry);
+      }
+    }, 0);
+  };
+
+  // Подсветка загруженного diff: стороны по фрагментам (HighlightModel.diffSides), одна
+  // заявка в поток подсветки на файл. Пока токенов нет, строки рисуются простым текстом.
+  Panel.prototype.highlightDiff = function (entry) {
+    if (!HL || !HM || !entry.rows) {
+      return;
+    }
+
+    var lang = HL.languageFor(entry.p);
+    if (!lang) {
+      return;
+    }
+
+    var sides = HM.diffSides(entry.rows, DIFF_KINDS);
+    if (!HM.withinLimit(sides.oldChars, sides.oldLines) || !HM.withinLimit(sides.newChars, sides.newLines)) {
+      return;
+    }
+
+    var segments = new Array(sides.segments.length);
+    for (var s = 0; s < segments.length; s++) {
+      segments[s] = sides.segments[s].lines;
+    }
+
+    var self = this;
+    var job = HL.request(lang, segments, function (result) {
+      if (entry.hlJob !== job || entry.state !== 'loaded') {
+        return;
+      }
+      entry.hlJob = 0;
+      entry.hl = result;
+      self.main.invalidate();
+    });
+
+    if (job !== 0) {
+      entry.hlJob = job;
+      entry.hlRow = sides.rowLine;
+    }
   };
 
   Panel.prototype.onError = function (message) {
@@ -503,7 +598,9 @@
   };
 
   Panel.prototype.refilter = function () {
-    this.display = M.filterByPath(M.filterByExtension(this.entries, this.excluded), this.query);
+    this.display = this.mode === 'file'
+      ? M.filterByPath(this.files ? this.files.entries : [], this.query)
+      : M.filterByPath(M.filterByExtension(this.entries, this.excluded), this.query);
     this.relayout();
   };
 
@@ -532,6 +629,7 @@
   };
 
   function unload(entry) {
+    cancelHighlight(entry);
     entry.state = 'idle';
     entry.parts = null;
     entry.rows = null;
@@ -539,6 +637,193 @@
     entry.textLength = 0;
     entry.error = '';
   }
+
+  function cancelHighlight(entry) {
+    if (entry.hlJob && HL) {
+      HL.cancel(entry.hlJob);
+    }
+    entry.hlJob = 0;
+    entry.hl = null;
+    entry.hlRow = null;
+  }
+
+  // ----- режим «файл» ----------------------------------------------------------------------------
+  // file.show переключает панель в режим «файл» и заменяет содержимое; diff.pending возвращает
+  // в режим diff. Пока режим «файл», прочие diff.* для вкладки не принимаются (Manager.handle):
+  // запоздалый diff.index от прежнего show_diff не должен подменить файлы, которые попросили позже.
+
+  Panel.prototype.setMode = function (mode) {
+    this.mode = mode;
+    this.root.classList.toggle('mode-file', mode === 'file');
+  };
+
+  Panel.prototype.dropFiles = function () {
+    if (!this.files) {
+      return;
+    }
+
+    var entries = this.files.entries;
+    for (var i = 0; i < entries.length; i++) {
+      cancelHighlight(entries[i]);
+      // Отложенная подсветка (scheduleHighlight) по этому признаку поймёт, что набор ушёл.
+      entries[i].state = 'dropped';
+    }
+    this.files = null;
+    this.scrollTarget = -1;
+    if (this.mode === 'file') {
+      this.display = [];
+    }
+  };
+
+  Panel.prototype.onFileShow = function (message) {
+    this.clearEntries();
+    this.dropFiles();
+    this.setMode('file');
+    this.closeOverlay();
+
+    // Фильтр по пути от прежнего показа скрыл бы новые файлы и прокрутку к фокусу.
+    this.query = '';
+    this.searchInput.value = '';
+
+    var entries = M.fileEntries(message);
+    var byIndex = new Map();
+    for (var i = 0; i < entries.length; i++) {
+      byIndex.set(entries[i].i, entries[i]);
+    }
+
+    this.status = 'file';
+    this.data = null;
+    this.stale = false;
+    this.staleNode.classList.add('hidden');
+    this.files = {
+      seq: message.seq,
+      root: typeof message.root === 'string' ? message.root : '',
+      note: typeof message.note === 'string' && message.note.length > 0 ? message.note : null,
+      entries: entries,
+      byIndex: byIndex
+    };
+    this.scrollTarget = M.focusTarget(entries);
+
+    this.renderFileBar();
+    this.main.scroller.scrollTop = 0;
+    this.main.scroller.scrollLeft = 0;
+    this.toc.scroller.scrollTop = 0;
+
+    if (entries.length === 0) {
+      this.showMessage('Нет файлов для показа.');
+    } else {
+      this.hideMessage();
+    }
+
+    this.refilter();
+    this.tryScrollToFocus();
+  };
+
+  Panel.prototype.onFileContent = function (message) {
+    var files = this.files;
+    if (this.mode !== 'file' || !files || message.seq !== files.seq) {
+      // Хвост прежнего набора или прежнего режима.
+      return;
+    }
+
+    var entry = files.byIndex.get(message.i);
+    if (!M.acceptContent(entry, message)) {
+      return;
+    }
+
+    // Текст хранится строками, как их рисует панель; исходная строка не нужна.
+    // Содержимое не выгружается при скрытии вкладки: перезапросить его у C# нечем.
+    var lines = HM ? HM.splitText(entry.text) : entry.text.split('\n');
+    entry.text = null;
+    entry.lines = lines;
+    entry.shownFocus = M.clampFocus(entry.focus, lines.length);
+
+    var maxLen = 0;
+    var chars = 0;
+    for (var l = 0; l < lines.length; l++) {
+      var length = lines[l].length;
+      chars += length + 1;
+      if (length > maxLen) {
+        maxLen = length;
+      }
+    }
+    entry.maxLen = maxLen;
+    entry.chars = chars;
+
+    this.relayout();
+    this.tryScrollToFocus();
+    this.scheduleHighlight(entry);
+  };
+
+  Panel.prototype.highlightFile = function (entry) {
+    if (!HL || !HM || entry.lines.length === 0 || !HM.withinLimit(entry.chars, entry.lines.length)) {
+      return;
+    }
+
+    var lang = HL.languageFor(entry.p);
+    if (!lang) {
+      return;
+    }
+
+    var self = this;
+    var job = HL.request(lang, [entry.lines], function (result) {
+      if (entry.hlJob !== job) {
+        return;
+      }
+      entry.hlJob = 0;
+      entry.hl = result;
+      self.main.invalidate();
+    });
+    entry.hlJob = job;
+  };
+
+  // Прокрутка к первому файлу с фокусом (или к первому файлу) — один раз на набор, когда
+  // все файлы до него уже пришли (иначе заглушки выше вырастут и цель уедет), панель видна
+  // (scrollTop скрытого блока теряется) и человек ещё не листал сам.
+  Panel.prototype.tryScrollToFocus = function () {
+    var files = this.files;
+    if (this.mode !== 'file' || !files || this.scrollTarget < 0 || !this.visible) {
+      return;
+    }
+
+    if (!M.readyToScroll(files.entries, this.scrollTarget)) {
+      return;
+    }
+
+    var entry = files.entries[this.scrollTarget];
+    this.scrollTarget = -1;
+
+    var index = this.display.indexOf(entry);
+    if (index < 0 || this.main.scroller.scrollTop !== 0) {
+      return;
+    }
+
+    this.main.scrollToRow(M.focusRow(this.layout.starts[index], entry.shownFocus, FOCUS_CONTEXT));
+  };
+
+  Panel.prototype.renderFileBar = function () {
+    var files = this.files;
+    var count = files ? files.entries.length : 0;
+    this.titleNode.textContent = files && files.note ? files.note : (count === 1 ? 'Файл' : 'Файлы');
+    this.infoNode.textContent = files ? files.root : '';
+    this.infoNode.title = this.infoNode.textContent;
+  };
+
+  // Полный путь: корень + относительный путь через «/».
+  Panel.prototype.copyPath = function (entry, buttonNode) {
+    if (!navigator.clipboard || !this.files) {
+      return;
+    }
+
+    var base = this.files.root.replace(/[\\/]+$/, '');
+    var full = base.length === 0 ? entry.p : base + '/' + entry.p;
+
+    navigator.clipboard.writeText(full).then(function () {
+      buttonNode.textContent = 'Скопировано';
+    }).catch(function () {
+      buttonNode.textContent = 'Не удалось скопировать';
+    });
+  };
 
   // ----- действия человека -------------------------------------------------------------------
 
@@ -697,13 +982,25 @@
     if (row.parentNode === this.toc.sizer) {
       // Строка оглавления i — блок i раскладки: оба построены по одному display.
       if (row._index < this.display.length) {
-        this.main.scrollToRow(this.layout.starts[row._index] + 1);
+        var start = this.layout.starts[row._index];
+        this.main.scrollToRow(this.mode === 'file'
+          ? M.focusRow(start, this.display[row._index].shownFocus, FOCUS_CONTEXT)
+          : start + 1);
       }
       return;
     }
 
     var located = this.locateRow(row._index);
     if (!located) {
+      return;
+    }
+
+    if (this.mode === 'file') {
+      if (action === 'copy-path') {
+        this.copyPath(located.entry, actionNode);
+      } else if (action === 'more' && typeof located.line === 'string') {
+        this.openOverlay(located.line);
+      }
       return;
     }
 
@@ -779,7 +1076,44 @@
     return 1;
   }
 
+  function viewedRows(entry) {
+    return entry.state === 'loaded' && entry.lines ? Math.max(1, entry.lines.length) : 1;
+  }
+
+  Panel.prototype.relayoutFiles = function () {
+    var sizes = new Array(this.display.length);
+    var maxLen = 0;
+
+    for (var i = 0; i < this.display.length; i++) {
+      var entry = this.display[i];
+      sizes[i] = 2 + viewedRows(entry);
+      if (entry.maxLen > maxLen) {
+        maxLen = entry.maxLen;
+      }
+    }
+
+    this.layout = M.buildLayout(sizes);
+
+    // Номер строки (7ch) + отступы; знака +/− в режиме «файл» нет.
+    this.main.sizer.style.minWidth = (Math.min(maxLen, M.LONG_LINE) + 14) + 'ch';
+
+    var total = this.files ? this.files.entries.length : 0;
+    this.summaryNode.textContent = total > 0 ? this.display.length + ' из ' + total + ' файлов' : '';
+
+    if (!this.visible) {
+      return;
+    }
+
+    this.toc.setCount(this.display.length);
+    this.main.setCount(this.layout.total);
+  };
+
   Panel.prototype.relayout = function () {
+    if (this.mode === 'file') {
+      this.relayoutFiles();
+      return;
+    }
+
     var sizes = new Array(this.display.length);
     var maxLen = 0;
     var added = 0;
@@ -824,11 +1158,20 @@
     var entry = this.display[block];
     var offset = index - this.layout.starts[block];
     var line = null;
+
+    if (this.mode === 'file') {
+      // line — строка текста (не запись diff), lineIndex — её номер с нуля.
+      if (offset >= 2 && entry.state === 'loaded' && entry.lines && offset - 2 < entry.lines.length) {
+        line = entry.lines[offset - 2];
+      }
+      return { entry: entry, offset: offset, line: line, lineIndex: offset - 2 };
+    }
+
     if (offset >= 2 && entry.state === 'loaded' && entry.want !== null && entry.rows) {
       line = entry.rows[offset - 2] || null;
     }
 
-    return { entry: entry, offset: offset, line: line };
+    return { entry: entry, offset: offset, line: line, lineIndex: offset - 2 };
   };
 
   function stats(entry) {
@@ -845,11 +1188,38 @@
       : { dir: '', name: path };
   }
 
+  function focusLabel(focus) {
+    if (!focus) {
+      return '';
+    }
+    return focus.from === focus.to ? 'стр. ' + focus.from : 'стр. ' + focus.from + '–' + focus.to;
+  }
+
+  Panel.prototype.renderViewedTocRow = function (node, entry) {
+    var parts = splitPath(entry.p);
+    var path = el('span', 'toc-path');
+    path.appendChild(el('span', 'toc-dir', parts.dir));
+    path.appendChild(el('span', 'toc-name', parts.name));
+    node.title = entry.p;
+    node.appendChild(path);
+
+    if (entry.problem) {
+      node.appendChild(el('span', 'badge problem', PROBLEM_BADGE[entry.problem] || 'Не показан'));
+    }
+
+    node.appendChild(el('span', 'toc-stat', focusLabel(entry.state === 'loaded' ? entry.shownFocus : entry.focus)));
+  };
+
   Panel.prototype.renderTocRow = function (node, index) {
     var entry = this.display[index];
     node.textContent = '';
     node.className = 'vl-row toc-row';
     if (!entry) {
+      return;
+    }
+
+    if (this.mode === 'file') {
+      this.renderViewedTocRow(node, entry);
       return;
     }
 
@@ -886,17 +1256,85 @@
       return;
     }
 
+    if (this.mode === 'file') {
+      if (located.offset === 1) {
+        this.renderViewedHeader(node, entry);
+      } else if (located.line !== null) {
+        this.renderViewedLine(node, entry, located.line, located.lineIndex);
+      } else {
+        this.renderViewedPlaceholder(node, entry);
+      }
+      return;
+    }
+
     if (located.offset === 1) {
       this.renderFileHeader(node, entry);
       return;
     }
 
     if (located.line) {
-      this.renderLine(node, located.line);
+      this.renderLine(node, located.line, entry, located.lineIndex);
       return;
     }
 
     this.renderPlaceholder(node, entry);
+  };
+
+  Panel.prototype.renderViewedHeader = function (node, entry) {
+    node.className = 'vl-row file-row';
+    var inner = el('div', 'sticky');
+
+    inner.appendChild(el('span', 'file-path', entry.p));
+    var focus = entry.state === 'loaded' ? entry.shownFocus : entry.focus;
+    if (focus) {
+      inner.appendChild(el('span', 'toc-stat', focusLabel(focus)));
+    }
+    if (entry.state === 'loaded' && entry.lines) {
+      inner.appendChild(el('span', 'toc-stat', entry.lines.length + ' строк'));
+    }
+
+    var copy = button('row-btn', 'Копировать путь', 'copy-path');
+    copy.title = 'Полный путь к файлу — в буфер обмена';
+    inner.appendChild(copy);
+
+    node.appendChild(inner);
+  };
+
+  Panel.prototype.renderViewedPlaceholder = function (node, entry) {
+    node.className = 'vl-row note-row';
+    var inner = el('div', 'sticky');
+
+    if (entry.state === 'problem') {
+      inner.appendChild(el('span', 'problem-plate', M.problemText(entry.problem)));
+    } else if (entry.state === 'loading') {
+      inner.textContent = 'Загрузка…';
+    } else {
+      inner.textContent = 'Файл пуст.';
+    }
+
+    node.appendChild(inner);
+  };
+
+  Panel.prototype.renderViewedLine = function (node, entry, text, lineIndex) {
+    var number = lineIndex + 1;
+    var focus = entry.shownFocus;
+    var inFocus = focus !== null && number >= focus.from && number <= focus.to;
+    node.className = inFocus ? 'vl-row line-row view-row focus' : 'vl-row line-row view-row';
+
+    node.appendChild(el('span', 'no', String(number)));
+
+    var clipped = M.clipLine(text);
+    var code = el('span', 'code');
+    if (HL) {
+      HL.renderCode(code, clipped.text, entry.hl, lineIndex);
+    } else {
+      code.textContent = clipped.text;
+    }
+    node.appendChild(code);
+
+    if (clipped.cut) {
+      node.appendChild(button('more', '…показать целиком', 'more'));
+    }
   };
 
   Panel.prototype.renderFileHeader = function (node, entry) {
@@ -947,14 +1385,19 @@
     node.appendChild(inner);
   };
 
-  Panel.prototype.renderLine = function (node, line) {
+  Panel.prototype.renderLine = function (node, line, entry, rowIndex) {
     node.className = 'vl-row line-row t-' + line.t;
 
     var oldNo = el('span', 'no', line.o > 0 ? String(line.o) : '');
     var newNo = el('span', 'no', line.n > 0 ? String(line.n) : '');
     var sign = el('span', 'sign', line.t === M.ROW_ADD ? '+' : line.t === M.ROW_DEL ? '−' : '');
     var clipped = M.clipLine(line.s);
-    var code = el('span', 'code', clipped.text);
+    var code = el('span', 'code');
+    if (HL && entry.hl && entry.hlRow) {
+      HL.renderCode(code, clipped.text, entry.hl, entry.hlRow[rowIndex]);
+    } else {
+      code.textContent = clipped.text;
+    }
 
     node.appendChild(oldNo);
     node.appendChild(newNo);
@@ -1071,8 +1514,22 @@
       return;
     }
 
+    // file.show тоже создаёт панель: показ файлов не обязан идти после diff.
+    if (message.type === 'file.show') {
+      this.ensure(id).onFileShow(message);
+      return;
+    }
+
     var panel = this.panels.get(id);
     if (!panel) {
+      return;
+    }
+
+    // В режиме «файл» diff.* (кроме diff.pending, он выше) не принимаются: не смешивать.
+    if (panel.mode === 'file') {
+      if (message.type === 'file.content') {
+        panel.onFileContent(message);
+      }
       return;
     }
 
