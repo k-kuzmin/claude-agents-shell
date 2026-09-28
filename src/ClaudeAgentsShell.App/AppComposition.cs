@@ -52,6 +52,7 @@ internal static class AppComposition
         // В самих ViewModel нет ни File.*, ни Process.*, ни Dispatcher.
         services.AddSingleton<IFolderPicker, OpenFolderDialogPicker>();
         services.AddSingleton<IClipboardReader, WpfClipboardReader>();
+        services.AddSingleton<IClipboardWriter, WpfClipboardWriter>();
         services.AddSingleton<IUserPrompt, DialogUserPrompt>();
         services.AddSingleton<IWebView2MissingDialog, WebView2MissingDialog>();
         services.AddSingleton<IShellAvailability, ShellAvailabilityProbe>();
