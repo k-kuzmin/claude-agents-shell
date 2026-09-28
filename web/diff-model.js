@@ -281,6 +281,144 @@
     return { first: first, last: Math.max(first, last) };
   }
 
+  // ----- режим «файл» (file.show / file.content) ---------------------------------------------
+
+  // Причины, по которым файл не показан, — коды из file.show (ViewedFileProblem в C#).
+  var PROBLEM_TEXT = {
+    notFound: 'Файл не найден (или это каталог).',
+    outsideRoot: 'Путь ведёт за пределы корня — не показывается.',
+    tooLarge: 'Файл слишком большой для показа.',
+    binary: 'Двоичный файл — не показывается.',
+    unreadable: 'Файл не удалось прочитать: занят или нет прав.'
+  };
+
+  function problemText(code) {
+    return Object.prototype.hasOwnProperty.call(PROBLEM_TEXT, code)
+      ? PROBLEM_TEXT[code]
+      : 'Файл не показан.';
+  }
+
+  function positiveInt(value) {
+    return typeof value === 'number' && isFinite(value) && value >= 1 ? Math.floor(value) : 0;
+  }
+
+  // file.show → набор записей панели. Кривые записи (нет пути) пропускаются, но номер i
+  // в file.content — позиция в исходном массиве files, поэтому он сохраняется в записи.
+  function fileEntries(message) {
+    var files = message && Array.isArray(message.files) ? message.files : [];
+    var entries = [];
+
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      if (!f || typeof f.p !== 'string') {
+        continue;
+      }
+
+      var focus = null;
+      if (f.focus && typeof f.focus === 'object') {
+        var from = positiveInt(f.focus.from);
+        var to = positiveInt(f.focus.to);
+        if (from > 0) {
+          focus = { from: from, to: Math.max(from, to || from) };
+        }
+      }
+
+      var problem = typeof f.problem === 'string' && f.problem.length > 0 && f.problem !== 'none'
+        ? f.problem
+        : null;
+
+      entries.push({
+        i: i,
+        p: f.p,
+        focus: focus,
+        problem: problem,
+        state: problem ? 'problem' : 'loading',
+        parts: problem ? null : [],
+        text: null,
+        lines: null,
+        shownFocus: null,
+        maxLen: 0,
+        hl: null,
+        hlJob: 0
+      });
+    }
+
+    return entries;
+  }
+
+  // Фокус, обрезанный по длине файла: за концом файла — null, хвост за концом — до последней строки.
+  function clampFocus(focus, lineCount) {
+    if (!focus || lineCount <= 0 || focus.from > lineCount) {
+      return null;
+    }
+
+    return { from: focus.from, to: Math.min(focus.to, lineCount) };
+  }
+
+  // Принять часть file.content: true — файл собран (entry.state === 'loaded', entry.text).
+  // Часть не по порядку (хвост прежнего набора) сбрасывает сборку — файл ждёт part:0.
+  function acceptContent(entry, message) {
+    if (!entry || entry.state !== 'loading' || typeof message.text !== 'string') {
+      return false;
+    }
+
+    if (message.part === 0) {
+      entry.parts = [];
+    }
+
+    if (!entry.parts || message.part !== entry.parts.length) {
+      entry.parts = null;
+      return false;
+    }
+
+    entry.parts.push(message.text);
+    if (message.last !== true) {
+      return false;
+    }
+
+    entry.text = entry.parts.join('');
+    entry.parts = null;
+    entry.state = 'loaded';
+    return true;
+  }
+
+  // Какой файл показать первым: первый с фокусом, иначе первый. -1 — пусто.
+  function focusTarget(entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].focus) {
+        return i;
+      }
+    }
+    return entries.length > 0 ? 0 : -1;
+  }
+
+  // Готов ли показ к прокрутке на цель: все файлы до цели включительно уже не «загружаются»
+  // (иначе заглушка в одну строку потом превратится в тысячу строк и цель уедет).
+  function readyToScroll(entries, target) {
+    if (target < 0 || target >= entries.length) {
+      return false;
+    }
+
+    for (var i = 0; i <= target; i++) {
+      if (entries[i].state === 'loading') {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Строка прокрутки к файлу, начинающемуся со строки раскладки blockStart (разделитель,
+  // шапка, затем строки файла): к шапке, а с фокусом — к фокусу с запасом context строк сверху,
+  // но не выше шапки.
+  function focusRow(blockStart, focus, context) {
+    var header = blockStart + 1;
+    if (!focus) {
+      return header;
+    }
+
+    return Math.max(header, blockStart + 2 + (focus.from - 1) - (context || 0));
+  }
+
   var api = {
     AUTO_MAX_LINES: AUTO_MAX_LINES,
     AUTO_MAX_FILES: AUTO_MAX_FILES,
@@ -303,7 +441,14 @@
     clipLine: clipLine,
     buildLayout: buildLayout,
     locate: locate,
-    visibleRange: visibleRange
+    visibleRange: visibleRange,
+    problemText: problemText,
+    fileEntries: fileEntries,
+    clampFocus: clampFocus,
+    acceptContent: acceptContent,
+    focusTarget: focusTarget,
+    readyToScroll: readyToScroll,
+    focusRow: focusRow
   };
 
   if (typeof module === 'object' && module.exports) {

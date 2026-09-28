@@ -19,6 +19,10 @@
   <script src="vendor/addon-unicode11.js"></script>
   <!-- Панель diff — до app.js: он в конце разбирает сообщения, скопленные до его загрузки. -->
   <script src="diff-model.js"></script>
+  <!-- Подсветка синтаксиса: highlight.js работает в потоке highlight-worker.js,
+       сюда грузится только чистая модель и обёртка над потоком. -->
+  <script src="highlight-model.js"></script>
+  <script src="highlighter.js"></script>
   <script src="diff-panel.js"></script>
   <script src="app.js"></script>
 </body>

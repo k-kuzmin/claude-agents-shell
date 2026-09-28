@@ -470,3 +470,106 @@
   background: #2a2a28;
   border-radius: 5px;
 }
+
+/* Режим «файл» (file.show): та же панель без элементов diff. */
+
+.diff-panel.mode-file .diff-only {
+  display: none !important;
+}
+
+.view-row .no {
+  flex: 0 0 7ch;
+  padding-right: 2ch;
+}
+
+/* Строки фокуса (диапазон из show_file): фон и метка у края, номер ярче. */
+.view-row.focus {
+  background: rgba(217, 160, 111, 0.12);
+  box-shadow: inset 3px 0 0 #D9A06F;
+}
+
+.view-row.focus .no {
+  color: #D9A06F;
+}
+
+.problem-plate {
+  padding: 0 8px;
+  border-radius: 3px;
+  background: rgba(217, 119, 87, 0.14);
+  color: #E08B6D;
+  line-height: 18px;
+}
+
+.badge.problem {
+  background: rgba(217, 119, 87, 0.18);
+  color: #E08B6D;
+}
+
+/* Подсветка синтаксиса — палитра Visual Studio (Dark). Токены tk-* ставит highlight-model.js
+   (tokenFor — единственное место, где область hljs сопоставляется токену), здесь только цвета.
+   На фоне добавленных (бирюза 14 %) и удалённых (терракота 14 %) строк цвета читаемы. */
+
+.diff-panel {
+  --tk-text: #DCDCDC;
+  --tk-keyword: #569CD6;
+  --tk-control: #D8A0DF;
+  --tk-type: #4EC9B0;
+  --tk-interface: #B8D7A3;
+  --tk-function: #DCDCAA;
+  --tk-string: #D69D85;
+  --tk-escape: #FFD68F;
+  --tk-number: #B5CEA8;
+  --tk-comment: #57A64A;
+  --tk-doc: #608B4E;
+  --tk-doctag: #808080;
+  --tk-preproc: #9B9B9B;
+  --tk-attribute: #4EC9B0;
+  --tk-tag: #569CD6;
+  --tk-attr-name: #92CAFF;
+  --tk-attr-value: #C8C8C8;
+  --tk-delim: #808080;
+  --tk-key: #9CDCFE;
+  --tk-selector: #D7BA7D;
+  --tk-css-prop: #9CDCFE;
+  --tk-css-value: #CE9178;
+  --tk-addition: #B5CEA8;
+  --tk-deletion: #D69D85;
+}
+
+/* Код строк файла и diff — цветом текста VS; заголовки фрагментов (@@) и служебные строки
+   сохраняют свой цвет. */
+.t-c .code,
+.t-a .code,
+.t-d .code,
+.view-row .code {
+  color: var(--tk-text);
+}
+
+.code .tk-keyword { color: var(--tk-keyword); }
+.code .tk-control { color: var(--tk-control); }
+.code .tk-type { color: var(--tk-type); }
+.code .tk-interface { color: var(--tk-interface); }
+.code .tk-function { color: var(--tk-function); }
+.code .tk-string { color: var(--tk-string); }
+.code .tk-escape { color: var(--tk-escape); }
+.code .tk-number { color: var(--tk-number); }
+.code .tk-comment { color: var(--tk-comment); }
+.code .tk-doc { color: var(--tk-doc); }
+.code .tk-doctag { color: var(--tk-doctag); }
+.code .tk-preproc { color: var(--tk-preproc); }
+.code .tk-attribute { color: var(--tk-attribute); }
+.code .tk-tag { color: var(--tk-tag); }
+.code .tk-attr-name { color: var(--tk-attr-name); }
+.code .tk-attr-value { color: var(--tk-attr-value); }
+.code .tk-delim { color: var(--tk-delim); }
+.code .tk-key { color: var(--tk-key); }
+.code .tk-selector { color: var(--tk-selector); }
+.code .tk-css-prop { color: var(--tk-css-prop); }
+.code .tk-css-value { color: var(--tk-css-value); }
+.code .tk-section { color: var(--tk-keyword); font-weight: 600; }
+.code .tk-link { color: var(--tk-string); text-decoration: underline; }
+.code .tk-emphasis { font-style: italic; }
+.code .tk-strong { font-weight: 600; }
+.code .tk-addition { color: var(--tk-addition); }
+.code .tk-deletion { color: var(--tk-deletion); }
+
