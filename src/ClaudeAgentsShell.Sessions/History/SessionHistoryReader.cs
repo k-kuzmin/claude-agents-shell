@@ -314,7 +314,8 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
         var anchor = grown && cached!.Parsed.Summary.Title is not null ? cached.Anchor : null;
 
         // Имя сессии «последняя запись побеждает»: у дописанного файла найденное переносится,
-        // и просматривается только дописанное (см. TranscriptTail).
+        // и просматривается только дописанное (см. TranscriptTail). Не совпала сверка начала —
+        // перенос отменяется ниже.
         var carried = grown ? cached!.Tail : TitleRecords.None;
 
         HeadScan head;
@@ -344,6 +345,13 @@ public sealed class SessionHistoryReader : ISessionHistoryReader
             }
             else
             {
+                if (anchor is not null)
+                {
+                    // Строка заголовка не совпала: файл переписан на месте, а не дописан. Найденное
+                    // в хвосте прежнего содержимого переносить нельзя — хвост тоже просматривается заново.
+                    carried = TitleRecords.None;
+                }
+
                 (head, next) = await ParseAsync(stream, _scanLimit, resume, cancellationToken).ConfigureAwait(false);
             }
 
