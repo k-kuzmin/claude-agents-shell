@@ -165,6 +165,7 @@ public sealed class McpJsonRpcHandler
         writer.WriteString("name", McpProtocol.ServerName);
         writer.WriteString("version", ServerVersion);
         writer.WriteEndObject();
+        writer.WriteString("instructions", McpServerTexts.Instructions);
         writer.WriteEndObject();
     }
 

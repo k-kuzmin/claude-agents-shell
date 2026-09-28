@@ -1,4 +1,5 @@
 using ClaudeAgentsShell.Application.Ports;
+using ClaudeAgentsShell.Sessions.Files;
 using ClaudeAgentsShell.Sessions.Git;
 using ClaudeAgentsShell.Sessions.History;
 using ClaudeAgentsShell.Sessions.Hooks;
@@ -15,7 +16,7 @@ public static class SessionsServiceCollectionExtensions
 {
     /// <summary>
     /// Регистрирует пути приложения, хранилище проектов, проверку каталогов и файлов,
-    /// журнал сбоев, чтение и слежение за веткой, сборку команд запуска, приёмник хуков,
+    /// журнал сбоев, чтение и слежение за веткой, чтение файлов рабочего каталога, сборку команд запуска, приёмник хуков,
     /// открытие ссылок, журнал принятых хуков,
     /// генератор настроек с хуками, MCP-маршрут с инструментом <c>show_diff</c> и его конфиг,
     /// чтение истории сессий и слежение за ней, запуск проводника.
@@ -43,6 +44,9 @@ public static class SessionsServiceCollectionExtensions
         services.TryAddSingleton<GitProcessRunner>();
         services.TryAddSingleton<DiffCollapsePolicy>();
         services.TryAddSingleton<IGitDiffReader, GitDiffReader>();
+
+        // Чтение файлов для show_file: пороги — общие с diff.
+        services.TryAddSingleton<IWorkspaceFileReader, WorkspaceFileReader>();
 
         services.TryAddSingleton<ISessionCommandBuilder, SessionCommandBuilder>();
 

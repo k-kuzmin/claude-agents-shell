@@ -40,6 +40,28 @@ public sealed class McpJsonRpcHandlerTests
         Assert.False(string.IsNullOrEmpty(result.GetProperty("serverInfo").GetProperty("version").GetString()));
     }
 
+    /// <summary>
+    /// Инструменты MCP у Claude Code отложены (ToolSearch) — агент видит только имя. Подсказка
+    /// сервера попадает в системный промпт всегда: в ней оба полных имени и как загрузить схемы.
+    /// </summary>
+    [Fact]
+    public async Task Initialize_отдаёт_подсказку_с_полными_именами_инструментов_и_загрузкой_схем()
+    {
+        var (handler, _) = Create();
+
+        var reply = await handler.HandleAsync(
+            Token, """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}""", CancellationToken.None);
+
+        using var document = Parse(reply);
+        var instructions = document.RootElement.GetProperty("result").GetProperty("instructions").GetString();
+
+        Assert.NotNull(instructions);
+        Assert.Contains("Agents Shell", instructions, StringComparison.Ordinal);
+        Assert.Contains("mcp__agents-shell__show_diff", instructions, StringComparison.Ordinal);
+        Assert.Contains("mcp__agents-shell__show_file", instructions, StringComparison.Ordinal);
+        Assert.Contains("select:mcp__agents-shell__show_diff,mcp__agents-shell__show_file", instructions, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Initialized_и_прочие_уведомления_получают_202_без_тела()
     {

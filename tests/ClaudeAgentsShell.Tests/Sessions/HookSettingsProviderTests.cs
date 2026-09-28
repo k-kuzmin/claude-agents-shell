@@ -31,7 +31,7 @@ public sealed class HookSettingsProviderTests
     /// пользователя. Правило точное: иначе агент спрашивал бы разрешения на каждый вызов.
     /// </summary>
     [Fact]
-    public async Task Инструмент_show_diff_разрешён_заранее()
+    public async Task Инструменты_show_diff_и_show_file_разрешены_заранее()
     {
         using var temp = new TempDirectory();
         var provider = CreateProvider(temp, temp.Combine("appdata"), out _);
@@ -44,7 +44,7 @@ public sealed class HookSettingsProviderTests
         var permissions = document.RootElement.GetProperty("permissions");
         Assert.Equal(["allow"], PropertyNames(permissions));
         Assert.Equal(
-            ["mcp__agents-shell__show_diff"],
+            ["mcp__agents-shell__show_diff", "mcp__agents-shell__show_file"],
             permissions.GetProperty("allow").EnumerateArray().Select(static e => e.GetString()));
     }
 
