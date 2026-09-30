@@ -13,6 +13,7 @@ on:
       - '**.md'
       - 'docs/**'
       - '.claude/**'
+      - 'site/**'
 
 jobs:
   build:

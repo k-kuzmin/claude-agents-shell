@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Agents Shell — сессии Claude Code во вкладках</title>
+  <meta name="description" content="Несколько сессий Claude Code в одном окне Windows: по проектам, во вкладках, и сразу видно, какая из них ждёт вас. Внутри вкладки — настоящий claude.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Claude Agents Shell">
+  <meta property="og:description" content="Несколько сессий Claude Code в одном окне Windows — по проектам, во вкладках, и сразу видно, какая из них ждёт вас.">
+  <meta name="theme-color" content="#1F2A2E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231F2A2E'/%3E%3Ccircle cx='16' cy='16' r='9' fill='%23F2A93B' opacity='.35'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23F2A93B'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">К содержанию</a>
+
+  <header class="top wrap">
+    <a class="brand" href="./" aria-label="Claude Agents Shell, на главную">
+      <span class="lamp lamp--waiting" aria-hidden="true"></span>
+      Claude Agents Shell
+    </a>
+    <a class="top__link" href="https://github.com/k-kuzmin/claude-agents-shell">GitHub</a>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero__text">
+        <h1 id="hero-title">Какой из агентов ждёт вас — видно сразу</h1>
+        <p class="hero__sub">Несколько сессий Claude Code в одном окне — по проектам, во вкладках, с лампой состояния у каждой. Внутри вкладки настоящий <code>claude</code>, а не свой чат. Только для Windows.</p>
+        <div class="hero__actions">
+          <a class="btn" href="https://github.com/k-kuzmin/claude-agents-shell/releases/latest">Скачать для Windows</a>
+          <a class="link" href="https://github.com/k-kuzmin/claude-agents-shell">Исходный код на GitHub</a>
+        </div>
+      </div>
+
+      <figure class="board" aria-label="Пример полосы вкладок: у каждой сессии своя лампа состояния">
+        <div class="board__window">
+          <div class="strip" role="presentation">
+            <ol class="tabs">
+              <li class="tab tab--active" data-state="working">
+                <span class="lamp lamp--working" aria-hidden="true"></span>
+                <span class="tab__name">рефакторинг парсера</span>
+                <span class="sr">работает</span>
+              </li>
+              <li class="tab" data-state="waiting" data-step="1">
+                <span class="lamp lamp--waiting lamp--lit" aria-hidden="true"></span>
+                <span class="tab__name">тесты истории</span>
+                <span class="sr">ждёт ввода</span>
+              </li>
+              <li class="tab" data-state="working">
+                <span class="lamp lamp--working" aria-hidden="true"></span>
+                <span class="tab__name">почему падает CI</span>
+                <span class="sr">работает</span>
+              </li>
+              <li class="tab" data-state="waiting" data-step="3">
+                <span class="lamp lamp--waiting lamp--lit" aria-hidden="true"></span>
+                <span class="tab__name">миграция схемы</span>
+                <span class="sr">ждёт ввода</span>
+              </li>
+              <li class="tab" data-state="background" data-step="2">
+                <span class="lamp lamp--background" aria-hidden="true"></span>
+                <span class="tab__name">обновить зависимости</span>
+                <span class="sr">работа в фоне</span>
+              </li>
+              <li class="tab" data-state="working">
+                <span class="lamp lamp--working" aria-hidden="true"></span>
+                <span class="tab__name">ревью эндпоинтов</span>
+                <span class="sr">работает</span>
+              </li>
+            </ol>
+            <span class="counter" data-counter><span class="lamp lamp--waiting lamp--lit" aria-hidden="true"></span><span data-count>2</span>&nbsp;ждёт ввода</span>
+          </div>
+          <div class="term" aria-hidden="true">
+<pre><span class="t-dim">&gt;</span> вынеси разбор заголовков в отдельный класс и прогони тесты
+
+<span class="t-ok">●</span> Read(src/Kassa.Import/CsvParser.cs)
+  <span class="t-dim">⎿  Read 214 lines</span>
+<span class="t-ok">●</span> Update(src/Kassa.Import/HeaderReader.cs)
+  <span class="t-dim">⎿  Added 48 lines</span>
+<span class="t-ok">●</span> Bash(dotnet test tests/Kassa.Import.Tests)
+  <span class="t-dim">⎿  Passed: 37, Failed: 0</span>
+
+<span class="t-run">✻</span> Updating CsvParser.cs… <span class="t-dim">(esc to interrupt)</span></pre>
+          </div>
+        </div>
+
+        <div class="toast" data-toast role="img" aria-label="Уведомление Windows: kassa · миграция схемы">
+          <span class="toast__icon" aria-hidden="true"><span class="lamp lamp--waiting lamp--lit"></span></span>
+          <span class="toast__body">
+            <span class="toast__app">Claude Agents Shell</span>
+            <span class="toast__title">kassa · миграция схемы</span>
+            <span class="toast__text">Ждёт ввода</span>
+          </span>
+        </div>
+      </figure>
+    </section>
+
+    <section class="states" aria-labelledby="states-title">
+      <div class="wrap states__grid">
+        <div class="states__intro">
+          <h2 id="states-title">Кто чего ждёт</h2>
+          <p>Пока один агент собирает проект, второй уже просит разрешения, а третий гоняет сабагентов. Лампа на вкладке говорит, кому из них нужны вы, — переключаться в каждую не придётся.</p>
+          <p class="states__source">Состояние приходит из хуков Claude Code, а не из догадок по тексту на экране.</p>
+        </div>
+
+        <ul class="legend">
+          <li>
+            <span class="lamp lamp--working lamp--lg" aria-hidden="true"></span>
+            <div><h3>Работает</h3><p>Агент занят.</p></div>
+          </li>
+          <li>
+            <span class="lamp lamp--waiting lamp--lit lamp--lg" aria-hidden="true"></span>
+            <div><h3>Ждёт ввода</h3><p>Агент закончил или просит разрешения на действие.</p></div>
+          </li>
+          <li>
+            <span class="lamp lamp--background lamp--lg" aria-hidden="true"></span>
+            <div><h3>Работа в фоне</h3><p>У агента идут свои сабагенты или фоновые задачи — отвечать пока не нужно.</p></div>
+          </li>
+        </ul>
+
+        <div class="states__more">
+          <p><strong>Счётчик «N ждёт ввода»</strong> в полосе вкладок: щелчок переключает на следующую такую сессию, повторные щелчки обходят их по кругу.</p>
+          <p><strong>Маркер на строке проекта</strong> показывает, в каком проекте вас ждут.</p>
+          <p><strong>Окно не в фокусе?</strong> Кнопка в панели задач мигает и приходит уведомление Windows «проект · сессия». Щелчок по нему открывает эту вкладку.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="shot wrap" aria-labelledby="shot-title">
+      <h2 id="shot-title" class="shot__title">Одно окно вместо россыпи терминалов</h2>
+      <p class="shot__lead">Слева — проекты с веткой git и числом сессий, справа — вкладки выбранного проекта. Кнопка «+» на строке проекта открывает новую сессию без диалогов: каталог, оболочка и аргументы <code>claude</code> уже прописаны.</p>
+      <div class="frame">
+        <img src="assets/mockup.svg" width="1200" height="750" loading="lazy" decoding="async"
+             alt="Главное окно Claude Agents Shell: слева список проектов с маркерами состояния, справа вкладки сессий и терминал с Claude Code">
+      </div>
+    </section>
+
+    <section class="features" aria-labelledby="features-title">
+      <div class="wrap">
+        <h2 id="features-title" class="visually-hidden">Возможности</h2>
+
+        <article class="pair">
+          <div class="pair__text">
+            <h3>Вчерашняя сессия — в истории</h3>
+            <p>Кнопка с часами на строке проекта открывает прошлые сессии: имя или первое сообщение, дата, ветка, короткий id. Поиск по имени, первому сообщению и id работает по мере ввода.</p>
+            <p><kbd>Enter</kbd> продолжает сессию во вкладке, кнопка рядом с id копирует полный id. Сессия, которая уже открыта, помечена «открыта» — выбор переключит на неё, а не запустит второй <code>claude</code>.</p>
+          </div>
+          <div class="frame frame--light">
+            <img src="assets/mockup-history.svg" width="1200" height="750" loading="lazy" decoding="async"
+                 alt="Окно истории сессий проекта: поиск, список сессий с датой, веткой и коротким id">
+          </div>
+        </article>
+
+        <article class="pair pair--flip">
+          <div class="pair__text">
+            <h3>Что поменял агент — рядом с терминалом</h3>
+            <p><kbd>Ctrl+Shift+D</kbd> открывает изменения ветки относительно базовой: коммиты, незакоммиченные и новые файлы. Если агент правит файлы при открытой панели, она предлагает обновиться.</p>
+            <p>Агент может показать всё сам: в сессию подключены инструменты <code>show_diff</code> и <code>show_file</code>. Попросите «покажи, где это написано» — панель откроется с нужными строками. Код подсвечивается в цветах тёмной темы VS.</p>
+          </div>
+          <div class="frame frame--light">
+            <img src="assets/mockup-diff.svg" width="1200" height="750" loading="lazy" decoding="async"
+                 alt="Панель diff справа от терминала агента с подсветкой изменённых строк">
+          </div>
+        </article>
+
+        <div class="details">
+          <div class="details__item">
+            <h3>Вкладки возвращаются</h3>
+            <p>Закрыли окно — при следующем запуске сессии поднимаются в прежнем порядке и продолжаются с тем же контекстом через <code>claude --resume</code>. Вышли командой <code>/exit</code> — сессия не вернётся.</p>
+          </div>
+          <div class="details__item">
+            <h3>Файлы и скриншоты</h3>
+            <p><kbd>Ctrl+V</kbd> с файлами из проводника вставляет их пути, скриншот из буфера уходит в Claude Code картинкой. Файлы можно и перетащить в терминал.</p>
+          </div>
+          <div class="details__item">
+            <h3>Настройки проекта</h3>
+            <p>Оболочка — PowerShell 7, Windows PowerShell или <code>cmd</code>, команда перед запуском <code>claude</code>, дополнительные аргументы. Видно, есть ли в каталоге <code>CLAUDE.md</code> и <code>.mcp.json</code>.</p>
+          </div>
+          <div class="details__item">
+            <h3>Если сессия упала</h3>
+            <p>Вкладка остаётся с кодом выхода и кнопкой «перезапустить».</p>
+          </div>
+          <div class="details__item details__item--wide">
+            <h3>Горячие клавиши</h3>
+            <dl class="keys">
+              <div><dt><kbd>Ctrl+Shift+T</kbd></dt><dd>новая сессия</dd></div>
+              <div><dt><kbd>Ctrl+Shift+W</kbd></dt><dd>закрыть вкладку</dd></div>
+              <div><dt><kbd>Ctrl+Tab</kbd> / <kbd>Ctrl+Shift+Tab</kbd></dt><dd>соседняя вкладка</dd></div>
+              <div><dt><kbd>Ctrl+1..9</kbd></dt><dd>вкладка по номеру</dd></div>
+            </dl>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="diff wrap" aria-labelledby="diff-title">
+      <h2 id="diff-title">Чем отличается</h2>
+      <div class="diff__list">
+        <div>
+          <h3>От нескольких окон терминала</h3>
+          <p>Одно окно вместо россыпи, состояние каждой сессии видно без переключения на неё, проект помнит свой каталог и аргументы, вчерашняя сессия — в истории.</p>
+        </div>
+        <div>
+          <h3>От веб-интерфейсов и чатов поверх агента</h3>
+          <p>Во вкладке живёт сам <code>claude</code> со своим TUI. Нечему отставать от обновлений Claude Code, и оболочка не может исказить то, что показывает агент.</p>
+        </div>
+        <div>
+          <h3>От Electron-обёрток и IDE</h3>
+          <p>На всё окно — один движок WebView2, новая вкладка — ещё один терминал на той же странице, а не ещё один процесс браузера. Каталоги и процессы не опрашиваются по таймеру.</p>
+        </div>
+      </div>
+      <p class="diff__note">Сравнительных замеров с другими инструментами не проводилось — это описание устройства, а не цифры.</p>
+    </section>
+
+    <section class="install" id="install" aria-labelledby="install-title">
+      <div class="wrap install__grid">
+        <h2 id="install-title">Установка</h2>
+        <ol class="steps">
+          <li>
+            <h3>Скачайте и запустите</h3>
+            <p>Архив <code>ClaudeAgentsShell-&lt;версия&gt;-win-x64.zip</code> из <a href="https://github.com/k-kuzmin/claude-agents-shell/releases/latest">последнего релиза</a>: распакуйте и запустите <code>ClaudeAgentsShell.exe</code>. .NET ставить не нужно — сборка самодостаточная.</p>
+          </li>
+          <li>
+            <h3>Проверьте систему</h3>
+            <p>Windows 10 1809+ или Windows 11 x64 и <a href="https://developer.microsoft.com/microsoft-edge/webview2/">WebView2 Runtime</a>. В Windows 11 он уже есть; если нет, приложение скажет и даст ссылку.</p>
+          </li>
+          <li>
+            <h3>Установите Claude Code</h3>
+            <p>В каждой вкладке запускается команда <code>claude</code>, поэтому она должна работать в обычном PowerShell. Проверьте: <code>claude --version</code>.</p>
+          </li>
+        </ol>
+        <a class="btn install__btn" href="https://github.com/k-kuzmin/claude-agents-shell/releases/latest">Скачать для Windows</a>
+      </div>
+    </section>
+
+    <section class="privacy wrap" aria-labelledby="privacy-title">
+      <h2 id="privacy-title">Приватность</h2>
+      <ul class="privacy__list">
+        <li><strong>В ваш проект ничего не пишется.</strong> Настройки хуков и подключение <code>show_diff</code> и <code>show_file</code> передаются сессии через <code>--settings</code> и <code>--mcp-config</code> из каталога приложения.</li>
+        <li><strong>Файлы сессий Claude Code только читаются.</strong> В <code>~/.claude/projects</code> приложение ничего не удаляет и не записывает.</li>
+        <li><strong>Слушает только локальный адрес.</strong> Хуки и инструменты приходят на <code>127.0.0.1</code>.</li>
+        <li><strong>Терминалы не грузят ничего из интернета.</strong> xterm.js и highlight.js лежат в приложении, CDN не используются.</li>
+        <li><strong>Вывод агента не анализируется.</strong> Состояние вкладки определяется только по хукам.</li>
+        <li>Свои данные приложение хранит в <code>%APPDATA%\ClaudeAgentsShell\</code>.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap foot__row">
+      <p>Claude Agents Shell — оболочка для Claude Code под Windows.</p>
+      <nav aria-label="Ссылки проекта">
+        <a href="https://github.com/k-kuzmin/claude-agents-shell">GitHub</a>
+        <a href="https://github.com/k-kuzmin/claude-agents-shell/issues">Вопросы и ошибки</a>
+        <a href="https://github.com/k-kuzmin/claude-agents-shell/releases">Релизы</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>

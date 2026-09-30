@@ -11,6 +11,7 @@ on:
       - '**.md'
       - 'docs/**'
       - '.claude/**'
+      - 'site/**'
       - '.github/**'
   workflow_dispatch:
 
